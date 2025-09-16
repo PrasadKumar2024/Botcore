@@ -1,150 +1,135 @@
-
 # app/schemas.py
-from pydantic import BaseModel, Field, EmailStr, validator
-from typing import Optional, List, Dict, Any
-from datetime import datetime, date
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime
 from enum import Enum
+import uuid
 
-# Enums for predefined choices
-class SubscriptionPlan(str, Enum):
-    BASIC = "basic"
-    PROFESSIONAL = "professional"
-    ENTERPRISE = "enterprise"
-
-class SubscriptionStatus(str, Enum):
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    SUSPENDED = "suspended"
-    CANCELLED = "cancelled"
-
-class PhoneNumberType(str, Enum):
-    VOICE = "voice"
-    SMS = "sms"
-    WHATSAPP = "whatsapp"
+# Enums for business types and status
+class BusinessType(str, Enum):
+    RESTAURANT = "restaurant"
+    GYM = "gym"
+    CLINIC = "clinic"
+    RETAIL = "retail"
+    OTHER = "other"
 
 class ClientStatus(str, Enum):
     ACTIVE = "active"
-    TRIAL = "trial"
-    INACTIVE = "inactive"
     SUSPENDED = "suspended"
+    EXPIRED = "expired"
 
-# Base schemas
+class BotType(str, Enum):
+    WHATSAPP = "whatsapp"
+    VOICE = "voice"
+    WEB = "web"
+
+# Client schemas
 class ClientBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100, example="John's Law Firm")
-    email: EmailStr = Field(..., example="contact@johnslaw.com")
-    business_name: str = Field(..., min_length=1, max_length=200, example="John's Law Firm LLC")
-    industry: str = Field(..., min_length=1, max_length=100, example="Legal Services")
-    website: Optional[str] = Field(None, example="https://johnslaw.com")
-    timezone: str = Field(default="UTC", example="America/New_York")
+    name: str = Field(..., min_length=1, max_length=100, example="Suresh Kumar")
+    business_name: str = Field(..., min_length=1, max_length=200, example="Suresh Store")
+    business_type: BusinessType = Field(..., example=BusinessType.RETAIL)
 
-class SubscriptionBase(BaseModel):
-    plan_type: SubscriptionPlan = Field(..., example=SubscriptionPlan.PROFESSIONAL)
-    start_date: date = Field(default_factory=date.today)
-    end_date: Optional[date] = Field(None)
-    is_active: bool = Field(default=True)
-
-class PhoneNumberBase(BaseModel):
-    phone_number: str = Field(..., min_length=10, max_length=20, example="+1234567890")
-    friendly_name: str = Field(..., min_length=1, max_length=50, example="John's Law Main Line")
-    number_type: PhoneNumberType = Field(default=PhoneNumberType.VOICE, example=PhoneNumberType.VOICE)
-    twilio_sid: Optional[str] = Field(None, example="PNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-
-class DocumentBase(BaseModel):
-    filename: str = Field(..., min_length=1, max_length=255, example="terms-of-service.pdf")
-    original_filename: str = Field(..., min_length=1, max_length=255, example="Terms of Service v2.pdf")
-    file_size: int = Field(..., gt=0, example=1024000)
-    pages: int = Field(..., gt=0, example=15)
-
-# Create schemas (for POST requests)
 class ClientCreate(ClientBase):
-    password: str = Field(..., min_length=8, example="securepassword123")
-    
-    @validator('password')
-    def password_strength(cls, v):
-        if len(v) < 8:
-            raise ValueError('Password must be at least 8 characters long')
-        # Add more password strength validation if needed
-        return v
+    pass
 
-class SubscriptionCreate(SubscriptionBase):
-    plan_type: SubscriptionPlan
-    start_date: Optional[date] = None  # Let the server set default
-
-class PhoneNumberCreate(PhoneNumberBase):
-    phone_number: str
-    friendly_name: str
-
-class DocumentCreate(DocumentBase):
-    client_id: int = Field(..., gt=0, example=1)
-    uploader_id: int = Field(..., gt=0, example=1)
-
-# Update schemas (for PUT/PATCH requests)
 class ClientUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
-    email: Optional[EmailStr] = Field(None)
     business_name: Optional[str] = Field(None, min_length=1, max_length=200)
-    industry: Optional[str] = Field(None, min_length=1, max_length=100)
-    website: Optional[str] = Field(None)
-    timezone: Optional[str] = Field(None)
+    business_type: Optional[BusinessType] = Field(None)
     status: Optional[ClientStatus] = Field(None)
 
-class SubscriptionUpdate(BaseModel):
-    plan_type: Optional[SubscriptionPlan] = Field(None)
-    end_date: Optional[date] = Field(None)
-    is_active: Optional[bool] = Field(None)
-
-# Response schemas (for GET responses)
-class PhoneNumber(PhoneNumberBase):
-    id: int
-    client_id: int
+class Client(ClientBase):
+    id: uuid.UUID
+    status: ClientStatus
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
 
-class Subscription(SubscriptionBase):
-    id: int
-    client_id: int
-    created_at: datetime
-    updated_at: datetime
+# Document schemas
+class DocumentBase(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=255, example="menu.pdf")
+    file_size: int = Field(..., gt=0, example=1024000)
 
-    class Config:
-        from_attributes = True
+class DocumentCreate(DocumentBase):
+    pass
 
 class Document(DocumentBase):
-    id: int
-    client_id: int
-    uploader_id: int
-    created_at: datetime
-    updated_at: datetime
-    processed: bool = Field(default=False)
-    processing_error: Optional[str] = Field(None)
+    id: uuid.UUID
+    client_id: uuid.UUID
+    stored_filename: str
+    file_path: str
+    processed: bool
+    processing_error: Optional[str] = None
+    uploaded_at: datetime
 
     class Config:
         from_attributes = True
 
-class Client(ClientBase):
-    id: int
-    status: ClientStatus = Field(default=ClientStatus.ACTIVE)
-    created_at: datetime
-    updated_at: datetime
-    has_active_subscription: bool = Field(default=False)
+# Phone number schemas
+class PhoneNumberBase(BaseModel):
+    number: str = Field(..., min_length=10, max_length=20, example="+1234567890")
+    country: str = Field(..., min_length=2, max_length=100, example="India")
+
+class PhoneNumberCreate(PhoneNumberBase):
+    pass
+
+class PhoneNumber(PhoneNumberBase):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    twilio_sid: str
+    is_active: bool
+    purchased_at: datetime
 
     class Config:
         from_attributes = True
 
-# Detailed response schemas with relationships
-class ClientWithDetails(Client):
-    subscriptions: List[Subscription] = Field(default_factory=list)
-    phone_numbers: List[PhoneNumber] = Field(default_factory=list)
-    documents: List[Document] = Field(default_factory=list)
+# Subscription schemas - simplified for month-based system
+class SubscriptionBase(BaseModel):
+    bot_type: BotType = Field(..., example=BotType.WHATSAPP)
+    months: int = Field(..., ge=1, le=12, example=3)  # Months to add (1-12)
 
-# Chat and Voice related schemas
+class SubscriptionCreate(SubscriptionBase):
+    pass
+
+class Subscription(SubscriptionBase):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    start_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# WhatsApp profile schemas
+class WhatsAppProfileBase(BaseModel):
+    business_name: str = Field(..., min_length=1, max_length=200, example="Suresh Store")
+    address: Optional[str] = Field(None, min_length=1, max_length=500, example="123 Main Street")
+    logo_url: Optional[str] = Field(None, min_length=1, max_length=500, example="/static/logos/suresh-store.png")
+
+class WhatsAppProfileCreate(WhatsAppProfileBase):
+    pass
+
+class WhatsAppProfileUpdate(WhatsAppProfileBase):
+    pass
+
+class WhatsAppProfile(WhatsAppProfileBase):
+    id: uuid.UUID
+    client_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# Chat and voice message schemas
 class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000, example="What are your business hours?")
     session_id: Optional[str] = Field(None, example="session_12345")
-    client_id: int = Field(..., gt=0, example=1)
 
 class ChatResponse(BaseModel):
     response: str = Field(..., example="Our business hours are 9 AM to 5 PM, Monday to Friday.")
@@ -154,21 +139,11 @@ class ChatResponse(BaseModel):
 class VoiceCallRequest(BaseModel):
     from_number: str = Field(..., min_length=10, max_length=20, example="+19876543210")
     to_number: str = Field(..., min_length=10, max_length=20, example="+1234567890")
-    client_id: int = Field(..., gt=0, example=1)
 
 class VoiceCallResponse(BaseModel):
     call_sid: str = Field(..., example="CAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
     status: str = Field(..., example="initiated")
     message: Optional[str] = Field(None, example="Call initiated successfully")
-
-# Authentication schemas
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-class TokenData(BaseModel):
-    client_id: Optional[int] = None
-    username: Optional[str] = None
 
 # Statistics and reporting schemas
 class ClientStats(BaseModel):
@@ -179,10 +154,10 @@ class ClientStats(BaseModel):
     last_activity: Optional[datetime] = Field(None)
 
 class UsageReport(BaseModel):
-    period_start: date
-    period_end: date
+    period_start: datetime
+    period_end: datetime
     total_requests: int
     successful_requests: int
     failed_requests: int
     average_response_time: float
-    most_common_questions: List[Dict[str, Any]]
+    most_common_questions: List[str]
