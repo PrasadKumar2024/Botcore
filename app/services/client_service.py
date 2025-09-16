@@ -4,10 +4,11 @@ from sqlalchemy import or_
 from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 import logging
+import uuid
 
 from app.models import Client, Subscription, PhoneNumber, Document
-from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate, PhoneNumberCreate
-from app.services.twilio_service import purchase_phone_number, release_phone_number
+from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate
+from app.services.twilio_service import release_phone_number
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -17,14 +18,11 @@ def create_client(db: Session, client_data: ClientCreate) -> Client:
     Create a new client in the database
     """
     try:
-        # Create client instance
+        # Create client instance with only the fields that exist in the model
         db_client = Client(
             name=client_data.name,
-            email=client_data.email,
             business_name=client_data.business_name,
-            industry=client_data.industry,
-            website=client_data.website,
-            timezone=client_data.timezone,
+            business_type=client_data.business_type,
             status="active",
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow()
@@ -43,7 +41,7 @@ def create_client(db: Session, client_data: ClientCreate) -> Client:
         logger.error(f"Error creating client: {str(e)}")
         raise
 
-def get_client_by_id(db: Session, client_id: int) -> Optional[Client]:
+def get_client_by_id(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
     Get a client by ID with all related data
     """
@@ -68,14 +66,12 @@ def get_all_clients(
         search_filter = or_(
             Client.name.ilike(f"%{search}%"),
             Client.business_name.ilike(f"%{search}%"),
-            Client.email.ilike(f"%{search}%"),
-            Client.industry.ilike(f"%{search}%")
         )
         query = query.filter(search_filter)
     
     return query.offset(skip).limit(limit).all()
 
-def update_client_details(db: Session, client_id: int, client_data: ClientUpdate) -> Optional[Client]:
+def update_client_details(db: Session, client_id: uuid.UUID, client_data: ClientUpdate) -> Optional[Client]:
     """
     Update client information
     """
@@ -87,7 +83,8 @@ def update_client_details(db: Session, client_id: int, client_data: ClientUpdate
         # Update only provided fields
         update_data = client_data.dict(exclude_unset=True)
         for field, value in update_data.items():
-            setattr(db_client, field, value)
+            if hasattr(db_client, field):
+                setattr(db_client, field, value)
         
         db_client.updated_at = datetime.utcnow()
         db.commit()
@@ -101,7 +98,7 @@ def update_client_details(db: Session, client_id: int, client_data: ClientUpdate
         logger.error(f"Error updating client {client_id}: {str(e)}")
         raise
 
-def delete_client(db: Session, client_id: int) -> bool:
+def delete_client(db: Session, client_id: uuid.UUID) -> bool:
     """
     Delete a client and associated resources
     """
@@ -130,7 +127,7 @@ def delete_client(db: Session, client_id: int) -> bool:
         logger.error(f"Error deleting client {client_id}: {str(e)}")
         raise
 
-def get_client_subscriptions(db: Session, client_id: int) -> Optional[List[Subscription]]:
+def get_client_subscriptions(db: Session, client_id: uuid.UUID) -> Optional[List[Subscription]]:
     """
     Get all subscriptions for a client
     """
@@ -140,7 +137,7 @@ def get_client_subscriptions(db: Session, client_id: int) -> Optional[List[Subsc
     
     return client.subscriptions
 
-def create_client_subscription(db: Session, client_id: int, subscription_data: SubscriptionCreate) -> Optional[Subscription]:
+def create_client_subscription(db: Session, client_id: uuid.UUID, subscription_data: SubscriptionCreate) -> Optional[Subscription]:
     """
     Create a new subscription for a client
     """
@@ -149,15 +146,19 @@ def create_client_subscription(db: Session, client_id: int, subscription_data: S
         if not client:
             return None
         
+        # Calculate start and expiry dates based on months
+        now = datetime.utcnow()
+        expiry_date = now + relativedelta(months=+subscription_data.months)
+        
         # Create subscription
         db_subscription = Subscription(
             client_id=client_id,
-            plan_type=subscription_data.plan_type,
-            start_date=subscription_data.start_date or date.today(),
-            end_date=subscription_data.end_date,
-            is_active=subscription_data.is_active,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            bot_type=subscription_data.bot_type,
+            start_date=now,
+            expiry_date=expiry_date,
+            is_active=True,
+            created_at=now,
+            updated_at=now
         )
         
         db.add(db_subscription)
@@ -172,7 +173,7 @@ def create_client_subscription(db: Session, client_id: int, subscription_data: S
         logger.error(f"Error creating subscription for client {client_id}: {str(e)}")
         raise
 
-def get_client_phone_numbers(db: Session, client_id: int) -> Optional[List[PhoneNumber]]:
+def get_client_phone_numbers(db: Session, client_id: uuid.UUID) -> Optional[List[PhoneNumber]]:
     """
     Get all phone numbers assigned to a client
     """
@@ -182,7 +183,7 @@ def get_client_phone_numbers(db: Session, client_id: int) -> Optional[List[Phone
     
     return client.phone_numbers
 
-def add_phone_number_to_client(db: Session, client_id: int, twilio_sid: str, phone_data: PhoneNumberCreate) -> Optional[PhoneNumber]:
+def add_phone_number_to_client(db: Session, client_id: uuid.UUID, twilio_sid: str, number: str, country: str) -> Optional[PhoneNumber]:
     """
     Add a phone number to a client in the database
     """
@@ -195,19 +196,17 @@ def add_phone_number_to_client(db: Session, client_id: int, twilio_sid: str, pho
         db_phone = PhoneNumber(
             client_id=client_id,
             twilio_sid=twilio_sid,
-            phone_number=phone_data.phone_number,
-            friendly_name=phone_data.friendly_name,
-            number_type=phone_data.number_type,
+            number=number,
+            country=country,
             is_active=True,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            purchased_at=datetime.utcnow()
         )
         
         db.add(db_phone)
         db.commit()
         db.refresh(db_phone)
         
-        logger.info(f"Added phone number {phone_data.phone_number} to client: {client_id}")
+        logger.info(f"Added phone number {number} to client: {client_id}")
         return db_phone
         
     except Exception as e:
@@ -215,7 +214,7 @@ def add_phone_number_to_client(db: Session, client_id: int, twilio_sid: str, pho
         logger.error(f"Error adding phone number to client {client_id}: {str(e)}")
         raise
 
-def remove_phone_number_from_client(db: Session, client_id: int, phone_sid: str) -> bool:
+def remove_phone_number_from_client(db: Session, client_id: uuid.UUID, phone_sid: str) -> bool:
     """
     Remove a phone number from a client in the database
     """
@@ -239,7 +238,7 @@ def remove_phone_number_from_client(db: Session, client_id: int, phone_sid: str)
         logger.error(f"Error removing phone number {phone_sid} from client {client_id}: {str(e)}")
         raise
 
-def get_client_stats(db: Session, client_id: int) -> Optional[Dict[str, Any]]:
+def get_client_stats(db: Session, client_id: uuid.UUID) -> Optional[Dict[str, Any]]:
     """
     Get statistics for a client
     """
@@ -258,7 +257,7 @@ def get_client_stats(db: Session, client_id: int) -> Optional[Dict[str, Any]]:
     
     # Check active subscription
     has_active_subscription = any(
-        sub.is_active and (sub.end_date is None or sub.end_date >= date.today())
+        sub.is_active and (sub.expiry_date is None or sub.expiry_date >= datetime.utcnow())
         for sub in client.subscriptions
     )
     
@@ -278,13 +277,13 @@ def get_client_by_phone_number(db: Session, phone_number: str) -> Optional[Clien
     """
     Find a client by their phone number
     """
-    phone = db.query(PhoneNumber).filter(PhoneNumber.phone_number == phone_number).first()
+    phone = db.query(PhoneNumber).filter(PhoneNumber.number == phone_number).first()
     if not phone:
         return None
     
     return phone.client
 
-def deactivate_client(db: Session, client_id: int) -> Optional[Client]:
+def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
     Deactivate a client (soft delete)
     """
