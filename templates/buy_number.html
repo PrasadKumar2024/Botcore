@@ -1,0 +1,397 @@
+{% extends "base.html" %}
+
+{% block title %}Buy Phone Number - {{ client.business_name }} - OwnBot{% endblock %}
+
+{% block extra_css %}
+<style>
+    .buy-number-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    
+    .page-header {
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    
+    .existing-number-card {
+        background: linear-gradient(135deg, #4cc9f0 0%, #4361ee 100%);
+        color: white;
+        border-radius: var(--border-radius);
+        padding: 2rem;
+        margin-bottom: 2rem;
+        text-align: center;
+        box-shadow: var(--box-shadow);
+    }
+    
+    .existing-number-card h3 {
+        margin-bottom: 0.5rem;
+        font-size: 1.5rem;
+    }
+    
+    .number-display {
+        font-size: 2rem;
+        font-weight: 700;
+        margin: 1rem 0;
+        letter-spacing: 1px;
+    }
+    
+    .number-status {
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 0.5rem 1rem;
+        border-radius: 50rem;
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
+    
+    .purchase-form {
+        background: white;
+        border-radius: var(--border-radius);
+        box-shadow: var(--box-shadow);
+        padding: 2rem;
+        margin-bottom: 2rem;
+    }
+    
+    .form-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    .form-group {
+        flex: 1;
+    }
+    
+    .country-flag {
+        width: 24px;
+        height: 16px;
+        margin-right: 0.5rem;
+        vertical-align: middle;
+        border-radius: 2px;
+    }
+    
+    .number-preview {
+        background: var(--gray-100);
+        border-radius: var(--border-radius);
+        padding: 1rem;
+        margin-top: 1.5rem;
+        text-align: center;
+        display: none;
+    }
+    
+    .number-preview.active {
+        display: block;
+    }
+    
+    .preview-number {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--primary);
+        margin-bottom: 0.5rem;
+    }
+    
+    .preview-cost {
+        color: var(--gray-600);
+        font-size: 0.9rem;
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 1rem;
+        justify-content: space-between;
+        margin-top: 2rem;
+    }
+    
+    .skip-btn {
+        background: var(--gray-200);
+        color: var(--gray-700);
+    }
+    
+    .skip-btn:hover {
+        background: var(--gray-300);
+    }
+    
+    .buy-btn {
+        background: var(--success);
+        color: white;
+        min-width: 150px;
+    }
+    
+    .buy-btn:hover {
+        background: var(--success-dark);
+    }
+    
+    .buy-btn:disabled {
+        background: var(--gray-400);
+        cursor: not-allowed;
+    }
+    
+    .next-btn {
+        background: var(--primary);
+        color: white;
+        min-width: 150px;
+        display: none;
+    }
+    
+    .next-btn:hover {
+        background: var(--primary-dark);
+    }
+    
+    .success-message {
+        background: rgba(76, 201, 240, 0.1);
+        border: 1px solid var(--success);
+        border-radius: var(--border-radius);
+        padding: 1rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    
+    .success-message i {
+        color: var(--success);
+        font-size: 1.5rem;
+    }
+    
+    .info-box {
+        background: var(--gray-100);
+        border-radius: var(--border-radius);
+        padding: 1.5rem;
+        margin-top: 2rem;
+    }
+    
+    .info-box h4 {
+        margin-bottom: 0.75rem;
+        color: var(--dark);
+    }
+    
+    .info-box ul {
+        padding-left: 1.5rem;
+        color: var(--gray-600);
+    }
+    
+    .info-box li {
+        margin-bottom: 0.5rem;
+    }
+    
+    @media (max-width: 768px) {
+        .form-row {
+            flex-direction: column;
+        }
+        
+        .number-display {
+            font-size: 1.5rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="buy-number-container">
+    <div class="page-header">
+        <h1>Phone Number for {{ client.business_name }}</h1>
+        <p>Purchase a phone number for WhatsApp and Voice bots, or skip if you only need web chat.</p>
+    </div>
+    
+    {% if existing_number %}
+    <div class="existing-number-card">
+        <h3>Existing Phone Number</h3>
+        <div class="number-display">{{ existing_number.number }}</div>
+        <div class="number-status">ACTIVE</div>
+        <p style="margin-top: 1rem; opacity: 0.9;">This number is ready for use with WhatsApp and Voice bots.</p>
+    </div>
+    {% endif %}
+    
+    <div class="purchase-form">
+        <h3>Purchase New Number</h3>
+        
+        {% if error %}
+        <div class="alert alert-error">
+            <i class="fas fa-exclamation-circle"></i>
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        <form id="numberForm" method="post" action="/clients/{{ client.id }}/numbers">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="country_code">Country</label>
+                    <select id="country_code" name="country_code" required onchange="updateNumberPreview()">
+                        <option value="">Select Country</option>
+                        {% for country in countries %}
+                        <option value="{{ country.code }}" data-flag="{{ country.flag }}">
+                            {{ country.name }} ({{ country.code }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="area_code">Area Code (Optional)</label>
+                    <input type="text" id="area_code" name="area_code" placeholder="e.g., 212" oninput="updateNumberPreview()">
+                </div>
+            </div>
+            
+            <div class="number-preview" id="numberPreview">
+                <div class="preview-number" id="previewNumber">+1 234 567 8900</div>
+                <div class="preview-cost" id="previewCost">Approximate cost: $1.00/month</div>
+            </div>
+            
+            <div class="action-buttons">
+                <a href="/clients/{{ client.id }}/numbers/skip" class="btn skip-btn">
+                    <i class="fas fa-forward"></i> Skip This Step
+                </a>
+                <button type="submit" class="btn buy-btn" id="buyBtn">
+                    <i class="fas fa-shopping-cart"></i> Buy Number
+                </button>
+                <a href="/clients/{{ client.id }}/bots" class="btn next-btn" id="nextBtn">
+                    Next <i class="fas fa-arrow-right"></i>
+                </a>
+            </div>
+        </form>
+    </div>
+    
+    <div class="info-box">
+        <h4><i class="fas fa-info-circle"></i> Why purchase a phone number?</h4>
+        <ul>
+            <li><strong>WhatsApp Business API:</strong> Required for WhatsApp bot functionality</li>
+            <li><strong>Voice Calls:</strong> Required for voice bot functionality</li>
+            <li><strong>Professional Presence:</strong> Dedicated business number for customer communication</li>
+            <li><strong>Global Reach:</strong> Choose numbers from different countries</li>
+        </ul>
+        <p style="margin-top: 1rem; font-style: italic;">
+            If your client only needs web chat functionality, you can skip this step.
+        </p>
+    </div>
+</div>
+
+<!-- Success message template (hidden by default) -->
+<div class="success-message" id="successMessage" style="display: none;">
+    <i class="fas fa-check-circle"></i>
+    <div>
+        <strong>Number purchased successfully!</strong>
+        <div id="purchasedNumber">+1 234 567 8900</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Country data with flags and pricing
+    const countryData = {
+        "US": { flag: "🇺🇸", cost: "$1.00" },
+        "GB": { flag: "🇬🇧", cost: "$1.50" },
+        "CA": { flag: "🇨🇦", cost: "$1.00" },
+        "AU": { flag: "🇦🇺", cost: "$1.50" },
+        "IN": { flag: "🇮🇳", cost: "$0.50" },
+        "DE": { flag: "🇩🇪", cost: "$1.50" },
+        "FR": { flag: "🇫🇷", cost: "$1.50" },
+        "BR": { flag: "🇧🇷", cost: "$1.00" },
+        "MX": { flag: "🇲🇽", cost: "$1.00" },
+        "ES": { flag: "🇪🇸", cost: "$1.50" }
+    };
+    
+    // Update number preview based on selection
+    function updateNumberPreview() {
+        const countryCode = document.getElementById('country_code').value;
+        const areaCode = document.getElementById('area_code').value;
+        const preview = document.getElementById('numberPreview');
+        const numberDisplay = document.getElementById('previewNumber');
+        const costDisplay = document.getElementById('previewCost');
+        
+        if (countryCode) {
+            // Generate a sample number based on country and area code
+            const countryInfo = countryData[countryCode] || { flag: "🇺🇳", cost: "$1.00" };
+            const sampleNumber = generateSampleNumber(countryCode, areaCode);
+            
+            numberDisplay.textContent = sampleNumber;
+            costDisplay.textContent = `Approximate cost: ${countryInfo.cost}/month`;
+            preview.classList.add('active');
+        } else {
+            preview.classList.remove('active');
+        }
+    }
+    
+    // Generate a sample phone number for preview
+    function generateSampleNumber(countryCode, areaCode) {
+        // Sample number formats by country
+        const formats = {
+            "US": areaCode ? `+1 (${areaCode}) 555-####` : "+1 (555) 555-####",
+            "GB": "+44 20 7946 ####",
+            "CA": areaCode ? `+1 (${areaCode}) 555-####` : "+1 (555) 555-####",
+            "AU": "+61 2 5555 ####",
+            "IN": "+91 98765 43210",
+            "DE": "+49 30 123456##",
+            "FR": "+33 1 23 45 67 ##",
+            "BR": "+55 11 98765-####",
+            "MX": "+52 55 1234 5678",
+            "ES": "+34 91 123 45 ##"
+        };
+        
+        let format = formats[countryCode] || "+1 (555) 555-####";
+        
+        // Replace # with random digits
+        return format.replace(/#/g, () => Math.floor(Math.random() * 10));
+    }
+    
+    // Handle form submission
+    document.getElementById('numberForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const buyBtn = document.getElementById('buyBtn');
+        const countryCode = document.getElementById('country_code').value;
+        
+        if (!countryCode) {
+            showAlert('Please select a country', 'error');
+            return;
+        }
+        
+        // Show loading state
+        const originalText = buyBtn.innerHTML;
+        buyBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Purchasing...';
+        buyBtn.disabled = true;
+        
+        try {
+            // Simulate API call (replace with actual form submission)
+            // In a real implementation, this would be handled by the form action
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Show success message
+            const successMessage = document.getElementById('successMessage');
+            const purchasedNumber = document.getElementById('purchasedNumber');
+            purchasedNumber.textContent = document.getElementById('previewNumber').textContent;
+            successMessage.style.display = 'flex';
+            
+            // Show next button
+            document.getElementById('nextBtn').style.display = 'inline-block';
+            buyBtn.style.display = 'none';
+            
+            showAlert('Number purchased successfully!', 'success');
+        } catch (error) {
+            showAlert('Failed to purchase number: ' + error.message, 'error');
+            buyBtn.innerHTML = originalText;
+            buyBtn.disabled = false;
+        }
+    });
+    
+    // Initialize page
+    document.addEventListener('DOMContentLoaded', function() {
+        // Check if we have a success message from query params
+        const urlParams = new URLSearchParams(window.location.search);
+        const success = urlParams.get('success');
+        const number = urlParams.get('number');
+        
+        if (success && number) {
+            const successMessage = document.getElementById('successMessage');
+            const purchasedNumber = document.getElementById('purchasedNumber');
+            purchasedNumber.textContent = number;
+            successMessage.style.display = 'flex';
+            
+            // Show next button, hide buy button
+            document.getElementById('nextBtn').style.display = 'inline-block';
+            document.getElementById('buyBtn').style.display = 'none';
+        }
+    });
+</script>
+{% endblock %}
