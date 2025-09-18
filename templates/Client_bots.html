@@ -1,1 +1,579 @@
+{% extends "base.html" %}
 
+{% block title %}Bot Configuration - {{ client.business_name }} - OwnBot{% endblock %}
+
+{% block extra_css %}
+<style>
+    .bot-config-container {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    
+    .page-header {
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    
+    .bots-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+        gap: 2rem;
+        margin-bottom: 2rem;
+    }
+    
+    .bot-card {
+        background: white;
+        border-radius: var(--border-radius);
+        box-shadow: var(--box-shadow);
+        padding: 1.5rem;
+        transition: transform 0.3s ease;
+    }
+    
+    .bot-card:hover {
+        transform: translateY(-5px);
+    }
+    
+    .bot-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--gray-200);
+    }
+    
+    .bot-icon {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 1rem;
+        font-size: 1.5rem;
+    }
+    
+    .bot-whatsapp .bot-icon {
+        background-color: #25D366;
+        color: white;
+    }
+    
+    .bot-voice .bot-icon {
+        background-color: var(--primary);
+        color: white;
+    }
+    
+    .bot-web .bot-icon {
+        background-color: var(--warning);
+        color: white;
+    }
+    
+    .bot-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    
+    .bot-number {
+        color: var(--gray-600);
+        font-size: 0.9rem;
+    }
+    
+    .section {
+        margin-bottom: 1.5rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 1px solid var(--gray-200);
+    }
+    
+    .section:last-child {
+        border-bottom: none;
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+    
+    .section-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        color: var(--dark);
+    }
+    
+    .profile-info {
+        display: grid;
+        gap: 1rem;
+    }
+    
+    .profile-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem;
+        background: var(--gray-100);
+        border-radius: var(--border-radius);
+    }
+    
+    .profile-label {
+        font-weight: 500;
+        color: var(--gray-700);
+    }
+    
+    .profile-value {
+        color: var(--gray-600);
+    }
+    
+    .subscription-dates {
+        display: grid;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    
+    .date-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.9rem;
+    }
+    
+    .date-label {
+        color: var(--gray-600);
+    }
+    
+    .date-value {
+        font-weight: 500;
+    }
+    
+    .months-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    
+    .month-btn {
+        padding: 0.75rem;
+        border: 1px solid var(--gray-300);
+        border-radius: var(--border-radius);
+        background: white;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        font-weight: 500;
+        text-align: center;
+    }
+    
+    .month-btn:hover {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+    }
+    
+    .status-badge {
+        display: inline-block;
+        padding: 0.5rem 1rem;
+        border-radius: 50rem;
+        font-weight: 600;
+        font-size: 0.85rem;
+        margin-top: 1rem;
+    }
+    
+    .status-active {
+        background-color: rgba(76, 201, 240, 0.15);
+        color: var(--success-dark);
+    }
+    
+    .status-inactive {
+        background-color: rgba(108, 117, 125, 0.15);
+        color: var(--gray-600);
+    }
+    
+    .status-expired {
+        background-color: rgba(247, 37, 133, 0.15);
+        color: var(--danger);
+    }
+    
+    .action-buttons {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+    
+    .embed-section {
+        background: var(--gray-100);
+        border-radius: var(--border-radius);
+        padding: 1rem;
+        margin-top: 1rem;
+    }
+    
+    .embed-code {
+        background: white;
+        border: 1px solid var(--gray-300);
+        border-radius: var(--border-radius);
+        padding: 1rem;
+        font-family: monospace;
+        font-size: 0.85rem;
+        margin-bottom: 1rem;
+        overflow-x: auto;
+    }
+    
+    .chatbot-link {
+        display: block;
+        color: var(--primary);
+        text-decoration: none;
+        margin-top: 0.5rem;
+        font-weight: 500;
+    }
+    
+    .chatbot-link:hover {
+        text-decoration: underline;
+    }
+    
+    .completion-actions {
+        text-align: center;
+        margin-top: 3rem;
+        padding-top: 2rem;
+        border-top: 1px solid var(--gray-200);
+    }
+    
+    @media (max-width: 768px) {
+        .bots-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .months-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+        
+        .action-buttons {
+            flex-direction: column;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="bot-config-container">
+    <div class="page-header">
+        <h1>Configure Bots for {{ client.business_name }}</h1>
+        <p>Set up and activate your WhatsApp, Voice, and Web Chat bots</p>
+    </div>
+    
+    <div class="bots-grid">
+        <!-- WhatsApp Bot Card -->
+        <div class="bot-card bot-whatsapp">
+            <div class="bot-header">
+                <div class="bot-icon">
+                    <i class="fab fa-whatsapp"></i>
+                </div>
+                <div>
+                    <div class="bot-title">WhatsApp Bot</div>
+                    {% if phone_number %}
+                    <div class="bot-number">Uses: {{ phone_number.number }}</div>
+                    {% else %}
+                    <div class="bot-number">No phone number assigned</div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Business Profile Section -->
+            <div class="section">
+                <div class="section-title">Business Profile</div>
+                <div class="profile-info">
+                    <div class="profile-item">
+                        <span class="profile-label">Name:</span>
+                        <span class="profile-value">
+                            {% if whatsapp_profile and whatsapp_profile.business_name %}
+                                {{ whatsapp_profile.business_name }}
+                            {% else %}
+                                Not set
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="profile-item">
+                        <span class="profile-label">Address:</span>
+                        <span class="profile-value">
+                            {% if whatsapp_profile and whatsapp_profile.address %}
+                                {{ whatsapp_profile.address }}
+                            {% else %}
+                                Not set
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="profile-item">
+                        <span class="profile-label">Logo:</span>
+                        <span class="profile-value">
+                            {% if whatsapp_profile and whatsapp_profile.logo_url %}
+                                Uploaded
+                            {% else %}
+                                Not set
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                <a href="/clients/{{ client.id }}/whatsapp-profile" class="btn btn-primary btn-sm" style="margin-top: 1rem;">
+                    <i class="fas fa-edit"></i> Edit Profile
+                </a>
+            </div>
+            
+            <!-- Subscription Section -->
+            <div class="section">
+                <div class="section-title">Subscription</div>
+                <div class="subscription-dates">
+                    <div class="date-row">
+                        <span class="date-label">Start Date:</span>
+                        <span class="date-value">
+                            {% if whatsapp_sub and whatsapp_sub.start_date %}
+                                {{ whatsapp_sub.start_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="date-row">
+                        <span class="date-label">Expiry Date:</span>
+                        <span class="date-value">
+                            {% if whatsapp_sub and whatsapp_sub.expiry_date %}
+                                {{ whatsapp_sub.expiry_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="months-grid">
+                    <button class="month-btn" onclick="addMonths('whatsapp', 1)">1 Month</button>
+                    <button class="month-btn" onclick="addMonths('whatsapp', 2)">2 Months</button>
+                    <button class="month-btn" onclick="addMonths('whatsapp', 3)">3 Months</button>
+                    <button class="month-btn" onclick="addMonths('whatsapp', 6)">6 Months</button>
+                    <button class="month-btn" onclick="addMonths('whatsapp', 12)">12 Months</button>
+                </div>
+                
+                <div class="status-badge status-{{ whatsapp_sub.status|lower if whatsapp_sub else 'inactive' }}">
+                    {{ whatsapp_sub.status if whatsapp_sub else 'INACTIVE' }}
+                </div>
+                
+                <div class="action-buttons">
+                    {% if whatsapp_sub and whatsapp_sub.active %}
+                    <form action="/clients/{{ client.id }}/subscriptions/whatsapp/deactivate" method="post">
+                        <button type="submit" class="btn btn-danger btn-sm">
+                            <i class="fas fa-times-circle"></i> Deactivate
+                        </button>
+                    </form>
+                    {% else %}
+                    <form action="/clients/{{ client.id }}/subscriptions/whatsapp/reactivate" method="post">
+                        <button type="submit" class="btn btn-success btn-sm">
+                            <i class="fas fa-check-circle"></i> Activate
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Call Bot Card -->
+        <div class="bot-card bot-voice">
+            <div class="bot-header">
+                <div class="bot-icon">
+                    <i class="fas fa-phone"></i>
+                </div>
+                <div>
+                    <div class="bot-title">Voice Call Bot</div>
+                    {% if phone_number %}
+                    <div class="bot-number">Uses: {{ phone_number.number }}</div>
+                    {% else %}
+                    <div class="bot-number">No phone number assigned</div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Subscription Section -->
+            <div class="section">
+                <div class="section-title">Subscription</div>
+                <div class="subscription-dates">
+                    <div class="date-row">
+                        <span class="date-label">Start Date:</span>
+                        <span class="date-value">
+                            {% if voice_sub and voice_sub.start_date %}
+                                {{ voice_sub.start_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="date-row">
+                        <span class="date-label">Expiry Date:</span>
+                        <span class="date-value">
+                            {% if voice_sub and voice_sub.expiry_date %}
+                                {{ voice_sub.expiry_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="months-grid">
+                    <button class="month-btn" onclick="addMonths('voice', 1)">1 Month</button>
+                    <button class="month-btn" onclick="addMonths('voice', 2)">2 Months</button>
+                    <button class="month-btn" onclick="addMonths('voice', 3)">3 Months</button>
+                    <button class="month-btn" onclick="addMonths('voice', 6)">6 Months</button>
+                    <button class="month-btn" onclick="addMonths('voice', 12)">12 Months</button>
+                </div>
+                
+                <div class="status-badge status-{{ voice_sub.status|lower if voice_sub else 'inactive' }}">
+                    {{ voice_sub.status if voice_sub else 'INACTIVE' }}
+                </div>
+                
+                <div class="action-buttons">
+                    {% if voice_sub and voice_sub.active %}
+                    <form action="/clients/{{ client.id }}/subscriptions/voice/deactivate" method="post">
+                        <button type="submit" class="btn btn-danger btn-sm">
+                            <i class="fas fa-times-circle"></i> Deactivate
+                        </button>
+                    </form>
+                    {% else %}
+                    <form action="/clients/{{ client.id }}/subscriptions/voice/reactivate" method="post">
+                        <button type="submit" class="btn btn-success btn-sm">
+                            <i class="fas fa-check-circle"></i> Activate
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Web Chat Bot Card -->
+        <div class="bot-card bot-web">
+            <div class="bot-header">
+                <div class="bot-icon">
+                    <i class="fas fa-comments"></i>
+                </div>
+                <div>
+                    <div class="bot-title">Web Chat Bot</div>
+                    <div class="bot-number">No phone number needed</div>
+                </div>
+            </div>
+            
+            <!-- Subscription Section -->
+            <div class="section">
+                <div class="section-title">Subscription</div>
+                <div class="subscription-dates">
+                    <div class="date-row">
+                        <span class="date-label">Start Date:</span>
+                        <span class="date-value">
+                            {% if web_sub and web_sub.start_date %}
+                                {{ web_sub.start_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="date-row">
+                        <span class="date-label">Expiry Date:</span>
+                        <span class="date-value">
+                            {% if web_sub and web_sub.expiry_date %}
+                                {{ web_sub.expiry_date.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                --/--/----
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="months-grid">
+                    <button class="month-btn" onclick="addMonths('web', 1)">1 Month</button>
+                    <button class="month-btn" onclick="addMonths('web', 2)">2 Months</button>
+                    <button class="month-btn" onclick="addMonths('web', 3)">3 Months</button>
+                    <button class="month-btn" onclick="addMonths('web', 6)">6 Months</button>
+                    <button class="month-btn" onclick="addMonths('web', 12)">12 Months</button>
+                </div>
+                
+                <div class="status-badge status-{{ web_sub.status|lower if web_sub else 'inactive' }}">
+                    {{ web_sub.status if web_sub else 'INACTIVE' }}
+                </div>
+                
+                <div class="action-buttons">
+                    {% if web_sub and web_sub.active %}
+                    <form action="/clients/{{ client.id }}/subscriptions/web/deactivate" method="post">
+                        <button type="submit" class="btn btn-danger btn-sm">
+                            <i class="fas fa-times-circle"></i> Deactivate
+                        </button>
+                    </form>
+                    {% else %}
+                    <form action="/clients/{{ client.id }}/subscriptions/web/reactivate" method="post">
+                        <button type="submit" class="btn btn-success btn-sm">
+                            <i class="fas fa-check-circle"></i> Activate
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Embed Section -->
+            <div class="section">
+                <div class="section-title">Integration</div>
+                <div class="embed-section">
+                    <p><strong>Your Chatbot Link:</strong></p>
+                    <a href="{{ chatbot_url }}" target="_blank" class="chatbot-link">{{ chatbot_url }}</a>
+                    
+                    <p style="margin-top: 1rem;"><strong>Embed Code:</strong></p>
+                    <div class="embed-code" id="embedCode">
+                        &lt;script src="{{ url_for('static', path='js/chat-widget.js') }}" data-client-id="{{ client.id }}"&gt;&lt;/script&gt;
+                    </div>
+                    
+                    <button class="btn btn-primary btn-sm" onclick="copyEmbedCode()">
+                        <i class="fas fa-copy"></i> Copy Embed Code
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="completion-actions">
+        <a href="/" class="btn btn-primary">
+            <i class="fas fa-check-circle"></i> Finish Setup
+        </a>
+        <p style="margin-top: 1rem; color: var(--gray-600);">
+            You can always come back to adjust these settings from the client details page.
+        </p>
+    </div>
+</div>
+
+<!-- Hidden form for adding months -->
+<form id="addMonthsForm" method="post" style="display: none;">
+    <input type="hidden" name="months" id="monthsInput">
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function addMonths(botType, months) {
+        const form = document.getElementById('addMonthsForm');
+        form.action = `/clients/{{ client.id }}/subscriptions/${botType}/add-months`;
+        document.getElementById('monthsInput').value = months;
+        form.submit();
+    }
+    
+    function copyEmbedCode() {
+        const embedCode = document.getElementById('embedCode').textContent;
+        
+        navigator.clipboard.writeText(embedCode).then(() => {
+            showAlert('Embed code copied to clipboard!', 'success');
+        }).catch(err => {
+            showAlert('Failed to copy embed code', 'error');
+        });
+    }
+    
+    // Handle URL parameters for success/error messages
+    document.addEventListener('DOMContentLoaded', function() {
+        const urlParams = new URLSearchParams(window.location.search);
+        const success = urlParams.get('success');
+        const error = urlParams.get('error');
+        
+        if (success) {
+            showAlert(success, 'success');
+        }
+        
+        if (error) {
+            showAlert(error, 'error');
+        }
+    });
+</script>
+{% endblock %}
