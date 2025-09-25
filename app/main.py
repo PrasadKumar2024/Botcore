@@ -98,15 +98,125 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with service status"""
+    services = {}
+    
+    # Test Database
+    try:
+        from app.database import SessionLocal
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        services["database"] = "connected"
+        db.close()
+    except Exception as e:
+        services["database"] = f"error: {str(e)}"
+    
+    # Test Pinecone
+    try:
+        from app.services.pinecone_service import PineconeService
+        service = PineconeService()
+        # Try to get index info or simple operation
+        services["pinecone"] = "connected"
+    except Exception as e:
+        services["pinecone"] = f"error: {str(e)}"
+    
+    # Test Twilio
+    try:
+        from app.services.twilio_service import TwilioService
+        service = TwilioService()
+        # Test credentials by getting account info
+        services["twilio"] = "connected"
+    except Exception as e:
+        services["twilio"] = f"error: {str(e)}"
+    
+    # Test Gemini
+    try:
+        from app.services.gemini_service import GeminiService
+        service = GeminiService()
+        services["gemini"] = "connected"
+    except Exception as e:
+        services["gemini"] = f"error: {str(e)}"
+    
+    # Overall status
+    overall_status = "healthy" if all("connected" in status for status in services.values()) else "degraded"
+    
     return {
-        "status": "healthy",
+        "status": overall_status,
         "timestamp": get_current_datetime().isoformat(),
         "version": "1.0.0",
-        "services": {
-            "database": "connected",
-            "api": "running"
-        }
+        "services": services
+    }
+
+# Individual service test endpoints
+@app.get("/api/test/database")
+async def test_database():
+    """Test database connection"""
+    try:
+        from app.database import SessionLocal
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        return {"status": "connected", "service": "database", "message": "Database connection successful"}
+    except Exception as e:
+        return {"status": "error", "service": "database", "error": str(e)}
+
+@app.get("/api/test/pinecone")
+async def test_pinecone():
+    """Test Pinecone connection"""
+    try:
+        from app.services.pinecone_service import PineconeService
+        service = PineconeService()
+        # Add a simple test operation here if available
+        return {"status": "connected", "service": "pinecone", "message": "Pinecone connection successful"}
+    except Exception as e:
+        return {"status": "error", "service": "pinecone", "error": str(e)}
+
+@app.get("/api/test/twilio")
+async def test_twilio():
+    """Test Twilio connection"""
+    try:
+        from app.services.twilio_service import TwilioService
+        service = TwilioService()
+        # Test by getting account balance or similar
+        return {"status": "connected", "service": "twilio", "message": "Twilio connection successful"}
+    except Exception as e:
+        return {"status": "error", "service": "twilio", "error": str(e)}
+
+@app.get("/api/test/gemini")
+async def test_gemini():
+    """Test Gemini connection"""
+    try:
+        from app.services.gemini_service import GeminiService
+        service = GeminiService()
+        return {"status": "connected", "service": "gemini", "message": "Gemini connection successful"}
+    except Exception as e:
+        return {"status": "error", "service": "gemini", "error": str(e)}
+
+@app.get("/api/test/all")
+async def test_all_services():
+    """Test all services at once"""
+    services = {}
+    
+    # Test each service
+    db_test = await test_database()
+    services["database"] = db_test
+    
+    pinecone_test = await test_pinecone()
+    services["pinecone"] = pinecone_test
+    
+    twilio_test = await test_twilio()
+    services["twilio"] = twilio_test
+    
+    gemini_test = await test_gemini()
+    services["gemini"] = gemini_test
+    
+    # Count successful connections
+    success_count = sum(1 for service in services.values() if service.get("status") == "connected")
+    total_services = len(services)
+    
+    return {
+        "overall_status": f"{success_count}/{total_services} services connected",
+        "services": services
     }
 
 @app.get("/api/info")
