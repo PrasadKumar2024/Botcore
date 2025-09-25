@@ -1,460 +1,314 @@
 # app/services/speech_service.py
 
-from google.cloud import texttospeech
-from google.api_core.exceptions import GoogleAPICallError, RetryError
-import os
 import logging
-import tempfile
-import uuid
+from typing import Dict, List, Optional, Tuple
+import re
 from datetime import datetime
-from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class SpeechService:
+    """
+    Basic speech service for language detection and text processing
+    Uses only Twilio's built-in features - no external APIs
+    """
+    
     def __init__(self):
-        """Initialize Google Cloud Text-to-Speech client with enhanced configuration"""
-        try:
-            # Initialize the TTS client
-            self.client = texttospeech.TextToSpeechClient()
-            
-            # Premium Wavenet voices for natural sound
-            self.wavenet_voices = {
-                # Indian English - Most natural for clinic conversations
-                "en-IN": {
-                    "female": "en-IN-Wavenet-A",  # Polite, clear (Recommended)
-                    "male": "en-IN-Wavenet-B",    # Professional, authoritative
-                    "neutral": "en-IN-Wavenet-C"  # Warm, friendly
-                },
-                # Hindi voices
-                "hi-IN": {
-                    "female": "hi-IN-Wavenet-A",
-                    "male": "hi-IN-Wavenet-B",
-                    "neutral": "hi-IN-Wavenet-C"
-                },
-                # South Indian languages
-                "ta-IN": {"female": "ta-IN-Wavenet-A", "neutral": "ta-IN-Wavenet-A"},
-                "te-IN": {"female": "te-IN-Wavenet-A", "neutral": "te-IN-Wavenet-A"},
-                "kn-IN": {"female": "kn-IN-Wavenet-A", "neutral": "kn-IN-Wavenet-A"},
-                "ml-IN": {"female": "ml-IN-Wavenet-A", "neutral": "ml-IN-Wavenet-A"},
-                # International variants
-                "en-US": {
-                    "female": "en-US-Wavenet-F",  # Very natural US female
-                    "male": "en-US-Wavenet-A",    # Professional US male
-                    "neutral": "en-US-Wavenet-C"
-                },
-                "en-GB": {
-                    "female": "en-GB-Wavenet-A",
-                    "male": "en-GB-Wavenet-B",    # British professional
-                    "neutral": "en-GB-Wavenet-C"
-                }
+        # Language detection keywords
+        self.language_keywords = {
+            "en": {
+                "keywords": ["english", "inglish", "angrezi", "in english", "english me", "speak english"],
+                "name": "English",
+                "voice": "Polly.Aditi",
+                "code": "en-IN"
+            },
+            "hi": {
+                "keywords": ["hindi", "हिंदी", "hindee", "hindi me", "hindi mein", "हिंदी में", "speak hindi"],
+                "name": "Hindi", 
+                "voice": "Polly.Aditi",
+                "code": "hi-IN"
+            },
+            "ta": {
+                "keywords": ["tamil", "தமிழ்", "tamil la", "tamil ah", "in tamil", "speak tamil"],
+                "name": "Tamil",
+                "voice": "Polly.Aditi", 
+                "code": "ta-IN"
+            },
+            "te": {
+                "keywords": ["telugu", "తెలుగు", "in telugu", "speak telugu"],
+                "name": "Telugu",
+                "voice": "Polly.Aditi",
+                "code": "te-IN"
+            },
+            "kn": {
+                "keywords": ["kannada", "ಕನ್ನಡ", "in kannada", "speak kannada"],
+                "name": "Kannada",
+                "voice": "Polly.Aditi",
+                "code": "kn-IN"
             }
+        }
+        
+        # Common medical terms for better understanding
+        self.medical_terms = {
+            "en": ["appointment", "doctor", "clinic", "prescription", "medicine", "emergency"],
+            "hi": ["अपॉइंटमेंट", "डॉक्टर", "क्लिनिक", "दवा", "प्रिस्क्रिप्शन", "इमरजेंसी"],
+            "ta": ["அப்பாயின்ட்மெண்ட்", "டாக்டர்", "கிளினிக்", "மருந்து", "பிரஸ்கிரிப்ஷன்", "அவசர"],
+            "te": ["అపాయింట్మెంట్", "డాక్టర్", "క్లినిక్", "మందు", "ప్రిస్క్రిప్షన్", "అత్యవసర"],
+            "kn": ["ಅಪಾಯಿಂಟ್ಮೆಂಟ್", "ಡಾಕ್ಟರ್", "ಕ್ಲಿನಿಕ್", "ಮದ್ದು", "ಪ್ರಿಸ್ಕ್ರಿಪ್ಷನ್", "ತುರ್ತು"]
+        }
+        
+        logger.info("Basic SpeechService initialized (Twilio-only mode)")
+
+    def detect_language(self, text: str, current_language: str = "en") -> Tuple[str, float]:
+        """
+        Detect language from text with confidence score
+        Returns: (language_code, confidence_score)
+        """
+        text_lower = text.lower()
+        matches = []
+        
+        for lang_code, lang_data in self.language_keywords.items():
+            keyword_count = 0
+            for keyword in lang_data["keywords"]:
+                if keyword in text_lower:
+                    keyword_count += 1
             
-            # Default audio configurations for different use cases
-            self.audio_configs = {
-                "telephone": texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MULAW,
-                    sample_rate_hertz=8000,
-                    speaking_rate=1.0,
-                    pitch=0.0,
-                    volume_gain_db=0.0
-                ),
-                "standard": texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=24000,
-                    speaking_rate=1.0,
-                    pitch=0.0,
-                    volume_gain_db=0.0
-                ),
-                "premium": texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3,
-                    sample_rate_hertz=48000,
-                    speaking_rate=1.0,
-                    pitch=0.0,
-                    volume_gain_db=0.0
-                )
+            if keyword_count > 0:
+                confidence = min(keyword_count * 0.3, 1.0)  # Basic confidence calculation
+                matches.append((lang_code, confidence))
+        
+        # Also check for medical terms to boost confidence
+        for lang_code, terms in self.medical_terms.items():
+            term_count = sum(1 for term in terms if term in text_lower)
+            if term_count > 0:
+                # Find existing match or create new
+                existing_match = next((m for m in matches if m[0] == lang_code), None)
+                if existing_match:
+                    matches.remove(existing_match)
+                    matches.append((lang_code, existing_match[1] + term_count * 0.1))
+                else:
+                    matches.append((lang_code, term_count * 0.1))
+        
+        if matches:
+            # Return the match with highest confidence
+            best_match = max(matches, key=lambda x: x[1])
+            logger.info(f"Detected language: {best_match[0]} with confidence {best_match[1]:.2f}")
+            return best_match
+        
+        # No keywords found, return current language with low confidence
+        return (current_language, 0.1)
+
+    def should_switch_language(self, text: str, current_language: str) -> bool:
+        """
+        Determine if language should be switched based on user request
+        """
+        text_lower = text.lower()
+        
+        # Check for explicit language switch requests
+        switch_phrases = [
+            "speak in", "in language", "change language", "switch to",
+            "में बोलो", "भाषा बदलो", "மொழி மாற்ற", "భాష మార్చు", "ಭಾಷೆ ಬದಲಾಯಿಸಿ"
+        ]
+        
+        if any(phrase in text_lower for phrase in switch_phrases):
+            return True
+        
+        # Check if user is consistently using another language
+        detected_lang, confidence = self.detect_language(text, current_language)
+        return confidence > 0.5 and detected_lang != current_language
+
+    def normalize_text(self, text: str, language: str = "en") -> str:
+        """
+        Normalize text for better TTS pronunciation
+        """
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        # Language-specific normalization
+        if language == "en":
+            # Expand common abbreviations
+            replacements = {
+                "dr.": "doctor",
+                "appt.": "appointment",
+                "rx": "prescription",
+                "asap": "as soon as possible"
             }
-            
-            logger.info("SpeechService initialized successfully with Wavenet voices")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize SpeechService: {str(e)}")
-            raise
-
-    def text_to_speech(self, text: str, language_code: str = "en-IN", 
-                      gender: str = "neutral", audio_type: str = "telephone",
-                      speaking_rate: float = None, pitch: float = None) -> bytes:
-        """
-        Convert text to speech using Google Cloud TTS with Wavenet voices
+            for abbr, full in replacements.items():
+                text = text.replace(abbr, full)
         
-        Args:
-            text: Input text to convert to speech
-            language_code: Language code (e.g., 'en-IN', 'hi-IN')
-            gender: Voice gender ('male', 'female', 'neutral')
-            audio_type: Audio configuration type ('telephone', 'standard', 'premium')
-            speaking_rate: Optional speaking rate (0.25 to 4.0)
-            pitch: Optional pitch adjustment (-20.0 to 20.0)
-        
-        Returns:
-            bytes: Audio content in specified format
-        """
-        try:
-            # Validate inputs
-            if not text or not text.strip():
-                raise ValueError("Text cannot be empty")
-            
-            # Normalize language code
-            language_code = language_code.lower()
-            
-            # Determine if text contains SSML
-            is_ssml = text.strip().startswith('<speak>')
-            
-            # Select appropriate voice
-            voice = self._select_voice(language_code, gender)
-            
-            # Get audio configuration
-            audio_config = self._get_audio_config(audio_type, speaking_rate, pitch)
-            
-            # Set synthesis input
-            if is_ssml:
-                synthesis_input = texttospeech.SynthesisInput(ssml=text)
-                logger.debug("Using SSML input for TTS")
-            else:
-                synthesis_input = texttospeech.SynthesisInput(text=text)
-            
-            # Perform text-to-speech synthesis
-            response = self.client.synthesize_speech(
-                input=synthesis_input,
-                voice=voice,
-                audio_config=audio_config
-            )
-            
-            logger.info(f"Successfully generated speech for {len(text)} characters "
-                       f"in {language_code} with {gender} voice")
-            
-            return response.audio_content
-            
-        except GoogleAPICallError as e:
-            logger.error(f"Google API error in text_to_speech: {str(e)}")
-            raise
-        except RetryError as e:
-            logger.error(f"Retry error in text_to_speech: {str(e)}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in text_to_speech: {str(e)}")
-            raise
+        return text
 
-    def _select_voice(self, language_code: str, gender: str) -> texttospeech.VoiceSelectionParams:
-        """Select the best available Wavenet voice for the given parameters"""
-        try:
-            # Check if we have Wavenet voices for this language
-            if language_code in self.wavenet_voices:
-                language_voices = self.wavenet_voices[language_code]
+    def extract_key_information(self, text: str, language: str = "en") -> Dict[str, str]:
+        """
+        Extract key information from user speech for better responses
+        """
+        info = {
+            "intent": "",
+            "time_mention": "",
+            "doctor_mention": "",
+            "urgency_level": "normal"
+        }
+        
+        text_lower = text.lower()
+        
+        # Detect intent
+        intents = {
+            "appointment": ["appointment", "schedule", "book", "मिलना", "अपॉइंटमेंट", "அப்பாயின்ட்மெண்ட్"],
+            "prescription": ["prescription", "medicine", "refill", "दवा", "மருந்து", "మందు"],
+            "emergency": ["emergency", "urgent", "now", "immediately", "तुरंत", "அவசர", "తక్షణ"]
+        }
+        
+        for intent, keywords in intents.items():
+            if any(keyword in text_lower for keyword in keywords):
+                info["intent"] = intent
+                break
+        
+        # Detect time mentions
+        time_indicators = ["today", "tomorrow", "morning", "afternoon", "evening", "week", "month"]
+        for indicator in time_indicators:
+            if indicator in text_lower:
+                info["time_mention"] = indicator
+                break
+        
+        # Detect urgency
+        if any(word in text_lower for word in ["emergency", "urgent", "immediately", "now", "तुरंत", "அவசர"]):
+            info["urgency_level"] = "high"
+        
+        return info
+
+    def generate_natural_response(self, text: str, language: str = "en") -> str:
+        """
+        Add natural language flourishes to responses
+        """
+        if language == "hi":
+            # Hindi natural responses
+            if "thank you" in text.lower() or "धन्यवाद" in text:
+                return "आपका स्वागत है! क्या मैं आपकी और किसी बात में मदद कर सकती हूँ?"
+            elif "sorry" in text.lower() or "माफ़" in text:
+                return "कोई बात नहीं। कृपया अपनी समस्या बताएं।"
                 
-                # Try to get the requested gender, fallback to neutral, then female
-                voice_name = (language_voices.get(gender) or 
-                            language_voices.get("neutral") or 
-                            language_voices.get("female"))
-                
-                if voice_name:
-                    return texttospeech.VoiceSelectionParams(
-                        language_code=language_code,
-                        name=voice_name
-                    )
-            
-            # Fallback: Use standard voice with SSML gender
-            ssml_gender = {
-                "male": texttospeech.SsmlVoiceGender.MALE,
-                "female": texttospeech.SsmlVoiceGender.FEMALE,
-                "neutral": texttospeech.SsmlVoiceGender.NEUTRAL
-            }.get(gender, texttospeech.SsmlVoiceGender.NEUTRAL)
-            
-            return texttospeech.VoiceSelectionParams(
-                language_code=language_code,
-                ssml_gender=ssml_gender
-            )
-            
-        except Exception as e:
-            logger.error(f"Error selecting voice: {str(e)}")
-            # Ultimate fallback
-            return texttospeech.VoiceSelectionParams(
-                language_code=language_code,
-                ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
-            )
-
-    def _get_audio_config(self, audio_type: str, speaking_rate: float = None, 
-                         pitch: float = None) -> texttospeech.AudioConfig:
-        """Get audio configuration with optional overrides"""
-        try:
-            # Get base configuration
-            base_config = self.audio_configs.get(audio_type, self.audio_configs["telephone"])
-            
-            # Create a new config with optional overrides
-            config_kwargs = {
-                "audio_encoding": base_config.audio_encoding,
-                "sample_rate_hertz": base_config.sample_rate_hertz,
-                "speaking_rate": speaking_rate if speaking_rate is not None else base_config.speaking_rate,
-                "pitch": pitch if pitch is not None else base_config.pitch,
-                "volume_gain_db": base_config.volume_gain_db,
-            }
-            
-            return texttospeech.AudioConfig(**config_kwargs)
-            
-        except Exception as e:
-            logger.error(f"Error getting audio config: {str(e)}")
-            return self.audio_configs["telephone"]
-
-    def generate_ssml_text(self, text: str, pause_ms: int = 300, 
-                          emphasis: bool = False, rate: float = None) -> str:
-        """
-        Generate SSML text with natural pauses and emphasis for more natural speech
+        elif language == "ta":
+            # Tamil natural responses
+            if "thank you" in text.lower() or "நன்றி" in text:
+                return "தயவு செய்து! மேலும் எதையும் உதவ முடியுமா?"
+            elif "sorry" in text.lower() or "மன்னிக்க" in text:
+                return "பரவாயில்லை. தயவு செய்து உங்கள் பிரச்சனையை சொல்லுங்கள்."
         
-        Args:
-            text: Input text
-            pause_ms: Pause duration in milliseconds
-            emphasis: Whether to add emphasis to important words
-            rate: Speaking rate adjustment
-        
-        Returns:
-            str: SSML formatted text
-        """
-        try:
-            # Basic SSML wrapper
-            ssml_parts = ['<speak>']
-            
-            # Add optional speaking rate
-            if rate is not None:
-                ssml_parts.append(f'<prosody rate="{rate}">')
-            
-            # Process text for natural speech patterns
-            sentences = text.split('. ')
-            for i, sentence in enumerate(sentences):
-                if sentence.strip():
-                    # Add sentence with pause
-                    ssml_parts.append(sentence.strip())
-                    if i < len(sentences) - 1 and pause_ms > 0:
-                        ssml_parts.append(f'<break time="{pause_ms}ms"/>')
-            
-            # Close prosody tag if opened
-            if rate is not None:
-                ssml_parts.append('</prosody>')
-            
-            ssml_parts.append('</speak>')
-            
-            return ' '.join(ssml_parts)
-            
-        except Exception as e:
-            logger.error(f"Error generating SSML: {str(e)}")
-            # Fallback to basic SSML
-            return f'<speak>{text}</speak>'
-
-    def generate_clinic_greeting(self, business_name: str, language: str = "en-IN") -> str:
-        """
-        Generate a natural-sounding clinic greeting with SSML enhancements
-        """
-        if language == "en-IN":
-            return f"""<speak>
-                Hello <break time="300ms"/> and thank you for calling {business_name}. 
-                <break time="400ms"/>
-                My name is Priya, and I'm your virtual assistant. 
-                <break time="300ms"/>
-                How can I help you today?
-            </speak>"""
-        elif language == "hi-IN":
-            return f"""<speak>
-                नमस्ते <break time="300ms"/> {business_name} में आपका स्वागत है।
-                <break time="400ms"/>
-                मेरा नाम प्रिया है, और मैं आपकी virtual assistant हूँ।
-                <break time="300ms"/>
-                मैं आपकी किस प्रकार सहायता कर सकती हूँ?
-            </speak>"""
         else:
-            return self.generate_ssml_text(f"Hello, thank you for calling {business_name}. How can I help you today?")
+            # English natural responses (default)
+            if "thank you" in text.lower():
+                return "You're welcome! Is there anything else I can help you with?"
+            elif "sorry" in text.lower():
+                return "No problem at all. Please tell me about your issue."
+        
+        return text
 
-    def get_supported_voices(self, language_filter: str = None) -> Dict[str, Any]:
+    def get_language_config(self, language_code: str) -> Dict[str, str]:
         """
-        Get list of supported Wavenet voices
+        Get Twilio voice configuration for a language
         """
-        try:
-            if language_filter:
-                filtered_voices = {}
-                for lang_code, voices in self.wavenet_voices.items():
-                    if language_filter.lower() in lang_code:
-                        filtered_voices[lang_code] = voices
-                return filtered_voices
-            else:
-                return self.wavenet_voices.copy()
-                
-        except Exception as e:
-            logger.error(f"Error getting supported voices: {str(e)}")
-            return {}
+        lang_data = self.language_keywords.get(language_code, self.language_keywords["en"])
+        return {
+            "voice": lang_data["voice"],
+            "code": lang_data["code"],
+            "name": lang_data["name"]
+        }
 
-    def validate_audio_content(self, audio_content: bytes) -> bool:
+    def get_supported_languages(self) -> List[Dict[str, str]]:
         """
-        Validate that audio content is properly generated
+        Get list of all supported languages
         """
-        try:
-            if not audio_content:
-                return False
-            
-            # Check minimum size (very small audio likely indicates an error)
-            if len(audio_content) < 100:
-                return False
-            
-            # Check for common audio headers (basic validation)
-            if audio_content[:4] in [b'RIFF', b'\x2e\x73\x6e\x64', b'\xff\xfb']:
-                return True
-            
-            # For μ-law, we expect specific patterns
-            if len(audio_content) > 100:
-                return True  # Basic length check passed
-                
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error validating audio content: {str(e)}")
-            return False
-
-    def get_audio_info(self, audio_content: bytes) -> Dict[str, Any]:
-        """
-        Get information about generated audio content
-        """
-        try:
-            return {
-                "size_bytes": len(audio_content),
-                "duration_estimate_sec": len(audio_content) / 8000,  # Rough estimate for μ-law
-                "is_valid": self.validate_audio_content(audio_content),
-                "generated_at": datetime.now().isoformat()
+        return [
+            {
+                "code": lang_code,
+                "name": data["name"],
+                "voice": data["voice"],
+                "twilio_code": data["code"]
             }
-        except Exception as e:
-            logger.error(f"Error getting audio info: {str(e)}")
-            return {"error": str(e)}
+            for lang_code, data in self.language_keywords.items()
+        ]
 
-    def batch_text_to_speech(self, texts: list, language_code: str = "en-IN", 
-                           gender: str = "neutral") -> Dict[str, bytes]:
+    def is_medical_emergency(self, text: str) -> bool:
         """
-        Convert multiple texts to speech in batch
+        Detect potential medical emergencies for immediate handling
         """
-        results = {}
-        try:
-            for i, text in enumerate(texts):
-                try:
-                    audio_content = self.text_to_speech(text, language_code, gender)
-                    results[f"audio_{i}"] = audio_content
-                    logger.info(f"Generated batch audio {i+1}/{len(texts)}")
-                except Exception as e:
-                    logger.error(f"Failed to generate audio for text {i}: {str(e)}")
-                    results[f"audio_{i}"] = None
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error in batch text-to-speech: {str(e)}")
-            return {}
+        emergency_keywords = [
+            "heart attack", "stroke", "bleeding", "unconscious", "can't breathe",
+            "heart", "attack", "emergency", "urgent", "help immediately",
+            "दिल का दौरा", "स्ट्रोक", "बेहोश", "सांस नहीं आ रही",
+            "இதய அடைப்பு", "ஸ்ட்ரோக்", "உணர்வு இழப்பு", "மூச்சுத் திணறல்"
+        ]
+        
+        text_lower = text.lower()
+        return any(keyword in text_lower for keyword in emergency_keywords)
 
-    def speech_to_text(self, audio_content: bytes, language_code: str = "en-IN") -> str:
+    def health_check(self) -> Dict[str, any]:
         """
-        Convert speech to text using Google Cloud Speech-to-Text
-        This is kept for backward compatibility
+        Basic health check for the speech service
         """
-        try:
-            from google.cloud import speech
-            
-            client = speech.SpeechClient()
-            
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.MULAW,
-                sample_rate_hertz=8000,
-                language_code=language_code,
-                enable_automatic_punctuation=True,
-                model="phone_call",  # Use phone call model for better accuracy
-                use_enhanced=True    # Use enhanced model for better results
-            )
-            
-            audio = speech.RecognitionAudio(content=audio_content)
-            
-            response = client.recognize(config=config, audio=audio)
-            
-            if response.results:
-                return response.results[0].alternatives[0].transcript
-            return ""
-            
-        except ImportError:
-            logger.error("Google Speech-to-Text client not available")
-            return ""
-        except Exception as e:
-            logger.error(f"Error in speech-to-text: {str(e)}")
-            return ""
-
-    def health_check(self) -> Dict[str, Any]:
-        """
-        Perform health check on the speech service
-        """
-        try:
-            # Test with a simple phrase
-            test_text = "Health check successful."
-            audio_content = self.text_to_speech(test_text, "en-IN", "neutral")
-            
-            return {
-                "status": "healthy",
-                "service": "Google Cloud Text-to-Speech",
-                "wavenet_voices": "available",
-                "audio_generation": "working",
-                "supported_languages": len(self.wavenet_voices),
-                "test_audio_size": len(audio_content),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "service": "Google Cloud Text-to-Speech",
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }
+        return {
+            "status": "healthy",
+            "service": "Basic Speech Service (Twilio-only)",
+            "supported_languages": len(self.language_keywords),
+            "features": [
+                "Language detection",
+                "Text normalization", 
+                "Intent extraction",
+                "Emergency detection"
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
 
 
-# Utility functions for enhanced functionality
-def create_natural_pause(text: str, pause_after_sentences: bool = True, 
-                        pause_after_commas: bool = False) -> str:
+# Utility functions
+def create_conversation_prompt(text: str, language: str = "en") -> str:
     """
-    Add natural pauses to text for more realistic speech
+    Create a conversation-friendly prompt by adding polite phrases
     """
-    if pause_after_sentences:
-        # Add pauses after sentence-ending punctuation
-        text = text.replace('. ', '. <break time="300ms"/> ')
-        text = text.replace('? ', '? <break time="400ms"/> ')
-        text = text.replace('! ', '! <break time="350ms"/> ')
+    prompts = {
+        "en": "Please tell me more about: ",
+        "hi": "कृपया मुझे और बताएं: ",
+        "ta": "தயவு செய்து மேலும் சொல்லுங்கள்: ",
+        "te": "దయచేసి మరింత చెప్పండి: ",
+        "kn": "ದಯವಿಟ್ಟು ಇನ್ನಷ್ಟು ಹೇಳಿ: "
+    }
     
-    if pause_after_commas:
-        # Add shorter pauses after commas
-        text = text.replace(', ', ', <break time="150ms"/> ')
-    
-    return f'<speak>{text}</speak>'
+    prompt = prompts.get(language, prompts["en"])
+    return prompt + text
 
 
-def emphasize_important_words(text: str, words_to_emphasize: list) -> str:
+def format_phone_number(text: str) -> str:
     """
-    Add emphasis to important words in the text
+    Extract and format phone numbers from text
     """
-    for word in words_to_emphasize:
-        if word in text:
-            text = text.replace(word, f'<emphasis level="strong">{word}</emphasis>')
-    
-    return f'<speak>{text}</speak>'
+    # Simple phone number extraction
+    phone_pattern = r'(\d{3}[-\.\s]??\d{3}[-\.\s]??\d{4}|\(\d{3}\)\s*\d{3}[-\.\s]??\d{4}|\d{3}[-\.\s]??\d{4})'
+    matches = re.findall(phone_pattern, text)
+    return matches[0] if matches else ""
 
 
-# Create a global instance for easy access
+# Create global instance
 speech_service = SpeechService()
 
-# Example usage:
+
+# Example usage and testing
 if __name__ == "__main__":
     # Test the service
     service = SpeechService()
     
-    # Test natural clinic greeting
-    greeting = service.generate_clinic_greeting("Dr. Sharma's Clinic")
-    audio = service.text_to_speech(greeting, "en-IN", "female")
+    # Test language detection
+    test_texts = [
+        "I want to speak in Hindi please",
+        "हिंदी में बात करते हैं",
+        "Tamil la pesunga",
+        "I need an appointment with doctor"
+    ]
     
-    print(f"Generated audio: {len(audio)} bytes")
-    print("SpeechService is working correctly!")
+    for text in test_texts:
+        lang, confidence = service.detect_language(text)
+        print(f"Text: {text}")
+        print(f"Detected: {lang} (confidence: {confidence:.2f})")
+        print(f"Should switch: {service.should_switch_language(text, 'en')}")
+        print("---")
+    
+    print("Basic SpeechService is working correctly!")
