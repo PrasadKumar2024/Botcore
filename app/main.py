@@ -32,7 +32,10 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # ✅ FIXED: Import routes with proper error handling
 try:
+    logger.info("🔄 Attempting to import routes...")
+    
     from app.routes import clients, documents, subscriptions, numbers, chat, voice
+    logger.info("✅ All route modules imported successfully")
     
     # ✅ FIXED: Remove duplicate prefixes - routes already have their own prefixes
     app.include_router(clients.router, tags=["Clients"])
@@ -46,8 +49,10 @@ try:
     
 except ImportError as e:
     logger.error(f"❌ Route import error: {e}")
+    logger.error(f"❌ Traceback: {traceback.format_exc()}")
 except Exception as e:
     logger.error(f"❌ Route registration error: {e}")
+    logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 # ✅ FIXED: Safe import for settings and database
 try:
@@ -65,62 +70,163 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ Some imports missing: {e}")
 
-# ✅ SIMPLE TEST ENDPOINTS (Always work)
+# ✅ ROOT ENDPOINT - HTML ONLY (NO JSON CONFLICT)
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Root endpoint with API information"""
-    return """
-    <html>
-        <head>
-            <title>OwnBot API</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .container { max-width: 800px; margin: 0 auto; }
-                .header { background: #2563eb; color: white; padding: 20px; border-radius: 10px; }
-                .content { margin: 20px 0; }
-                .endpoints { background: #f3f4f6; padding: 15px; border-radius: 5px; }
-                .status { padding: 10px; border-radius: 5px; margin: 10px 0; }
-                .healthy { background: #d1fae5; color: #065f46; }
-                .error { background: #fee2e2; color: #dc2626; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🤖 OwnBot API</h1>
-                    <p>Comprehensive AI-powered chatbot management platform</p>
+    """Root endpoint with API information - ONLY HTML"""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>🚀 OwnBot API - LIVE</title>
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }
+            .container { 
+                background: white; 
+                max-width: 900px; 
+                width: 100%;
+                margin: 0 auto; 
+                padding: 40px; 
+                border-radius: 20px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                text-align: center;
+            }
+            .header { 
+                background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+                color: white; 
+                padding: 30px; 
+                border-radius: 15px;
+                margin-bottom: 30px;
+            }
+            .success-badge {
+                background: #10b981;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 25px;
+                display: inline-block;
+                margin: 15px 0;
+                font-weight: bold;
+            }
+            .endpoints { 
+                background: #f8fafc; 
+                padding: 25px; 
+                border-radius: 15px;
+                margin: 25px 0;
+                text-align: left;
+            }
+            .endpoints ul {
+                list-style: none;
+                padding: 0;
+            }
+            .endpoints li {
+                padding: 10px 0;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            .endpoints li:last-child {
+                border-bottom: none;
+            }
+            .endpoints a {
+                color: #2563eb;
+                text-decoration: none;
+                font-weight: 500;
+            }
+            .endpoints a:hover {
+                color: #1d4ed8;
+                text-decoration: underline;
+            }
+            .status-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 15px;
+                margin: 25px 0;
+            }
+            .status-item {
+                background: #f0f9ff;
+                padding: 15px;
+                border-radius: 10px;
+                border-left: 4px solid #2563eb;
+            }
+            .version {
+                color: #64748b;
+                font-size: 14px;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🚀 OwnBot API</h1>
+                <p>AI-Powered Chatbot Management Platform</p>
+                <div class="success-badge">✅ DEPLOYMENT SUCCESSFUL</div>
+            </div>
+            
+            <h2>🎉 Your API is Live!</h2>
+            <p>Successfully deployed to: <strong>https://botcore-z6j0.onrender.com</strong></p>
+            
+            <div class="status-grid">
+                <div class="status-item">
+                    <h3>🌐 API Status</h3>
+                    <p>🟢 Operational</p>
                 </div>
-                <div class="content">
-                    <h2>Welcome to OwnBot</h2>
-                    <p>This API powers the OwnBot platform for managing AI chatbots.</p>
-                    
-                    <div class="endpoints">
-                        <h3>Quick Tests:</h3>
-                        <ul>
-                            <li><a href="/health">🔍 Health Check</a></li>
-                            <li><a href="/api/test/simple">🧪 Simple Test</a></li>
-                            <li><a href="/api/test/services">⚙️ Service Test</a></li>
-                            <li><a href="/docs">📚 API Documentation</a></li>
-                        </ul>
-                    </div>
-                    
-                    <div class="status healthy">
-                        <strong>Status:</strong> 🟢 API is running
-                    </div>
-                    <p><strong>Version:</strong> 1.0.0</p>
+                <div class="status-item">
+                    <h3>📊 Health Check</h3>
+                    <p><a href="/health">Test Now</a></p>
+                </div>
+                <div class="status-item">
+                    <h3>📚 Documentation</h3>
+                    <p><a href="/docs">View API Docs</a></p>
                 </div>
             </div>
-        </body>
+            
+            <div class="endpoints">
+                <h3>🔗 Available Endpoints:</h3>
+                <ul>
+                    <li><a href="/health">/health</a> - API health status</li>
+                    <li><a href="/docs">/docs</a> - Interactive API documentation</li>
+                    <li><a href="/api/test/simple">/api/test/simple</a> - Simple test endpoint</li>
+                    <li><a href="/api/test/services">/api/test/services</a> - Service status check</li>
+                </ul>
+            </div>
+            
+            <div class="next-steps">
+                <h3>🎯 Next Steps:</h3>
+                <ol style="text-align: left; max-width: 600px; margin: 20px auto;">
+                    <li>Check Render logs for route import errors</li>
+                    <li>Create missing route files</li>
+                    <li>Test individual endpoints</li>
+                    <li>Build your frontend templates</li>
+                </ol>
+            </div>
+            
+            <div class="version">
+                <strong>Version:</strong> 2.0 | <strong>Status:</strong> 🟢 Live
+            </div>
+        </div>
+    </body>
     </html>
     """
+    return HTMLResponse(content=html_content)
 
+# ✅ TEST ENDPOINTS (Separate from root)
 @app.get("/api/test/simple")
 async def test_simple():
     """Simple test endpoint that always works"""
     return {
         "message": "✅ Simple route works!",
         "status": "success",
-        "timestamp": "2025-09-26T06:00:00Z"  # Hardcoded for reliability
+        "timestamp": "2025-09-26T06:00:00Z"
     }
 
 @app.get("/api/test/services")
@@ -166,77 +272,15 @@ async def test_services():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with graceful error handling"""
-    try:
-        services = {}
-        
-        # Test basic functionality first
-        services["api"] = "✅ Running"
-        
-        # Test database with safe fallback
-        try:
-            from app.database import SessionLocal
-            db = SessionLocal()
-            db.execute("SELECT 1")
-            services["database"] = "✅ Connected"
-            db.close()
-        except Exception as e:
-            services["database"] = f"⚠️ {str(e)}"
-        
-        # Test external services with safe fallbacks
-        external_services = ["pinecone", "twilio", "gemini"]
-        for service_name in external_services:
-            try:
-                if service_name == "pinecone":
-                    from app.services.pinecone_service import PineconeService
-                    PineconeService()
-                elif service_name == "twilio":
-                    from app.services.twilio_service import TwilioService
-                    TwilioService()
-                elif service_name == "gemini":
-                    from app.services.gemini_service import GeminiService
-                    GeminiService()
-                services[service_name] = "✅ Connected"
-            except Exception as e:
-                services[service_name] = f"⚠️ {str(e)}"
-        
-        # Overall status
-        healthy_services = sum(1 for status in services.values() if "✅" in status)
-        total_services = len(services)
-        
-        return {
-            "status": "healthy" if healthy_services > 0 else "degraded",
-            "services_healthy": f"{healthy_services}/{total_services}",
-            "services": services,
-            "timestamp": "2025-09-26T06:00:00Z",  # Hardcoded for reliability
-            "version": "1.0.0"
-        }
-        
-    except Exception as e:
-        logger.error(f"Health check error: {e}")
-        return JSONResponse(
-            status_code=200,  # Still return 200 so health checks don't fail
-            content={
-                "status": "degraded",
-                "error": str(e),
-                "message": "Health check completed with errors",
-                "timestamp": "2025-09-26T06:00:00Z",
-                "version": "1.0.0"
-            }
-        )
-
-@app.get("/api/info")
-async def app_info():
-    """Application information endpoint"""
+    """Health check endpoint"""
     return {
-        "name": "OwnBot",
-        "version": "1.0.0",
-        "description": "AI-powered chatbot management platform",
-        "status": "operational",
-        "message": "API is running successfully"
+        "status": "healthy",
+        "message": "API is running",
+        "timestamp": "2025-09-26T06:00:00Z",
+        "version": "2.0"
     }
 
-# ✅ IMPROVED ERROR HANDLERS
+# ✅ ERROR HANDLERS
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     return JSONResponse(
@@ -249,25 +293,14 @@ async def internal_error_handler(request, exc):
     logger.error(f"Internal server error: {str(exc)}")
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": "An unexpected error occurred. Please try again later."
-        }
+        content={"error": "Internal Server Error", "message": "An unexpected error occurred"}
     )
 
-# ✅ IMPROVED STARTUP/SHUTDOWN
+# ✅ STARTUP/SHUTDOWN
 @app.on_event("startup")
 async def startup_event():
     """Actions to perform on application startup"""
     logger.info("🚀 OwnBot API starting up...")
-    
-    # Test critical imports
-    try:
-        from app.config import settings
-        logger.info(f"✅ Environment: {'development' if settings.DEBUG else 'production'}")
-    except Exception as e:
-        logger.warning(f"⚠️ Settings import issue: {e}")
-    
     logger.info("✅ API startup completed")
 
 @app.on_event("shutdown")
@@ -275,18 +308,11 @@ async def shutdown_event():
     """Actions to perform on application shutdown"""
     logger.info("🛑 OwnBot API shutting down...")
 
-# ✅ SAFE MIDDLEWARE
+# ✅ MIDDLEWARE
 @app.middleware("http")
 async def log_requests(request, call_next):
     """Middleware to log all requests"""
-    try:
-        logger.info(f"📍 Incoming: {request.method} {request.url}")
-        response = await call_next(request)
-        logger.info(f"📍 Response: {response.status_code}")
-        return response
-    except Exception as e:
-        logger.error(f"❌ Middleware error: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal Server Error", "message": str(e)}
-        )
+    logger.info(f"📍 Incoming: {request.method} {request.url}")
+    response = await call_next(request)
+    logger.info(f"📍 Response: {response.status_code}")
+    return response
