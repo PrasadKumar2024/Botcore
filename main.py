@@ -1,8 +1,9 @@
 # main.py - OwnBot FastAPI Application Entry Point
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
 import logging
 from datetime import datetime
 
@@ -29,59 +30,43 @@ app.add_middleware(
 # Mount static files for web chat widget
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-# HTML Dashboard - Root endpoint
-@app.get("/", response_class=HTMLResponse)
+# Setup templates
+templates = Jinja2Templates(directory="templates")
+
+# Root endpoint - Redirect to clients dashboard
+@app.get("/")
 async def root():
-    return """
-    <html>
-        <head>
-            <title>OwnBot Dashboard</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; background: #f0f2f5; }
-                .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-                .header { background: #10b981; color: white; padding: 30px; border-radius: 10px; text-align: center; }
-                .endpoint { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; }
-                a { color: #10b981; text-decoration: none; }
-                a:hover { text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🚀 OwnBot Dashboard</h1>
-                    <p>AI-powered chatbot management platform</p>
-                </div>
-                
-                <div class="endpoint">
-                    <h3>✅ System Status: Running</h3>
-                    <p><strong>Version:</strong> 1.0.0</p>
-                    <p><strong>Timestamp:</strong> """ + datetime.now().isoformat() + """</p>
-                </div>
+    return RedirectResponse(url="/clients")
 
-                <div class="endpoint">
-                    <h3>📊 Available Endpoints:</h3>
-                    <ul>
-                        <li><a href="/health" target="_blank">/health</a> - Health check (JSON)</li>
-                        <li><a href="/api/test/simple" target="_blank">/api/test/simple</a> - Test endpoint (JSON)</li>
-                        <li><a href="/api/info" target="_blank">/api/info</a> - App information (JSON)</li>
-                        <li><a href="/docs" target="_blank">/docs</a> - API Documentation</li>
-                    </ul>
-                </div>
+# Clients Management Dashboard
+@app.get("/clients", response_class=HTMLResponse)
+async def clients_dashboard(request: Request):
+    return templates.TemplateResponse("clients.html", {"request": request})
 
-                <div class="endpoint">
-                    <h3>🔧 Features:</h3>
-                    <ul>
-                        <li>Multi-tenant client management</li>
-                        <li>PDF-based knowledge system</li>
-                        <li>WhatsApp, Voice, and Web chat integration</li>
-                        <li>Subscription-based billing</li>
-                        <li>Twilio phone number management</li>
-                    </ul>
-                </div>
-            </div>
-        </body>
-    </html>
-    """
+# Create New Client/Bot
+@app.get("/clients/new", response_class=HTMLResponse)
+async def create_client(request: Request):
+    return templates.TemplateResponse("add_client.html", {"request": request})
+
+# Client Details/Bot Management
+@app.get("/clients/{client_id}", response_class=HTMLResponse)
+async def client_detail(request: Request, client_id: int):
+    return templates.TemplateResponse("client_detail.html", {"request": request, "client_id": client_id})
+
+# Bots Management
+@app.get("/clients/bots", response_class=HTMLResponse)
+async def clients_bots(request: Request):
+    return templates.TemplateResponse("clients_bots.html", {"request": request})
+
+# Upload Documents for Bot Knowledge
+@app.get("/documents/upload", response_class=HTMLResponse)
+async def upload_documents(request: Request):
+    return templates.TemplateResponse("upload_documents.html", {"request": request})
+
+# Buy Phone Numbers
+@app.get("/numbers/buy", response_class=HTMLResponse)
+async def buy_numbers(request: Request):
+    return templates.TemplateResponse("buy_number.html", {"request": request})
 
 # Health check endpoint
 @app.get("/health")
