@@ -2,7 +2,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 import logging
 from datetime import datetime
@@ -82,21 +82,21 @@ async def app_info():
         ]
     }
 
-# Import your API routes (keep these for backend functionality)
-try:
-    from app.routes import clients, documents, subscriptions, numbers, chat, voice
-    
-    app.include_router(clients.router, tags=["Clients"])
-    app.include_router(documents.router, tags=["Documents"]) 
-    app.include_router(subscriptions.router, tags=["Subscriptions"])
-    app.include_router(numbers.router, tags=["Phone Numbers"])
-    app.include_router(chat.router, tags=["Chat"])
-    app.include_router(voice.router, tags=["Voice"])
-    
-    logger.info("✅ All routes registered successfully")
-    
-except ImportError as e:
-    logger.error(f"Route import error: {e}")
+# TEMPORARILY COMMENT OUT ROUTE IMPORTS TO ISOLATE THE ISSUE
+# try:
+#     from app.routes import clients, documents, subscriptions, numbers, chat, voice
+#     
+#     app.include_router(clients.router, tags=["Clients"])
+#     app.include_router(documents.router, tags=["Documents"]) 
+#     app.include_router(subscriptions.router, tags=["Subscriptions"])
+#     app.include_router(numbers.router, tags=["Phone Numbers"])
+#     app.include_router(chat.router, tags=["Chat"])
+#     app.include_router(voice.router, tags=["Voice"])
+#     
+#     logger.info("✅ All routes registered successfully")
+#     
+# except ImportError as e:
+#     logger.error(f"Route import error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
