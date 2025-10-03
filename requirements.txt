@@ -3,7 +3,7 @@ fastapi==0.104.1
 uvicorn==0.24.0
 pydantic_settings
 
-# Database - Use specific working version
+# Database
 sqlalchemy==2.0.20
 
 # PDF Processing
@@ -27,8 +27,9 @@ pydantic==2.11.7
 httpx==0.27.2
 passlib==1.7.4
 
-# Missing Dependencies
-python-magic
+# FIX: Use the correct magic package for Render
+python-magic-bin; sys_platform == 'win32'
+python-magic; sys_platform != 'win32'
 
 # Twilio Integration
 twilio==9.3.0
