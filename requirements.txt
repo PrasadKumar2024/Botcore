@@ -3,7 +3,7 @@ fastapi==0.104.1
 uvicorn==0.24.0
 
 # Database
-sqlalchemy==2.0.23
+sqlalchemy>=2.0.25
 python-multipart==0.0.6
 
 # AI & Processing
