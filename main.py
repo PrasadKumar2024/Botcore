@@ -1,8 +1,8 @@
 # main.py - OwnBot FastAPI Application Entry Point
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 import logging
 from datetime import datetime
@@ -47,6 +47,26 @@ async def clients_dashboard(request: Request):
 async def add_client_form(request: Request):
     return templates.TemplateResponse("add_client.html", {"request": request})
 
+# ADD THIS - POST route for form submission
+@app.post("/clients/add")
+async def submit_client_form(
+    request: Request,
+    business_name: str = Form(...),
+    business_type: str = Form(...)
+):
+    # Process the form data
+    logger.info(f"New client: {business_name} - {business_type}")
+    
+    # Return success response
+    return JSONResponse({
+        "status": "success", 
+        "message": "Client information saved successfully!",
+        "data": {
+            "business_name": business_name,
+            "business_type": business_type
+        }
+    })
+
 # Health check endpoint
 @app.get("/health")
 async def health_check():
@@ -81,22 +101,6 @@ async def app_info():
             "Twilio phone number management"
         ]
     }
-
-# TEMPORARILY COMMENT OUT ROUTE IMPORTS TO ISOLATE THE ISSUE
-# try:
-#     from app.routes import clients, documents, subscriptions, numbers, chat, voice
-#     
-#     app.include_router(clients.router, tags=["Clients"])
-#     app.include_router(documents.router, tags=["Documents"]) 
-#     app.include_router(subscriptions.router, tags=["Subscriptions"])
-#     app.include_router(numbers.router, tags=["Phone Numbers"])
-#     app.include_router(chat.router, tags=["Chat"])
-#     app.include_router(voice.router, tags=["Voice"])
-#     
-#     logger.info("✅ All routes registered successfully")
-#     
-# except ImportError as e:
-#     logger.error(f"Route import error: {e}")
 
 if __name__ == "__main__":
     import uvicorn
