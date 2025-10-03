@@ -33,27 +33,10 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Setup templates
 templates = Jinja2Templates(directory="templates")
 
-# Root endpoint - Redirect to clients dashboard
+# Root endpoint - Redirect to clients dashboard WITH trailing slash
 @app.get("/")
 async def root():
-    return RedirectResponse(url="/clients")
-
-# ✅ ONLY KEEP ROUTES THAT DON'T CONFLICT WITH YOUR ROUTERS
-
-# Bots Management Page (not in clients router)
-@app.get("/clients/bots", response_class=HTMLResponse)
-async def clients_bots(request: Request):
-    return templates.TemplateResponse("clients_bots.html", {"request": request})
-
-# Upload Documents Page (not in clients router)  
-@app.get("/documents/upload", response_class=HTMLResponse)
-async def upload_documents(request: Request):
-    return templates.TemplateResponse("upload_documents.html", {"request": request})
-
-# Buy Phone Numbers Page (not in clients router)
-@app.get("/numbers/buy", response_class=HTMLResponse)
-async def buy_numbers(request: Request):
-    return templates.TemplateResponse("buy_number.html", {"request": request})
+    return RedirectResponse(url="/clients/")
 
 # Health check endpoint
 @app.get("/health")
@@ -90,7 +73,7 @@ async def app_info():
         ]
     }
 
-# ✅ Import your routes AFTER defining non-conflicting routes
+# ✅ Import your routes - they handle all specific paths
 try:
     from app.routes import clients, documents, subscriptions, numbers, chat, voice
     
@@ -106,6 +89,11 @@ try:
     
 except ImportError as e:
     logger.error(f"Route import error: {e}")
+
+# ✅ Add a catch-all route for undefined paths to prevent 404 errors
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc):
+    return RedirectResponse(url="/")
 
 if __name__ == "__main__":
     import uvicorn
