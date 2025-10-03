@@ -57,15 +57,28 @@ async def submit_client_form(
     # Process the form data
     logger.info(f"New client: {business_name} - {business_type}")
     
-    # Return success response
-    return JSONResponse({
-        "status": "success", 
-        "message": "Client information saved successfully!",
-        "data": {
-            "business_name": business_name,
-            "business_type": business_type
-        }
-    })
+    # Redirect to Step 2 (Documents)
+    return RedirectResponse(url="/upload_documents", status_code=303)
+
+# ADD THIS - Step 2: Documents
+@app.get("/upload_documents", response_class=HTMLResponse)
+async def upload_documents_form(request: Request):
+    return templates.TemplateResponse("upload_documents.html", {"request": request})
+
+# ADD THIS - Step 3: Buy Number
+@app.get("/buy_number", response_class=HTMLResponse)
+async def buy_number_form(request: Request):
+    return templates.TemplateResponse("buy_number.html", {"request": request})
+
+# ADD THIS - Step 4: Bots Configuration
+@app.get("/clients_bots", response_class=HTMLResponse)
+async def clients_bots_form(request: Request):
+    return templates.TemplateResponse("clients_bots.html", {"request": request})
+
+# ADD THIS - Step 5: Complete
+@app.get("/complete", response_class=HTMLResponse)
+async def complete_form(request: Request):
+    return templates.TemplateResponse("complete.html", {"request": request})
 
 # Health check endpoint
 @app.get("/health")
