@@ -70,7 +70,7 @@
             color: var(--dark);
         }
         
-        input, select {
+        input, select, textarea {
             width: 100%;
             padding: 12px 15px;
             border: 2px solid #e0e0e0;
@@ -79,7 +79,7 @@
             transition: border-color 0.3s ease;
         }
         
-        input:focus, select:focus {
+        input:focus, select:focus, textarea:focus {
             outline: none;
             border-color: var(--primary);
         }
@@ -176,6 +176,12 @@
             color: white;
         }
         
+        .progress-step.completed {
+            background-color: var(--success);
+            border-color: var(--success);
+            color: white;
+        }
+        
         .step-label {
             position: absolute;
             top: 35px;
@@ -186,24 +192,25 @@
             white-space: nowrap;
         }
         
-        .step-1 .step-label {
-            left: 50%;
+        .step-content {
+            display: none;
         }
         
-        .step-2 .step-label {
-            left: 50%;
+        .step-content.active {
+            display: block;
         }
         
-        .step-3 .step-label {
-            left: 50%;
+        .file-upload {
+            border: 2px dashed #e0e0e0;
+            padding: 40px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
         }
         
-        .step-4 .step-label {
-            left: 50%;
-        }
-        
-        .step-5 .step-label {
-            left: 50%;
+        .file-upload:hover {
+            border-color: var(--primary);
         }
         
         .success-message {
@@ -212,8 +219,8 @@
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 20px;
-            display: none;
             text-align: center;
+            display: none;
         }
         
         @media (max-width: 576px) {
@@ -235,27 +242,27 @@
     <div class="container">
         <div class="header">
             <h1>Add New Client</h1>
-            <p class="subtitle">Step 1 of 5: Basic Information</p>
+            <p class="subtitle" id="stepSubtitle">Step 1 of 5: Basic Information</p>
         </div>
         
         <div class="progress-bar">
-            <div class="progress-step step-1 active">
+            <div class="progress-step step-1 active" data-step="1">
                 1
                 <span class="step-label">Client Info</span>
             </div>
-            <div class="progress-step step-2">
+            <div class="progress-step step-2" data-step="2">
                 2
                 <span class="step-label">Documents</span>
             </div>
-            <div class="progress-step step-3">
+            <div class="progress-step step-3" data-step="3">
                 3
                 <span class="step-label">Number</span>
             </div>
-            <div class="progress-step step-4">
+            <div class="progress-step step-4" data-step="4">
                 4
                 <span class="step-label">Bots</span>
             </div>
-            <div class="progress-step step-5">
+            <div class="progress-step step-5" data-step="5">
                 5
                 <span class="step-label">Complete</span>
             </div>
@@ -265,77 +272,289 @@
             ✅ Client information saved successfully!
         </div>
         
-        <form id="clientForm" method="post">
-            <div class="form-group">
-                <label for="business_name">Business Name</label>
-                <input 
-                    type="text" 
-                    id="business_name" 
-                    name="business_name" 
-                    placeholder="e.g., Suresh Store" 
-                    required
-                    autocomplete="off"
-                >
-                <div class="error" id="nameError">Please enter a business name</div>
+        <form id="clientForm">
+            <!-- Step 1: Basic Information -->
+            <div class="step-content active" id="step1">
+                <div class="form-group">
+                    <label for="business_name">Business Name</label>
+                    <input 
+                        type="text" 
+                        id="business_name" 
+                        name="business_name" 
+                        placeholder="e.g., Suresh Store" 
+                        required
+                        autocomplete="off"
+                    >
+                    <div class="error" id="nameError">Please enter a business name</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="business_type">Business Type</label>
+                    <select id="business_type" name="business_type" required>
+                        <option value="">Select Business Type</option>
+                        <option value="Restaurant">Restaurant</option>
+                        <option value="Gym">Gym</option>
+                        <option value="Clinic">Clinic</option>
+                        <option value="Retail">Retail Store</option>
+                        <option value="Other">Other</option>
+                    </select>
+                    <div class="error" id="typeError">Please select a business type</div>
+                </div>
             </div>
             
-            <div class="form-group">
-                <label for="business_type">Business Type</label>
-                <select id="business_type" name="business_type" required>
-                    <option value="">Select Business Type</option>
-                    <option value="Restaurant">Restaurant</option>
-                    <option value="Gym">Gym</option>
-                    <option value="Clinic">Clinic</option>
-                    <option value="Retail">Retail Store</option>
-                    <option value="Other">Other</option>
-                </select>
-                <div class="error" id="typeError">Please select a business type</div>
+            <!-- Step 2: Documents -->
+            <div class="step-content" id="step2">
+                <div class="form-group">
+                    <label>Upload Documents (PDF, DOC, Images)</label>
+                    <div class="file-upload" onclick="document.getElementById('fileInput').click()">
+                        <p>📁 Drag & drop files here or click to browse</p>
+                        <input type="file" id="fileInput" multiple style="display: none;">
+                    </div>
+                    <div id="fileList" style="margin-top: 10px;"></div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="document_notes">Document Notes</label>
+                    <textarea id="document_notes" name="document_notes" rows="3" placeholder="Any additional notes about documents..."></textarea>
+                </div>
+            </div>
+            
+            <!-- Step 3: Phone Number -->
+            <div class="step-content" id="step3">
+                <div class="form-group">
+                    <label for="phone_number">Phone Number</label>
+                    <input 
+                        type="tel" 
+                        id="phone_number" 
+                        name="phone_number" 
+                        placeholder="e.g., +91 9876543210" 
+                        required
+                    >
+                    <div class="error" id="phoneError">Please enter a valid phone number</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="country_code">Country Code</label>
+                    <select id="country_code" name="country_code" required>
+                        <option value="+91">India (+91)</option>
+                        <option value="+1">USA (+1)</option>
+                        <option value="+44">UK (+44)</option>
+                        <option value="+61">Australia (+61)</option>
+                        <option value="+65">Singapore (+65)</option>
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Step 4: Bots Configuration -->
+            <div class="step-content" id="step4">
+                <div class="form-group">
+                    <label for="bot_type">Bot Type</label>
+                    <select id="bot_type" name="bot_type" required>
+                        <option value="">Select Bot Type</option>
+                        <option value="Customer Support">Customer Support</option>
+                        <option value="Sales">Sales</option>
+                        <option value="Appointment">Appointment Booking</option>
+                        <option value="Information">Information</option>
+                        <option value="Custom">Custom</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="bot_language">Bot Language</label>
+                    <select id="bot_language" name="bot_language" required>
+                        <option value="English">English</option>
+                        <option value="Hindi">Hindi</option>
+                        <option value="Spanish">Spanish</option>
+                        <option value="French">French</option>
+                        <option value="German">German</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="whatsapp_integration" name="whatsapp_integration">
+                        Enable WhatsApp Integration
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Step 5: Review & Complete -->
+            <div class="step-content" id="step5">
+                <div class="form-group">
+                    <h3 style="color: var(--primary); margin-bottom: 20px;">Review Information</h3>
+                    <div id="reviewContent" style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
+                        <!-- Review content will be populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="final_notes">Final Notes (Optional)</label>
+                    <textarea id="final_notes" name="final_notes" rows="3" placeholder="Any final notes or special instructions..."></textarea>
+                </div>
             </div>
             
             <div class="btn-group">
-                <button type="button" class="btn btn-secondary" onclick="window.history.back()">
+                <button type="button" class="btn btn-secondary" id="backBtn" style="display: none;" onclick="previousStep()">
+                    ← Back
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients'">
                     Cancel
                 </button>
-                <button type="submit" class="btn btn-primary" id="submitBtn">
+                <button type="button" class="btn btn-primary" id="nextBtn" onclick="nextStep()">
                     Next →
+                </button>
+                <button type="submit" class="btn btn-primary" id="submitBtn" style="display: none;">
+                    Complete Setup
                 </button>
             </div>
         </form>
     </div>
 
     <script>
+        let currentStep = 1;
+        const totalSteps = 5;
+        
+        function updateProgressBar() {
+            // Update progress steps
+            document.querySelectorAll('.progress-step').forEach((step, index) => {
+                const stepNumber = index + 1;
+                if (stepNumber < currentStep) {
+                    step.classList.remove('active');
+                    step.classList.add('completed');
+                } else if (stepNumber === currentStep) {
+                    step.classList.add('active');
+                    step.classList.remove('completed');
+                } else {
+                    step.classList.remove('active', 'completed');
+                }
+            });
+            
+            // Update step title
+            const stepTitles = [
+                "Step 1 of 5: Basic Information",
+                "Step 2 of 5: Documents",
+                "Step 3 of 5: Phone Number", 
+                "Step 4 of 5: Bots Configuration",
+                "Step 5 of 5: Review & Complete"
+            ];
+            document.getElementById('stepSubtitle').textContent = stepTitles[currentStep - 1];
+            
+            // Update button visibility
+            document.getElementById('backBtn').style.display = currentStep > 1 ? 'block' : 'none';
+            document.getElementById('nextBtn').style.display = currentStep < totalSteps ? 'block' : 'none';
+            document.getElementById('submitBtn').style.display = currentStep === totalSteps ? 'block' : 'none';
+        }
+        
+        function showStep(stepNumber) {
+            // Hide all steps
+            document.querySelectorAll('.step-content').forEach(step => {
+                step.classList.remove('active');
+            });
+            
+            // Show current step
+            document.getElementById(`step${stepNumber}`).classList.add('active');
+            
+            // If it's the review step, populate review content
+            if (stepNumber === 5) {
+                populateReview();
+            }
+        }
+        
+        function nextStep() {
+            if (validateStep(currentStep)) {
+                if (currentStep < totalSteps) {
+                    currentStep++;
+                    showStep(currentStep);
+                    updateProgressBar();
+                }
+            }
+        }
+        
+        function previousStep() {
+            if (currentStep > 1) {
+                currentStep--;
+                showStep(currentStep);
+                updateProgressBar();
+            }
+        }
+        
+        function validateStep(step) {
+            let isValid = true;
+            
+            // Hide all errors
+            document.querySelectorAll('.error').forEach(error => {
+                error.style.display = 'none';
+            });
+            
+            switch(step) {
+                case 1:
+                    const businessName = document.getElementById('business_name').value.trim();
+                    const businessType = document.getElementById('business_type').value;
+                    
+                    if (!businessName) {
+                        document.getElementById('nameError').style.display = 'block';
+                        isValid = false;
+                    }
+                    if (!businessType) {
+                        document.getElementById('typeError').style.display = 'block';
+                        isValid = false;
+                    }
+                    break;
+                    
+                case 3:
+                    const phoneNumber = document.getElementById('phone_number').value.trim();
+                    if (!phoneNumber) {
+                        document.getElementById('phoneError').style.display = 'block';
+                        isValid = false;
+                    }
+                    break;
+            }
+            
+            return isValid;
+        }
+        
+        function populateReview() {
+            const reviewContent = document.getElementById('reviewContent');
+            const formData = new FormData(document.getElementById('clientForm'));
+            
+            let reviewHTML = `
+                <p><strong>Business Name:</strong> ${document.getElementById('business_name').value}</p>
+                <p><strong>Business Type:</strong> ${document.getElementById('business_type').value}</p>
+                <p><strong>Phone Number:</strong> ${document.getElementById('country_code').value} ${document.getElementById('phone_number').value}</p>
+                <p><strong>Bot Type:</strong> ${document.getElementById('bot_type').value}</p>
+                <p><strong>Bot Language:</strong> ${document.getElementById('bot_language').value}</p>
+                <p><strong>WhatsApp Integration:</strong> ${document.getElementById('whatsapp_integration').checked ? 'Yes' : 'No'}</p>
+            `;
+            
+            reviewContent.innerHTML = reviewHTML;
+        }
+        
+        // File upload handling
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            
+            Array.from(e.target.files).forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.style.padding = '5px 0';
+                fileItem.style.borderBottom = '1px solid #eee';
+                fileItem.textContent = `📄 ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+                fileList.appendChild(fileItem);
+            });
+        });
+        
+        // Form submission
         document.getElementById('clientForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            let isValid = true;
-            
-            // Validate business name
-            const businessName = document.getElementById('business_name').value.trim();
-            if (!businessName) {
-                document.getElementById('nameError').style.display = 'block';
-                isValid = false;
-            } else {
-                document.getElementById('nameError').style.display = 'none';
-            }
-            
-            // Validate business type
-            const businessType = document.getElementById('business_type').value;
-            if (!businessType) {
-                document.getElementById('typeError').style.display = 'block';
-                isValid = false;
-            } else {
-                document.getElementById('typeError').style.display = 'none';
-            }
-            
-            if (!isValid) return;
-            
-            // Disable submit button
             const submitBtn = document.getElementById('submitBtn');
             submitBtn.disabled = true;
             submitBtn.textContent = 'Saving...';
             
             try {
-                const formData = new FormData(this);
+                const formData = new FormData();
+                formData.append('business_name', document.getElementById('business_name').value);
+                formData.append('business_type', document.getElementById('business_type').value);
                 
                 const response = await fetch('/clients/add', {
                     method: 'POST',
@@ -345,41 +564,28 @@
                 const result = await response.json();
                 
                 if (result.status === 'success') {
-                    // Show success message
                     document.getElementById('successMessage').style.display = 'block';
+                    document.getElementById('clientForm').style.display = 'none';
                     
-                    // Clear form
-                    this.reset();
-                    
-                    // You can redirect to next step here if needed
                     setTimeout(() => {
-                        alert('Client saved! Next step would be documents upload.');
-                    }, 1000);
+                        window.location.href = '/clients';
+                    }, 2000);
                 } else {
                     alert('Error: ' + result.message);
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Complete Setup';
                 }
             } catch (error) {
                 console.error('Error:', error);
                 alert('Error submitting form. Please try again.');
-            } finally {
-                // Re-enable submit button
                 submitBtn.disabled = false;
-                submitBtn.textContent = 'Next →';
+                submitBtn.textContent = 'Complete Setup';
             }
         });
         
-        // Real-time validation
-        document.getElementById('business_name').addEventListener('input', function() {
-            if (this.value.trim()) {
-                document.getElementById('nameError').style.display = 'none';
-            }
-        });
-        
-        document.getElementById('business_type').addEventListener('change', function() {
-            if (this.value) {
-                document.getElementById('typeError').style.display = 'none';
-            }
-        });
+        // Initialize
+        updateProgressBar();
+        showStep(1);
     </script>
 </body>
 </html>
