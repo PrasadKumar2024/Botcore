@@ -255,7 +255,7 @@ async def client_detail(request: Request, client_id: str):
 @app.get("/health")
 async def health_check():
     return {
-        "message": "OwnBot API is running",
+        "message": "OwnBot API is running", 
         "status": "success",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
