@@ -29,14 +29,14 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Storage (simple dicts - replace with DB later)
+# Storage
 clients = {}
 documents = {}
 phone_numbers = {}
 subscriptions = {}
 sessions = {}
 
-# Dashboard - Show all clients
+# Dashboard
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     return templates.TemplateResponse("clients.html", {
@@ -72,13 +72,13 @@ async def submit_client_form(
             "created_at": datetime.now().isoformat()
         }
         
-        # Create session - FIXED: No request.session
+        # Create session
         session_id = str(uuid.uuid4())
         sessions[session_id] = client_id
         
         logger.info(f"New client created: {business_name}")
         
-        # Redirect to Step 2 with session cookie
+        # Redirect to Step 2
         response = RedirectResponse(url="/upload_documents", status_code=303)
         response.set_cookie(key="session_id", value=session_id)
         return response
@@ -267,25 +267,6 @@ async def complete_setup(request: Request):
     })
     response.delete_cookie("session_id")
     return response
-
-# Client Detail Page
-@app.get("/clients/{client_id}", response_class=HTMLResponse)
-async def client_detail(request: Request, client_id: str):
-    client = clients.get(client_id)
-    if not client:
-        return RedirectResponse(url="/clients", status_code=303)
-    
-    client_docs = documents.get(client_id, [])
-    client_phone = phone_numbers.get(client_id, {})
-    client_subs = subscriptions.get(client_id, {})
-    
-    return templates.TemplateResponse("client_detail.html", {
-        "request": request,
-        "client": client,
-        "documents": client_docs,
-        "phone_number": client_phone.get("number", "Not purchased"),
-        "subscriptions": client_subs
-    })
 
 # Health check
 @app.get("/health")
