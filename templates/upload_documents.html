@@ -11,6 +11,9 @@
             --light: #f8f9fa;
             --dark: #212529;
             --gray: #6c757d;
+            --success: #198754;
+            --danger: #dc3545;
+            --warning: #ffc107;
         }
         
         * {
@@ -70,6 +73,12 @@
             cursor: pointer;
             border: none;
             text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         
         .btn-secondary {
@@ -78,7 +87,7 @@
             border: 2px solid #e0e0e0;
         }
         
-        .btn-secondary:hover {
+        .btn-secondary:hover:not(:disabled) {
             background: #f8f9fa;
         }
         
@@ -87,7 +96,7 @@
             color: white;
         }
         
-        .btn-primary:hover {
+        .btn-primary:hover:not(:disabled) {
             background: var(--secondary);
         }
         
@@ -142,34 +151,144 @@
             border-radius: 8px;
             margin: 20px 0;
             cursor: pointer;
-            transition: border-color 0.3s ease;
+            transition: all 0.3s ease;
+            background: white;
         }
         
         .file-upload:hover {
             border-color: var(--primary);
+            background: #f8f9fa;
+        }
+        
+        .file-upload.drag-over {
+            border-color: var(--primary);
+            background: #f0f4ff;
         }
         
         .file-list {
             margin-top: 15px;
-            max-height: 150px;
+            max-height: 200px;
             overflow-y: auto;
         }
         
         .file-item {
-            padding: 8px;
-            border-bottom: 1px solid #e0e0e0;
+            padding: 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            margin-bottom: 8px;
             display: flex;
-            justify-content: between;
+            justify-content: space-between;
             align-items: center;
+            background: white;
+            transition: all 0.3s ease;
+        }
+        
+        .file-item:hover {
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .file-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
         
         .file-name {
-            flex: 1;
+            font-weight: 500;
+            color: var(--dark);
         }
         
         .file-size {
             color: var(--gray);
             font-size: 12px;
+        }
+        
+        .file-remove {
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .file-remove:hover {
+            background: #bb2d3b;
+        }
+        
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-info {
+            background: #cfe2ff;
+            color: #084298;
+            border: 1px solid #b6d4fe;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            color: #664d03;
+            border: 1px solid #ffecb5;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .loading.active {
+            display: block;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        
+        .file-count {
+            text-align: center;
+            color: var(--gray);
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        
+        .file-upload-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            display: block;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 480px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .btn-group {
+                flex-direction: column;
+            }
+            
+            .file-upload {
+                padding: 30px 20px;
+            }
         }
     </style>
 </head>
@@ -188,74 +307,199 @@
             <div class="progress-step">5</div>
         </div>
 
+        <div class="alert alert-info">
+            <strong>💡 Tip:</strong> Upload relevant documents (PDFs) to train your client's AI bot. This helps create more accurate responses.
+        </div>
+
         <form method="post" action="/upload_documents" enctype="multipart/form-data" id="uploadForm">
-            <div class="file-upload" onclick="document.getElementById('fileInput').click()">
+            <div class="file-upload" id="fileUpload" onclick="document.getElementById('fileInput').click()">
                 <input type="file" name="files" multiple accept=".pdf" style="display: none;" id="fileInput" onchange="handleFileSelect()">
-                <p>📁 Drag & drop PDF files here or click to browse</p>
-                <p style="font-size: 14px; color: var(--gray); margin-top: 10px;">Supported: PDF files only</p>
+                <span class="file-upload-icon">📁</span>
+                <p style="font-size: 18px; margin-bottom: 8px; font-weight: 600;">Drag & drop PDF files here</p>
+                <p style="font-size: 14px; color: var(--gray); margin-bottom: 8px;">or click to browse</p>
+                <p style="font-size: 12px; color: var(--gray);">Maximum file size: 10MB per file</p>
+            </div>
+            
+            <div class="file-count" id="fileCount">
+                No files selected
             </div>
             
             <div class="file-list" id="fileList"></div>
             
+            <div class="loading" id="loadingIndicator">
+                <div class="spinner"></div>
+                <p style="color: var(--gray);">Uploading files... Please wait</p>
+            </div>
+            
             <div class="btn-group">
-                <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients/add'">← Back</button>
-                <button type="button" class="btn btn-secondary" onclick="skipDocuments()">Skip This Step</button>
-                <button type="submit" class="btn btn-primary">Next →</button>
+                <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients/add'" id="backBtn">← Back</button>
+                <button type="button" class="btn btn-secondary" onclick="skipDocuments()" id="skipBtn">Skip This Step</button>
+                <button type="submit" class="btn btn-primary" id="submitBtn" disabled>Next →</button>
             </div>
         </form>
     </div>
 
     <script>
+        let selectedFiles = [];
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
+        
         function handleFileSelect() {
             const fileInput = document.getElementById('fileInput');
+            const files = Array.from(fileInput.files);
+            
+            // Filter out files that are too large
+            const validFiles = files.filter(file => {
+                if (file.size > MAX_FILE_SIZE) {
+                    alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+                    return false;
+                }
+                return true;
+            });
+            
+            selectedFiles = validFiles;
+            updateFileInput();
+            updateFileList();
+            updateSubmitButton();
+        }
+        
+        function updateFileList() {
             const fileList = document.getElementById('fileList');
+            const fileCount = document.getElementById('fileCount');
+            
             fileList.innerHTML = '';
             
-            Array.from(fileInput.files).forEach(file => {
+            if (selectedFiles.length === 0) {
+                fileCount.textContent = 'No files selected';
+                fileCount.style.color = 'var(--gray)';
+                return;
+            }
+            
+            fileCount.textContent = `${selectedFiles.length} file(s) selected`;
+            fileCount.style.color = 'var(--primary)';
+            
+            selectedFiles.forEach((file, index) => {
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 fileItem.innerHTML = `
-                    <span class="file-name">📄 ${file.name}</span>
-                    <span class="file-size">(${(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                    <div class="file-info">
+                        <span class="file-name">📄 ${file.name}</span>
+                        <span class="file-size">${formatFileSize(file.size)}</span>
+                    </div>
+                    <button type="button" class="file-remove" onclick="removeFile(${index})">Remove</button>
                 `;
                 fileList.appendChild(fileItem);
             });
         }
         
-        function skipDocuments() {
-            fetch('/skip_documents', { method: 'POST' })
-                .then(() => {
-                    window.location.href = '/buy_number';  // FIXED: No mixed template syntax
-                })
-                .catch(err => {
-                    console.error('Error skipping step:', err);
-                    alert('Error skipping step. Please try again.');
-                });
+        function updateFileInput() {
+            const dt = new DataTransfer();
+            selectedFiles.forEach(file => dt.items.add(file));
+            document.getElementById('fileInput').files = dt.files;
         }
         
-        // Allow drag and drop
-        const fileUpload = document.querySelector('.file-upload');
-        fileUpload.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUpload.style.borderColor = 'var(--primary)';
-            fileUpload.style.background = '#f8f9fa';
-        });
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileInput();
+            updateFileList();
+            updateSubmitButton();
+        }
         
-        fileUpload.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            fileUpload.style.borderColor = '#e0e0e0';
-            fileUpload.style.background = 'white';
-        });
+        function updateSubmitButton() {
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = selectedFiles.length === 0;
+        }
         
-        fileUpload.addEventListener('drop', (e) => {
-            e.preventDefault();
-            fileUpload.style.borderColor = '#e0e0e0';
-            fileUpload.style.background = 'white';
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function skipDocuments() {
+            if (confirm('Are you sure you want to skip uploading documents? You can add them later, but the AI bot may be less accurate without training data.')) {
+                disableButtons();
+                fetch('/skip_documents', { method: 'POST' })
+                    .then(response => {
+                        if (response.ok) {
+                            window.location.href = '/buy_number';
+                        } else {
+                            throw new Error('Server error');
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Error skipping step:', err);
+                        alert('Error skipping step. Please try again.');
+                        enableButtons();
+                    });
+            }
+        }
+        
+        function disableButtons() {
+            document.getElementById('skipBtn').disabled = true;
+            document.getElementById('backBtn').disabled = true;
+            document.getElementById('submitBtn').disabled = true;
+        }
+        
+        function enableButtons() {
+            document.getElementById('skipBtn').disabled = false;
+            document.getElementById('backBtn').disabled = false;
+            updateSubmitButton();
+        }
+        
+        document.getElementById('uploadForm').addEventListener('submit', function(e) {
+            if (selectedFiles.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one file to upload, or click "Skip This Step" to continue without uploading.');
+                return;
+            }
             
-            const files = e.dataTransfer.files;
-            document.getElementById('fileInput').files = files;
-            handleFileSelect();
+            document.getElementById('loadingIndicator').classList.add('active');
+            disableButtons();
         });
+        
+        const fileUploadDiv = document.getElementById('fileUpload');
+        
+        fileUploadDiv.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadDiv.classList.add('drag-over');
+        });
+        
+        fileUploadDiv.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            fileUploadDiv.classList.remove('drag-over');
+        });
+        
+        fileUploadDiv.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadDiv.classList.remove('drag-over');
+            
+            const files = Array.from(e.dataTransfer.files).filter(file => {
+                if (file.type !== 'application/pdf') {
+                    return false;
+                }
+                if (file.size > MAX_FILE_SIZE) {
+                    alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+                    return false;
+                }
+                return true;
+            });
+            
+            if (files.length === 0) {
+                alert('Please drop only PDF files (max 10MB each).');
+                return;
+            }
+            
+            // Add new files to existing selection
+            selectedFiles = [...selectedFiles, ...files];
+            updateFileInput();
+            updateFileList();
+            updateSubmitButton();
+        });
+        
+        // Initialize button state
+        updateSubmitButton();
     </script>
 </body>
 </html>
