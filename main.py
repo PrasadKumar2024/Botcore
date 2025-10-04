@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 import uuid
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -71,7 +72,7 @@ async def submit_client_form(
             "created_at": datetime.now().isoformat()
         }
         
-        # Create session
+        # Create session - FIXED: No request.session
         session_id = str(uuid.uuid4())
         sessions[session_id] = client_id
         
@@ -120,6 +121,7 @@ async def process_documents(
         os.makedirs(f"uploads/{client_id}", exist_ok=True)
         
         # Save files
+        uploaded_count = 0
         for file in files:
             if file.content_type == "application/pdf":
                 file_path = f"uploads/{client_id}/{file.filename}"
@@ -134,7 +136,9 @@ async def process_documents(
                     "filename": file.filename,
                     "uploaded_at": datetime.now().isoformat()
                 })
+                uploaded_count += 1
         
+        logger.info(f"Uploaded {uploaded_count} documents for client {client_id}")
         return RedirectResponse(url="/buy_number", status_code=303)
         
     except Exception as e:
@@ -146,6 +150,13 @@ async def process_documents(
 
 @app.post("/skip_documents")
 async def skip_documents_step(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
+    
+    if not client_id:
+        return RedirectResponse(url="/clients/add", status_code=303)
+    
+    logger.info(f"Documents skipped for client {client_id}")
     return RedirectResponse(url="/buy_number", status_code=303)
 
 # Step 3: Buy Number
@@ -172,8 +183,7 @@ async def buy_number(request: Request):
         return JSONResponse({"status": "error", "message": "No session"})
     
     try:
-        # Generate phone number (replace with Twilio later)
-        import random
+        # Generate phone number
         phone_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
         
         phone_numbers[client_id] = {
@@ -181,6 +191,7 @@ async def buy_number(request: Request):
             "purchased_at": datetime.now().isoformat()
         }
         
+        logger.info(f"Number purchased for client {client_id}: {phone_number}")
         return JSONResponse({
             "status": "success",
             "phone_number": phone_number
@@ -195,6 +206,13 @@ async def buy_number(request: Request):
 
 @app.post("/skip_number")
 async def skip_number_step(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
+    
+    if not client_id:
+        return RedirectResponse(url="/clients/add", status_code=303)
+    
+    logger.info(f"Number purchase skipped for client {client_id}")
     return RedirectResponse(url="/clients_bots", status_code=303)
 
 # Step 4: Bots Configuration
@@ -207,7 +225,8 @@ async def bots_configuration(request: Request):
         return RedirectResponse(url="/clients/add", status_code=303)
     
     client = clients.get(client_id, {})
-    phone_number = phone_numbers.get(client_id, {}).get("number", "Not purchased")
+    phone_data = phone_numbers.get(client_id, {})
+    phone_number = phone_data.get("number", "Not purchased")
     
     # Initialize subscriptions
     if client_id not in subscriptions:
@@ -225,6 +244,47 @@ async def bots_configuration(request: Request):
         "subscriptions": subscriptions[client_id],
         "chatbot_url": f"https://ownbot.chat/{client_id}",
         "embed_code": f'<script src="/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
+    })
+
+# Step 5: Complete
+@app.get("/complete", response_class=HTMLResponse)
+async def complete_setup(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
+    
+    if not client_id:
+        return RedirectResponse(url="/clients/add", status_code=303)
+    
+    client = clients.get(client_id, {})
+    
+    # Clear session
+    if session_id in sessions:
+        del sessions[session_id]
+    
+    response = templates.TemplateResponse("complete.html", {
+        "request": request,
+        "client": client
+    })
+    response.delete_cookie("session_id")
+    return response
+
+# Client Detail Page
+@app.get("/clients/{client_id}", response_class=HTMLResponse)
+async def client_detail(request: Request, client_id: str):
+    client = clients.get(client_id)
+    if not client:
+        return RedirectResponse(url="/clients", status_code=303)
+    
+    client_docs = documents.get(client_id, [])
+    client_phone = phone_numbers.get(client_id, {})
+    client_subs = subscriptions.get(client_id, {})
+    
+    return templates.TemplateResponse("client_detail.html", {
+        "request": request,
+        "client": client,
+        "documents": client_docs,
+        "phone_number": client_phone.get("number", "Not purchased"),
+        "subscriptions": client_subs
     })
 
 # Health check
