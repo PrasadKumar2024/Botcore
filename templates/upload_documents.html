@@ -1,439 +1,261 @@
-{% extends "base.html" %}
-
-{% block title %}Upload Documents - {{ client.business_name }} - OwnBot{% endblock %}
-
-{% block extra_css %}
-<style>
-    .upload-container {
-        max-width: 800px;
-        margin: 0 auto;
-    }
-    
-    .page-header {
-        text-align: center;
-        margin-bottom: 2rem;
-    }
-    
-    .upload-options {
-        display: flex;
-        gap: 1.5rem;
-        margin-bottom: 2rem;
-    }
-    
-    .upload-option {
-        flex: 1;
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        padding: 1.5rem;
-        text-align: center;
-        cursor: pointer;
-        transition: var(--transition);
-        border: 2px solid transparent;
-    }
-    
-    .upload-option:hover {
-        transform: translateY(-5px);
-        border-color: var(--primary);
-    }
-    
-    .upload-option i {
-        font-size: 2.5rem;
-        color: var(--primary);
-        margin-bottom: 1rem;
-    }
-    
-    .upload-option h3 {
-        margin-bottom: 0.5rem;
-        color: var(--dark);
-    }
-    
-    .upload-option p {
-        color: var(--gray-600);
-        font-size: 0.9rem;
-    }
-    
-    .drop-zone {
-        border: 2px dashed var(--gray-300);
-        border-radius: var(--border-radius);
-        padding: 3rem 2rem;
-        text-align: center;
-        margin-bottom: 2rem;
-        transition: var(--transition);
-        background: var(--gray-100);
-    }
-    
-    .drop-zone.active {
-        border-color: var(--primary);
-        background-color: rgba(67, 97, 238, 0.05);
-    }
-    
-    .drop-zone i {
-        font-size: 3rem;
-        color: var(--gray-400);
-        margin-bottom: 1rem;
-    }
-    
-    .drop-zone h3 {
-        margin-bottom: 0.5rem;
-        color: var(--dark);
-    }
-    
-    .drop-zone p {
-        color: var(--gray-600);
-        margin-bottom: 1.5rem;
-    }
-    
-    .file-input {
-        display: none;
-    }
-    
-    .browse-btn {
-        display: inline-block;
-        padding: 0.75rem 1.5rem;
-        background: var(--primary);
-        color: white;
-        border-radius: var(--border-radius);
-        cursor: pointer;
-        transition: var(--transition);
-        border: none;
-        font-weight: 500;
-    }
-    
-    .browse-btn:hover {
-        background: var(--primary-dark);
-    }
-    
-    .file-list {
-        margin-bottom: 2rem;
-    }
-    
-    .file-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        background: white;
-        padding: 1rem;
-        border-radius: var(--border-radius);
-        margin-bottom: 0.5rem;
-        box-shadow: var(--box-shadow);
-    }
-    
-    .file-info {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-    }
-    
-    .file-icon {
-        color: var(--danger);
-        font-size: 1.25rem;
-    }
-    
-    .file-name {
-        font-weight: 500;
-    }
-    
-    .file-size {
-        color: var(--gray-600);
-        font-size: 0.85rem;
-    }
-    
-    .file-remove {
-        background: none;
-        border: none;
-        color: var(--danger);
-        cursor: pointer;
-        font-size: 1.1rem;
-        padding: 0.25rem;
-    }
-    
-    .upload-progress {
-        margin-bottom: 2rem;
-    }
-    
-    .progress-bar {
-        height: 8px;
-        background: var(--gray-200);
-        border-radius: 4px;
-        overflow: hidden;
-        margin-bottom: 0.5rem;
-    }
-    
-    .progress-fill {
-        height: 100%;
-        background: var(--primary);
-        border-radius: 4px;
-        width: 0%;
-        transition: width 0.3s ease;
-    }
-    
-    .progress-text {
-        display: flex;
-        justify-content: space-between;
-        font-size: 0.85rem;
-        color: var(--gray-600);
-    }
-    
-    .action-buttons {
-        display: flex;
-        gap: 1rem;
-        justify-content: space-between;
-    }
-    
-    .skip-btn {
-        background: var(--gray-200);
-        color: var(--gray-700);
-    }
-    
-    .skip-btn:hover {
-        background: var(--gray-300);
-    }
-    
-    .upload-btn {
-        background: var(--success);
-        color: white;
-    }
-    
-    .upload-btn:hover {
-        background: var(--success-dark);
-    }
-    
-    .upload-btn:disabled {
-        background: var(--gray-400);
-        cursor: not-allowed;
-    }
-    
-    .supported-formats {
-        text-align: center;
-        margin-top: 2rem;
-        color: var(--gray-600);
-        font-size: 0.9rem;
-    }
-</style>
-{% endblock %}
-
-{% block content %}
-<div class="upload-container">
-    <div class="page-header">
-        <h1>Upload Documents for {{ client.business_name }}</h1>
-        <p>Add PDF files that contain information about the business. The AI will use this to answer questions.</p>
-    </div>
-    
-    <div class="upload-options">
-        <div class="upload-option" onclick="document.getElementById('fileInput').click()">
-            <i class="fas fa-file-upload"></i>
-            <h3>Upload Files</h3>
-            <p>Select PDF files from your computer</p>
-        </div>
-        
-        <div class="upload-option" id="dragDropOption">
-            <i class="fas fa-hand-point-down"></i>
-            <h3>Drag & Drop</h3>
-            <p>Drag files directly into the area below</p>
-        </div>
-    </div>
-    
-    <div class="drop-zone" id="dropZone">
-        <i class="fas fa-cloud-upload-alt"></i>
-        <h3>Drop your files here</h3>
-        <p>Or click the button below to browse your files</p>
-        <label for="fileInput" class="browse-btn">Browse Files</label>
-        <input type="file" id="fileInput" class="file-input" multiple accept=".pdf" onchange="handleFileSelect(this.files)">
-    </div>
-    
-    <div class="file-list" id="fileList">
-        <!-- Files will be added here dynamically -->
-    </div>
-    
-    <div class="upload-progress" id="uploadProgress" style="display: none;">
-        <div class="progress-bar">
-            <div class="progress-fill" id="progressFill"></div>
-        </div>
-        <div class="progress-text">
-            <span id="progressStatus">Uploading...</span>
-            <span id="progressPercent">0%</span>
-        </div>
-    </div>
-    
-    <div class="action-buttons">
-        <a href="/clients/{{ client.id }}/numbers" class="btn skip-btn">
-            <i class="fas fa-forward"></i> Skip This Step
-        </a>
-        <button type="button" class="btn upload-btn" id="uploadBtn" disabled onclick="uploadFiles()">
-            <i class="fas fa-upload"></i> Upload & Continue
-        </button>
-    </div>
-    
-    <div class="supported-formats">
-        <p><i class="fas fa-info-circle"></i> Only PDF files are supported. Maximum file size: 10MB per file.</p>
-    </div>
-</div>
-
-<form id="uploadForm" action="/clients/{{ client.id }}/documents" method="post" enctype="multipart/form-data" style="display: none;">
-    <!-- This form will be submitted programmatically -->
-</form>
-{% endblock %}
-
-{% block extra_js %}
-<script>
-    let selectedFiles = [];
-    
-    // Set up drag and drop
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
-    });
-    
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-    
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, highlight, false);
-    });
-    
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, unhighlight, false);
-    });
-    
-    function highlight() {
-        dropZone.classList.add('active');
-    }
-    
-    function unhighlight() {
-        dropZone.classList.remove('active');
-    }
-    
-    dropZone.addEventListener('drop', handleDrop, false);
-    
-    function handleDrop(e) {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        handleFileSelect(files);
-    }
-    
-    // Handle file selection
-    function handleFileSelect(files) {
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            
-            // Check if file is PDF
-            if (file.type !== 'application/pdf') {
-                showAlert('Only PDF files are allowed.', 'error');
-                continue;
-            }
-            
-            // Check file size (10MB max)
-            if (file.size > 10 * 1024 * 1024) {
-                showAlert(`File "${file.name}" is too large. Maximum size is 10MB.`, 'error');
-                continue;
-            }
-            
-            // Add to selected files if not already added
-            if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
-                selectedFiles.push(file);
-                addFileToList(file);
-            }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Documents - OwnBot</title>
+    <style>
+        :root {
+            --primary: #4361ee;
+            --secondary: #3a0ca3;
+            --light: #f8f9fa;
+            --dark: #212529;
+            --gray: #6c757d;
         }
         
-        // Enable upload button if files are selected
-        document.getElementById('uploadBtn').disabled = selectedFiles.length === 0;
-    }
-    
-    // Add file to the visual list
-    function addFileToList(file) {
-        const fileList = document.getElementById('fileList');
-        const fileItem = document.createElement('div');
-        fileItem.className = 'file-item';
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
         
-        const fileSize = formatFileSize(file.size);
+        body {
+            background-color: #f5f7fb;
+            color: var(--dark);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
         
-        fileItem.innerHTML = `
-            <div class="file-info">
-                <i class="fas fa-file-pdf file-icon"></i>
-                <div>
-                    <div class="file-name">${file.name}</div>
-                    <div class="file-size">${fileSize}</div>
-                </div>
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 500px;
+            padding: 30px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            color: var(--primary);
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: var(--gray);
+            font-size: 16px;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            text-align: center;
+        }
+        
+        .btn-secondary {
+            background: white;
+            color: var(--gray);
+            border: 2px solid #e0e0e0;
+        }
+        
+        .btn-secondary:hover {
+            background: #f8f9fa;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--secondary);
+        }
+        
+        .progress-bar {
+            display: flex;
+            margin-bottom: 30px;
+            justify-content: space-between;
+            position: relative;
+        }
+        
+        .progress-bar::before {
+            content: '';
+            position: absolute;
+            top: 12px;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: #e0e0e0;
+            z-index: 1;
+        }
+        
+        .progress-step {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .progress-step.active {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+        
+        .progress-step.completed {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+        }
+        
+        .file-upload {
+            border: 2px dashed #e0e0e0;
+            padding: 40px;
+            text-align: center;
+            border-radius: 8px;
+            margin: 20px 0;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+        }
+        
+        .file-upload:hover {
+            border-color: var(--primary);
+        }
+        
+        .file-list {
+            margin-top: 15px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        
+        .file-item {
+            padding: 8px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: between;
+            align-items: center;
+        }
+        
+        .file-name {
+            flex: 1;
+        }
+        
+        .file-size {
+            color: var(--gray);
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Add New Client</h1>
+            <p class="subtitle">Step 2 of 5: Upload Documents</p>
+        </div>
+        
+        <div class="progress-bar">
+            <div class="progress-step completed">1</div>
+            <div class="progress-step active">2</div>
+            <div class="progress-step">3</div>
+            <div class="progress-step">4</div>
+            <div class="progress-step">5</div>
+        </div>
+
+        <form method="post" action="/upload_documents" enctype="multipart/form-data" id="uploadForm">
+            <div class="file-upload" onclick="document.getElementById('fileInput').click()">
+                <input type="file" name="files" multiple accept=".pdf" style="display: none;" id="fileInput" onchange="handleFileSelect()">
+                <p>📁 Drag & drop PDF files here or click to browse</p>
+                <p style="font-size: 14px; color: var(--gray); margin-top: 10px;">Supported: PDF files only</p>
             </div>
-            <button type="button" class="file-remove" onclick="removeFile('${file.name}', ${file.size})">
-                <i class="fas fa-times"></i>
-            </button>
-        `;
+            
+            <div class="file-list" id="fileList"></div>
+            
+            <div class="btn-group">
+                <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients/add'">← Back</button>
+                <button type="button" class="btn btn-secondary" onclick="skipDocuments()">Skip This Step</button>
+                <button type="submit" class="btn btn-primary">Next →</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        function handleFileSelect() {
+            const fileInput = document.getElementById('fileInput');
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            
+            Array.from(fileInput.files).forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <span class="file-name">📄 ${file.name}</span>
+                    <span class="file-size">(${(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
         
-        fileList.appendChild(fileItem);
-    }
-    
-    // Format file size to readable format
-    function formatFileSize(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-    
-    // Remove file from selection
-    function removeFile(name, size) {
-        selectedFiles = selectedFiles.filter(f => !(f.name === name && f.size === size));
+        function skipDocuments() {
+            fetch('/skip_documents', { method: 'POST' })
+                .then(() => {
+                    window.location.href = '/buy_number';  // FIXED: No mixed template syntax
+                })
+                .catch(err => {
+                    console.error('Error skipping step:', err);
+                    alert('Error skipping step. Please try again.');
+                });
+        }
         
-        // Update file list UI
-        const fileList = document.getElementById('fileList');
-        fileList.innerHTML = '';
-        selectedFiles.forEach(addFileToList);
-        
-        // Disable upload button if no files left
-        document.getElementById('uploadBtn').disabled = selectedFiles.length === 0;
-    }
-    
-    // Upload files to server
-    function uploadFiles() {
-        if (selectedFiles.length === 0) return;
-        
-        const uploadProgress = document.getElementById('uploadProgress');
-        const progressFill = document.getElementById('progressFill');
-        const progressPercent = document.getElementById('progressPercent');
-        const progressStatus = document.getElementById('progressStatus');
-        const uploadBtn = document.getElementById('uploadBtn');
-        
-        // Show progress bar
-        uploadProgress.style.display = 'block';
-        uploadBtn.disabled = true;
-        
-        // Create FormData object
-        const formData = new FormData();
-        selectedFiles.forEach(file => {
-            formData.append('files', file);
+        // Allow drag and drop
+        const fileUpload = document.querySelector('.file-upload');
+        fileUpload.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUpload.style.borderColor = 'var(--primary)';
+            fileUpload.style.background = '#f8f9fa';
         });
         
-        // Simulate upload progress (in real app, you'd use XMLHttpRequest with progress event)
-        let progress = 0;
-        const interval = setInterval(() => {
-            progress += 5;
-            if (progress >= 100) {
-                clearInterval(interval);
-                progress = 100;
-                
-                // In a real app, you would submit the form here
-                // For now, we'll simulate a successful upload
-                setTimeout(() => {
-                    showAlert('Files uploaded successfully!', 'success');
-                    progressStatus.textContent = 'Upload complete!';
-                    
-                    // Redirect to next page after a brief delay
-                    setTimeout(() => {
-                        window.location.href = `/clients/${{{ client.id }}}/numbers`;
-                    }, 1500);
-                }, 500);
-            }
+        fileUpload.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            fileUpload.style.borderColor = '#e0e0e0';
+            fileUpload.style.background = 'white';
+        });
+        
+        fileUpload.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUpload.style.borderColor = '#e0e0e0';
+            fileUpload.style.background = 'white';
             
-            progressFill.style.width = progress + '%';
-            progressPercent.textContent = progress + '%';
-        }, 100);
-    }
-</script>
-{% endblock %}
+            const files = e.dataTransfer.files;
+            document.getElementById('fileInput').files = files;
+            handleFileSelect();
+        });
+    </script>
+</body>
+</html>
