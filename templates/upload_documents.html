@@ -345,18 +345,30 @@
         
         function handleFileSelect() {
             const fileInput = document.getElementById('fileInput');
-            const files = Array.from(fileInput.files);
+            const newFiles = Array.from(fileInput.files);
             
-            // Filter out files that are too large
-            const validFiles = files.filter(file => {
-                if (file.size > MAX_FILE_SIZE) {
-                    alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+            // Filter out files that are too large and check for duplicates
+            const validNewFiles = newFiles.filter(newFile => {
+                if (newFile.size > MAX_FILE_SIZE) {
+                    alert(`File "${newFile.name}" is too large. Maximum size is 10MB.`);
                     return false;
                 }
+                
+                // Check for duplicate files (by name and size)
+                const isDuplicate = selectedFiles.some(existingFile => 
+                    existingFile.name === newFile.name && existingFile.size === newFile.size
+                );
+                
+                if (isDuplicate) {
+                    alert(`File "${newFile.name}" is already selected.`);
+                    return false;
+                }
+                
                 return true;
             });
             
-            selectedFiles = validFiles;
+            // ADD new files to existing selection (instead of replacing)
+            selectedFiles = [...selectedFiles, ...validNewFiles];
             updateFileInput();
             updateFileList();
             updateSubmitButton();
@@ -475,24 +487,35 @@
             e.preventDefault();
             fileUploadDiv.classList.remove('drag-over');
             
-            const files = Array.from(e.dataTransfer.files).filter(file => {
-                if (file.type !== 'application/pdf') {
+            const newFiles = Array.from(e.dataTransfer.files).filter(newFile => {
+                if (newFile.type !== 'application/pdf') {
                     return false;
                 }
-                if (file.size > MAX_FILE_SIZE) {
-                    alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+                if (newFile.size > MAX_FILE_SIZE) {
+                    alert(`File "${newFile.name}" is too large. Maximum size is 10MB.`);
                     return false;
                 }
+                
+                // Check for duplicate files
+                const isDuplicate = selectedFiles.some(existingFile => 
+                    existingFile.name === newFile.name && existingFile.size === newFile.size
+                );
+                
+                if (isDuplicate) {
+                    alert(`File "${newFile.name}" is already selected.`);
+                    return false;
+                }
+                
                 return true;
             });
             
-            if (files.length === 0) {
+            if (newFiles.length === 0) {
                 alert('Please drop only PDF files (max 10MB each).');
                 return;
             }
             
             // Add new files to existing selection
-            selectedFiles = [...selectedFiles, ...files];
+            selectedFiles = [...selectedFiles, ...newFiles];
             updateFileInput();
             updateFileList();
             updateSubmitButton();
