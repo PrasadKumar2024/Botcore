@@ -1,4 +1,4 @@
-# main.py - Enhanced with Knowledge Base
+# main.py - Enhanced with Knowledge Base & Real Twilio
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,6 +12,8 @@ import random
 import shutil
 from typing import Dict, List
 import json
+from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +40,8 @@ documents = {}
 phone_numbers = {}
 subscriptions = {}
 sessions = {}
-knowledge_bases = {}  # NEW: Store knowledge base info
+knowledge_bases = {}
+twilio_numbers = {}  # Store Twilio number details
 
 # NEW: Knowledge Base Management
 class KnowledgeBase:
@@ -55,7 +58,7 @@ class KnowledgeBase:
             "filename": filename,
             "file_path": file_path,
             "uploaded_at": datetime.now().isoformat(),
-            "processed": False  # Will be True when AI processes it
+            "processed": False
         }
         self.documents.append(document_info)
         return document_info
@@ -71,6 +74,28 @@ class KnowledgeBase:
             "documents": self.documents
         }
 
+async def buy_simulated_number(client_id: str, business_name: str):
+    """Fallback to simulated number if Twilio fails"""
+    simulated_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
+    
+    phone_numbers[client_id] = {
+        "number": simulated_number,
+        "twilio_sid": f"simulated_{uuid.uuid4()}",
+        "purchased_at": datetime.now().isoformat(),
+        "client_name": business_name,
+        "is_real": False,
+        "capabilities": {"sms": True, "voice": True}
+    }
+    
+    logger.info(f"Simulated number created: {simulated_number} for {business_name}")
+    
+    return JSONResponse({
+        "status": "success",
+        "phone_number": simulated_number,
+        "is_real_number": False,
+        "message": "Demo number created (Twilio not configured)"
+    })
+
 # Dashboard
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -81,7 +106,6 @@ async def dashboard(request: Request):
 
 @app.get("/clients", response_class=HTMLResponse)
 async def clients_page(request: Request):
-    # Enhance client data with KB info
     client_data = []
     for client in clients.values():
         client_info = client.copy()
@@ -119,13 +143,11 @@ async def submit_client_form(
             "created_at": datetime.now().isoformat()
         }
         
-        # Create session
         session_id = str(uuid.uuid4())
         sessions[session_id] = client_id
         
         logger.info(f"New client created: {business_name} (ID: {client_id})")
         
-        # Redirect to Step 2
         response = RedirectResponse(url="/upload_documents", status_code=303)
         response.set_cookie(key="session_id", value=session_id)
         return response
@@ -166,18 +188,15 @@ async def process_documents(
     try:
         client = clients.get(client_id, {})
         
-        # Create upload directory
         upload_dir = f"uploads/{client_id}"
         os.makedirs(upload_dir, exist_ok=True)
         
-        # Create knowledge base if it doesn't exist
         if client_id not in knowledge_bases:
             knowledge_bases[client_id] = KnowledgeBase(client_id, client["business_name"])
             logger.info(f"Created knowledge base for client: {client['business_name']}")
         
         kb = knowledge_bases[client_id]
         
-        # Save files and add to knowledge base
         uploaded_count = 0
         for file in files:
             if file.content_type == "application/pdf":
@@ -186,10 +205,8 @@ async def process_documents(
                     content = await file.read()
                     f.write(content)
                 
-                # Add to knowledge base
                 kb.add_document(file.filename, file_path)
                 
-                # Also store in documents for backward compatibility
                 if client_id not in documents:
                     documents[client_id] = []
                 
@@ -220,7 +237,6 @@ async def skip_documents_step(request: Request):
     
     client = clients.get(client_id, {})
     
-    # Create empty knowledge base even if no documents
     if client_id not in knowledge_bases:
         knowledge_bases[client_id] = KnowledgeBase(client_id, client["business_name"])
         logger.info(f"Created empty knowledge base for client: {client['business_name']}")
@@ -228,43 +244,7 @@ async def skip_documents_step(request: Request):
     logger.info(f"Documents skipped for client {client['business_name']}")
     return RedirectResponse(url="/buy_number", status_code=303)
 
-# NEW: Knowledge Base Status Page
-@app.get("/knowledge_base/{client_id}")
-async def view_knowledge_base(client_id: str, request: Request):
-    if client_id not in clients:
-        return JSONResponse({"error": "Client not found"}, status_code=404)
-    
-    client = clients[client_id]
-    kb_info = None
-    
-    if client_id in knowledge_bases:
-        kb_info = knowledge_bases[client_id].get_info()
-    
-    return templates.TemplateResponse("knowledge_base.html", {
-        "request": request,
-        "client": client,
-        "knowledge_base": kb_info
-    })
-
-# NEW: API to get knowledge base status
-@app.get("/api/knowledge_base/{client_id}")
-async def get_knowledge_base_status(client_id: str):
-    if client_id not in clients:
-        return JSONResponse({"error": "Client not found"}, status_code=404)
-    
-    if client_id not in knowledge_bases:
-        return JSONResponse({
-            "exists": False,
-            "message": "No knowledge base created yet"
-        })
-    
-    kb = knowledge_bases[client_id]
-    return JSONResponse({
-        "exists": True,
-        "knowledge_base": kb.get_info()
-    })
-
-# Step 3: Buy Number (unchanged)
+# Step 3: Buy Number - REAL TWILIO VERSION
 @app.get("/buy_number", response_class=HTMLResponse)
 async def buy_number_form(request: Request):
     session_id = request.cookies.get("session_id")
@@ -288,19 +268,62 @@ async def buy_number(request: Request):
         return JSONResponse({"status": "error", "message": "No session"})
     
     try:
-        # Generate phone number
-        phone_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
+        client_data = clients.get(client_id, {})
+        business_name = client_data.get('business_name', 'Unknown Business')
         
-        phone_numbers[client_id] = {
-            "number": phone_number,
-            "purchased_at": datetime.now().isoformat()
-        }
+        account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+        auth_token = os.getenv('TWILIO_AUTH_TOKEN')
         
-        logger.info(f"Number purchased for client {client_id}: {phone_number}")
-        return JSONResponse({
-            "status": "success",
-            "phone_number": phone_number
-        })
+        if not account_sid or not auth_token:
+            logger.warning("Twilio credentials not found, using simulation")
+            return await buy_simulated_number(client_id, business_name)
+        
+        twilio_client = Client(account_sid, auth_token)
+        
+        try:
+            logger.info("Searching for available Twilio numbers in India...")
+            available_numbers = twilio_client.available_phone_numbers('IN') \
+                .mobile \
+                .list(limit=3)
+            
+            if not available_numbers:
+                logger.warning("No real numbers available, using simulation")
+                return await buy_simulated_number(client_id, business_name)
+            
+            phone_number_obj = twilio_client.incoming_phone_numbers \
+                .create(phone_number=available_numbers[0].phone_number)
+            
+            real_phone_number = phone_number_obj.phone_number
+            twilio_sid = phone_number_obj.sid
+            
+            logger.info(f"Real Twilio number purchased: {real_phone_number} for {business_name}")
+            
+            phone_numbers[client_id] = {
+                "number": real_phone_number,
+                "twilio_sid": twilio_sid,
+                "purchased_at": datetime.now().isoformat(),
+                "client_name": business_name,
+                "is_real": True,
+                "capabilities": phone_number_obj.capabilities
+            }
+            
+            twilio_numbers[client_id] = {
+                "sid": twilio_sid,
+                "phone_number": real_phone_number,
+                "client_id": client_id,
+                "client_name": business_name
+            }
+            
+            return JSONResponse({
+                "status": "success",
+                "phone_number": real_phone_number,
+                "is_real_number": True,
+                "message": "Real Twilio number purchased successfully!"
+            })
+            
+        except TwilioRestException as e:
+            logger.error(f"Twilio API error: {e}")
+            return await buy_simulated_number(client_id, business_name)
         
     except Exception as e:
         logger.error(f"Error buying number: {e}")
@@ -320,7 +343,7 @@ async def skip_number_step(request: Request):
     logger.info(f"Number purchase skipped for client {client_id}")
     return RedirectResponse(url="/clients_bots", status_code=303)
 
-# Step 4: Bots Configuration - Enhanced with KB info
+# Step 4: Bots Configuration
 @app.get("/clients_bots", response_class=HTMLResponse)
 async def bots_configuration(request: Request):
     session_id = request.cookies.get("session_id")
@@ -333,12 +356,10 @@ async def bots_configuration(request: Request):
     phone_data = phone_numbers.get(client_id, {})
     phone_number = phone_data.get("number", "Not purchased")
     
-    # Knowledge base info
     kb_info = None
     if client_id in knowledge_bases:
         kb_info = knowledge_bases[client_id].get_info()
     
-    # Initialize subscriptions
     if client_id not in subscriptions:
         subscriptions[client_id] = {
             "whatsapp": {"active": False, "start_date": None, "end_date": None},
@@ -357,7 +378,7 @@ async def bots_configuration(request: Request):
         "embed_code": f'<script src="/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
     })
 
-# Step 5: Complete - Enhanced with KB summary
+# Step 5: Complete
 @app.get("/complete", response_class=HTMLResponse)
 async def complete_setup(request: Request):
     session_id = request.cookies.get("session_id")
@@ -368,16 +389,14 @@ async def complete_setup(request: Request):
     
     client = clients.get(client_id, {})
     
-    # Knowledge base summary
     kb_summary = None
     if client_id in knowledge_bases:
         kb = knowledge_bases[client_id]
         kb_summary = {
             "document_count": len(kb.documents),
-            "documents": [doc["filename"] for doc in kb.documents[:5]]  # First 5 docs
+            "documents": [doc["filename"] for doc in kb.documents[:5]]
         }
     
-    # Clear session
     if session_id in sessions:
         del sessions[session_id]
     
@@ -390,7 +409,7 @@ async def complete_setup(request: Request):
     response.delete_cookie("session_id")
     return response
 
-# Health check with KB stats
+# Health check
 @app.get("/health")
 async def health_check():
     kb_stats = {
