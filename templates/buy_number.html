@@ -233,6 +233,29 @@
             font-weight: 600;
         }
         
+        .number-status {
+            display: none;
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .real-number-info {
+            background: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 6px;
+            display: none;
+        }
+        
+        .simulated-number-info {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px;
+            border-radius: 6px;
+            display: none;
+        }
+        
         .loading {
             text-align: center;
             padding: 20px;
@@ -332,6 +355,21 @@
             <div class="status">✅ Number purchased successfully!</div>
         </div>
         
+        <div class="number-status" id="numberStatus">
+            <div class="real-number-info" id="realNumberInfo">
+                <h4 style="margin: 0 0 10px 0;">✅ Real Twilio Number Purchased</h4>
+                <p style="margin: 0; font-size: 14px;">
+                    This is a real, working phone number from Twilio. You can use it for SMS, WhatsApp, and voice calls.
+                </p>
+            </div>
+            <div class="simulated-number-info" id="simulatedNumberInfo">
+                <h4 style="margin: 0 0 10px 0;">⚠️ Demo Number (Simulated)</h4>
+                <p style="margin: 0; font-size: 14px;">
+                    This is a simulated number for testing. To get real numbers, configure Twilio credentials.
+                </p>
+            </div>
+        </div>
+        
         <div class="btn-group">
             <button type="button" class="btn btn-secondary" onclick="goBack()">
                 ← Back
@@ -363,69 +401,60 @@
             document.getElementById('loadingSection').style.display = 'block';
             document.getElementById('buyBtn').disabled = true;
             
-            // Simulate API call to buy number from Twilio
-            setTimeout(() => {
-                // This would be your actual Twilio API call
-                // For now, we'll simulate a successful purchase
-                const sampleNumbers = {
-                    'US': '+1 415 555 0100',
-                    'GB': '+44 20 7946 0958',
-                    'IN': '+91 98765 43210',
-                    'CA': '+1 416 555 0100',
-                    'AU': '+61 2 9876 5432',
-                    'DE': '+49 30 12345678',
-                    'FR': '+33 1 2345 6789',
-                    'SG': '+65 6123 4567',
-                    'AE': '+971 50 123 4567',
-                    'SA': '+966 55 123 4567'
-                };
-                
-                purchasedNumber = sampleNumbers[countryCode] || '+1 415 555 0100';
-                
-                // Hide loading, show number
+            // Make REAL API call to buy number
+            fetch('/api/numbers/buy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Hide loading
                 document.getElementById('loadingSection').style.display = 'none';
-                document.getElementById('purchasedNumber').textContent = purchasedNumber;
-                document.getElementById('numberDisplay').style.display = 'block';
                 
-                // Update buttons
-                document.getElementById('buyBtn').style.display = 'none';
-                document.getElementById('nextBtn').style.display = 'block';
-                
-            }, 2000); // Simulate 2 second API call
+                if (data.status === 'success') {
+                    purchasedNumber = data.phone_number;
+                    
+                    // Display number
+                    document.getElementById('purchasedNumber').textContent = purchasedNumber;
+                    document.getElementById('numberDisplay').style.display = 'block';
+                    
+                    // Show real/simulated status
+                    document.getElementById('numberStatus').style.display = 'block';
+                    if (data.is_real_number) {
+                        document.getElementById('realNumberInfo').style.display = 'block';
+                        document.getElementById('simulatedNumberInfo').style.display = 'none';
+                    } else {
+                        document.getElementById('realNumberInfo').style.display = 'none';
+                        document.getElementById('simulatedNumberInfo').style.display = 'block';
+                    }
+                    
+                    // Update buttons
+                    document.getElementById('buyBtn').style.display = 'none';
+                    document.getElementById('nextBtn').style.display = 'block';
+                } else {
+                    alert('Error: ' + data.message);
+                    document.getElementById('buyBtn').disabled = false;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('loadingSection').style.display = 'none';
+                document.getElementById('buyBtn').disabled = false;
+                alert('Error buying number. Please try again.');
+            });
         }
         
         function skipNumberPurchase() {
             if (confirm('Skip phone number purchase? Client will only be able to use web chatbot.')) {
-                // Proceed to next step without number
                 window.location.href = '/clients_bots';
             }
         }
         
         function goToNextStep() {
             if (purchasedNumber) {
-                // Save the purchased number to backend
-                fetch('/api/numbers/save', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        phone_number: purchasedNumber,
-                        country_code: document.getElementById('country_code').value
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        window.location.href = '/clients_bots';
-                    } else {
-                        alert('Error saving number: ' + data.message);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Error saving number. Please try again.');
-                });
+                window.location.href = '/clients_bots';
             } else {
                 window.location.href = '/clients_bots';
             }
