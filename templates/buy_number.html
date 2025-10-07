@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Buy Phone Number - OwnBot</title>
+    <title>Get Phone Number - OwnBot</title>
     <style>
         :root {
             --primary: #4361ee;
@@ -233,26 +233,12 @@
             font-weight: 600;
         }
         
-        .number-status {
-            display: none;
-            margin: 20px 0;
-            padding: 15px;
-            border-radius: 8px;
-        }
-        
-        .real-number-info {
-            background: #d4edda;
-            color: #155724;
-            padding: 15px;
-            border-radius: 6px;
-            display: none;
-        }
-        
-        .simulated-number-info {
+        .demo-notice {
             background: #fff3cd;
             color: #856404;
             padding: 15px;
             border-radius: 6px;
+            margin: 20px 0;
             display: none;
         }
         
@@ -328,6 +314,10 @@
             </button>
         </div>
         
+        <div class="demo-notice" id="demoNotice">
+            <strong>💡 Demo Mode:</strong> Using simulated phone numbers for testing. Real numbers available with Twilio upgrade.
+        </div>
+        
         <div class="form-group">
             <label for="country_code">Select Country</label>
             <select id="country_code" name="country_code" required>
@@ -347,27 +337,12 @@
         
         <div class="loading" id="loadingSection">
             <div class="spinner"></div>
-            <p>Buying phone number from Twilio...</p>
+            <p>Generating phone number...</p>
         </div>
         
         <div class="number-display" id="numberDisplay">
             <div class="number" id="purchasedNumber">+1 234 567 8900</div>
-            <div class="status">✅ Number purchased successfully!</div>
-        </div>
-        
-        <div class="number-status" id="numberStatus">
-            <div class="real-number-info" id="realNumberInfo">
-                <h4 style="margin: 0 0 10px 0;">✅ Real Twilio Number Purchased</h4>
-                <p style="margin: 0; font-size: 14px;">
-                    This is a real, working phone number from Twilio. You can use it for SMS, WhatsApp, and voice calls.
-                </p>
-            </div>
-            <div class="simulated-number-info" id="simulatedNumberInfo">
-                <h4 style="margin: 0 0 10px 0;">⚠️ Demo Number (Simulated)</h4>
-                <p style="margin: 0; font-size: 14px;">
-                    This is a simulated number for testing. To get real numbers, configure Twilio credentials.
-                </p>
-            </div>
+            <div class="status">✅ Demo number generated successfully!</div>
         </div>
         
         <div class="btn-group">
@@ -377,8 +352,8 @@
             <button type="button" class="btn btn-secondary" onclick="cancelSetup()">
                 Cancel
             </button>
-            <button type="button" class="btn btn-primary" id="buyBtn" onclick="buyPhoneNumber()">
-                Buy Number
+            <button type="button" class="btn btn-primary" id="buyBtn" onclick="generatePhoneNumber()">
+                Generate Number
             </button>
             <button type="button" class="btn btn-success" id="nextBtn" onclick="goToNextStep()" style="display: none;">
                 Next →
@@ -389,7 +364,12 @@
     <script>
         let purchasedNumber = null;
         
-        function buyPhoneNumber() {
+        // Show demo notice on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('demoNotice').style.display = 'block';
+        });
+        
+        function generatePhoneNumber() {
             const countryCode = document.getElementById('country_code').value;
             
             if (!countryCode) {
@@ -401,63 +381,61 @@
             document.getElementById('loadingSection').style.display = 'block';
             document.getElementById('buyBtn').disabled = true;
             
-            // Make REAL API call to buy number
-            fetch('/api/numbers/buy', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            })
-            .then(response => response.json())
-            .then(data => {
-                // Hide loading
-                document.getElementById('loadingSection').style.display = 'none';
+            // Generate simulated phone number based on country
+            setTimeout(() => {
+                const countryFormats = {
+                    'US': () => `+1 (${Math.floor(Math.random() * 900) + 100}) ${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`,
+                    'GB': () => `+44 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 900000) + 100000}`,
+                    'IN': () => `+91 ${Math.floor(Math.random() * 90000) + 10000} ${Math.floor(Math.random() * 90000) + 10000}`,
+                    'CA': () => `+1 (${Math.floor(Math.random() * 900) + 100}) ${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`,
+                    'AU': () => `+61 ${Math.floor(Math.random() * 9) + 1} ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000) + 1000}`,
+                    'DE': () => `+49 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000000) + 1000000}`,
+                    'FR': () => `+33 ${Math.floor(Math.random() * 9) + 1} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10}`,
+                    'SG': () => `+65 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000) + 1000}`,
+                    'AE': () => `+971 ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 900) + 100} ${Math.floor(Math.random() * 9000) + 1000}`,
+                    'SA': () => `+966 ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 900) + 100} ${Math.floor(Math.random() * 9000) + 1000}`
+                };
                 
-                if (data.status === 'success') {
-                    purchasedNumber = data.phone_number;
-                    
-                    // Display number
-                    document.getElementById('purchasedNumber').textContent = purchasedNumber;
-                    document.getElementById('numberDisplay').style.display = 'block';
-                    
-                    // Show real/simulated status
-                    document.getElementById('numberStatus').style.display = 'block';
-                    if (data.is_real_number) {
-                        document.getElementById('realNumberInfo').style.display = 'block';
-                        document.getElementById('simulatedNumberInfo').style.display = 'none';
-                    } else {
-                        document.getElementById('realNumberInfo').style.display = 'none';
-                        document.getElementById('simulatedNumberInfo').style.display = 'block';
-                    }
-                    
-                    // Update buttons
-                    document.getElementById('buyBtn').style.display = 'none';
-                    document.getElementById('nextBtn').style.display = 'block';
-                } else {
-                    alert('Error: ' + data.message);
-                    document.getElementById('buyBtn').disabled = false;
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
+                const formatFunction = countryFormats[countryCode] || countryFormats['US'];
+                purchasedNumber = formatFunction();
+                
+                // Hide loading, show number
                 document.getElementById('loadingSection').style.display = 'none';
-                document.getElementById('buyBtn').disabled = false;
-                alert('Error buying number. Please try again.');
-            });
+                document.getElementById('purchasedNumber').textContent = purchasedNumber;
+                document.getElementById('numberDisplay').style.display = 'block';
+                
+                // Update buttons
+                document.getElementById('buyBtn').style.display = 'none';
+                document.getElementById('nextBtn').style.display = 'block';
+                
+            }, 1000); // Simulate 1 second processing
         }
         
         function skipNumberPurchase() {
-            if (confirm('Skip phone number purchase? Client will only be able to use web chatbot.')) {
+            if (confirm('Skip phone number? Client will only be able to use web chatbot.')) {
                 window.location.href = '/clients_bots';
             }
         }
         
         function goToNextStep() {
+            // Save the number to backend (optional for demo)
             if (purchasedNumber) {
-                window.location.href = '/clients_bots';
-            } else {
-                window.location.href = '/clients_bots';
+                fetch('/api/numbers/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        phone_number: purchasedNumber,
+                        country_code: document.getElementById('country_code').value,
+                        is_real_number: false
+                    })
+                }).catch(error => {
+                    console.error('Error saving number:', error);
+                });
             }
+            
+            window.location.href = '/clients_bots';
         }
         
         function goBack() {
@@ -470,7 +448,7 @@
             }
         }
         
-        // Enable/disable buy button based on country selection
+        // Enable/disable generate button based on country selection
         document.getElementById('country_code').addEventListener('change', function() {
             document.getElementById('buyBtn').disabled = !this.value;
         });
