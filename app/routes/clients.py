@@ -165,7 +165,8 @@ async def client_bots(
             }
         }
         
-        return templates.TemplateResponse("client_bots.html", {
+        # FIXED: Changed template name from "client_bots.html" to "clients_bots.html"
+        return templates.TemplateResponse("clients_bots.html", {
             "request": request,
             "client": client,
             "bots": bots_data,
