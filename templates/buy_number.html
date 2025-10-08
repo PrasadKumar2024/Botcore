@@ -429,33 +429,8 @@
             const pathParts = currentPath.split('/');
             const clientId = pathParts[2]; // Extract client_id from /clients/{client_id}/numbers
             
-            // Save the number to backend (optional for demo)
-            if (purchasedNumber) {
-                // Create a form to submit the number data
-                const form = document.createElement('form');
-                form.method = 'POST';
-                form.action = `/clients/${clientId}/numbers`;
-                
-                // Add hidden inputs for form data
-                const countryCodeInput = document.createElement('input');
-                countryCodeInput.type = 'hidden';
-                countryCodeInput.name = 'country_code';
-                countryCodeInput.value = document.getElementById('country_code').value;
-                form.appendChild(countryCodeInput);
-                
-                // Add area_code if needed (empty for demo)
-                const areaCodeInput = document.createElement('input');
-                areaCodeInput.type = 'hidden';
-                areaCodeInput.name = 'area_code';
-                areaCodeInput.value = '';
-                form.appendChild(areaCodeInput);
-                
-                document.body.appendChild(form);
-                form.submit();
-            } else {
-                // If no number was generated, use skip endpoint
-                window.location.href = `/clients/${clientId}/numbers/skip`;
-            }
+            // Use the existing skip endpoint which redirects to /clients/{client_id}/bots
+            window.location.href = `/clients/${clientId}/numbers/skip`;
         }
         
         function goBack() {
