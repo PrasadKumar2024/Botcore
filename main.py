@@ -1,4 +1,4 @@
-# main.py - FIXED VERSION
+# main.py - FIXED SESSION & CLIENT STATUS
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ from twilio.base.exceptions import TwilioRestException
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)  # ✅ FIXED: Removed double getLogger
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OwnBot", version="1.0.0")
 
@@ -58,7 +58,7 @@ class KnowledgeBase:
         self.client_name = client_name
         self.created_at = datetime.now().isoformat()
         self.documents = []
-        self.status = "active"
+        self.status = "inactive"  # Start as inactive
         
     def add_document(self, filename: str, file_path: str):
         document_info = {
@@ -85,7 +85,7 @@ class Bot:
         self.client_id = client_id
         self.client_name = client_name
         self.created_at = datetime.now().isoformat()
-        self.status = "active"
+        self.status = "inactive"  # Start as inactive
         self.channels = {
             "whatsapp": {"active": False, "number": None},
             "website": {"active": False, "widget_id": f"widget_{uuid.uuid4().hex[:8]}"},
@@ -101,56 +101,91 @@ class Bot:
         self.channels[channel]["active"] = True
         for key, value in kwargs.items():
             self.channels[channel][key] = value
+        
+        # Activate bot if any channel is active
+        if any(channel["active"] for channel in self.channels.values()):
+            self.status = "active"
     
     def get_info(self):
+        active_channels = sum(1 for channel in self.channels.values() if channel["active"])
         return {
             "client_id": self.client_id,
             "client_name": self.client_name,
             "created_at": self.created_at,
             "status": self.status,
             "channels": self.channels,
+            "active_channels": active_channels,
+            "total_channels": len(self.channels),
             "config": self.config
         }
 
+# Helper function to get client from session
+def get_client_from_session(request: Request):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        logger.warning("No session ID in cookie")
+        return None, None
+    
+    client_id = sessions.get(session_id)
+    if not client_id:
+        logger.warning(f"No client ID found for session: {session_id}")
+        return None, None
+    
+    client = clients.get(client_id)
+    if not client:
+        logger.warning(f"No client found for ID: {client_id}")
+        return None, None
+    
+    return client, client_id
+
 # ========== ROUTES ==========
 
-# Option A: Use clients.html as dashboard (since you have it)
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    total_clients = len(clients)
+    # Only count completed clients (have phone or completed setup)
+    completed_clients = [c for c in clients.values() if c.get("id") in phone_numbers or c.get("setup_completed")]
     active_bots = len([bot for bot in bots.values() if bot.status == "active"])
-    clients_with_kb = len([kb for kb in knowledge_bases.values() if kb.documents])
     
     client_data = []
     for client in clients.values():
         client_info = client.copy()
-        client_info["has_knowledge_base"] = client["id"] in knowledge_bases
-        client_info["has_bot"] = client["id"] in bots
-        client_info["has_phone"] = client["id"] in phone_numbers
+        client_id = client["id"]
         
-        if client["id"] in knowledge_bases:
-            kb = knowledge_bases[client["id"]]
+        # Only show as active if setup is completed
+        client_info["is_active"] = client.get("setup_completed", False)
+        client_info["has_knowledge_base"] = client_id in knowledge_bases and knowledge_bases[client_id].documents
+        client_info["has_bot"] = client_id in bots
+        client_info["has_phone"] = client_id in phone_numbers
+        client_info["setup_completed"] = client.get("setup_completed", False)
+        
+        if client_id in knowledge_bases:
+            kb = knowledge_bases[client_id]
             client_info["document_count"] = len(kb.documents)
+            client_info["kb_status"] = kb.status
         else:
             client_info["document_count"] = 0
+            client_info["kb_status"] = "not_created"
             
-        if client["id"] in bots:
-            bot = bots[client["id"]]
+        if client_id in bots:
+            bot = bots[client_id]
+            bot_info = bot.get_info()
             client_info["bot_status"] = bot.status
-            client_info["active_channels"] = sum(1 for channel in bot.channels.values() if channel["active"])
+            client_info["active_channels"] = bot_info["active_channels"]
+            client_info["total_channels"] = bot_info["total_channels"]
         else:
-            client_info["bot_status"] = "Not Created"
+            client_info["bot_status"] = "not_created"
             client_info["active_channels"] = 0
+            client_info["total_channels"] = 3
             
         client_data.append(client_info)
     
     return templates.TemplateResponse("clients.html", {
         "request": request, 
         "clients": client_data,
-        "total_clients": total_clients,
+        "total_clients": len(clients),
+        "completed_clients": len(completed_clients),
         "active_bots": active_bots,
-        "clients_with_kb": clients_with_kb,
-        "is_dashboard": True  # Add flag to identify dashboard view
+        "is_dashboard": True
     })
 
 @app.get("/clients", response_class=HTMLResponse)
@@ -158,23 +193,32 @@ async def clients_page(request: Request):
     client_data = []
     for client in clients.values():
         client_info = client.copy()
-        client_info["has_knowledge_base"] = client["id"] in knowledge_bases
-        client_info["has_bot"] = client["id"] in bots
-        client_info["has_phone"] = client["id"] in phone_numbers
+        client_id = client["id"]
         
-        if client["id"] in knowledge_bases:
-            kb = knowledge_bases[client["id"]]
+        client_info["is_active"] = client.get("setup_completed", False)
+        client_info["has_knowledge_base"] = client_id in knowledge_bases and knowledge_bases[client_id].documents
+        client_info["has_bot"] = client_id in bots
+        client_info["has_phone"] = client_id in phone_numbers
+        client_info["setup_completed"] = client.get("setup_completed", False)
+        
+        if client_id in knowledge_bases:
+            kb = knowledge_bases[client_id]
             client_info["document_count"] = len(kb.documents)
+            client_info["kb_status"] = kb.status
         else:
             client_info["document_count"] = 0
+            client_info["kb_status"] = "not_created"
             
-        if client["id"] in bots:
-            bot = bots[client["id"]]
+        if client_id in bots:
+            bot = bots[client_id]
+            bot_info = bot.get_info()
             client_info["bot_status"] = bot.status
-            client_info["active_channels"] = sum(1 for channel in bot.channels.values() if channel["active"])
+            client_info["active_channels"] = bot_info["active_channels"]
+            client_info["total_channels"] = bot_info["total_channels"]
         else:
-            client_info["bot_status"] = "Not Created"
+            client_info["bot_status"] = "not_created"
             client_info["active_channels"] = 0
+            client_info["total_channels"] = 3
             
         client_data.append(client_info)
     
@@ -205,22 +249,24 @@ async def submit_client_form(
             "business_type": business_type,
             "industry": industry,
             "description": description,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
+            "setup_completed": False,  # Mark as incomplete initially
+            "status": "setup_in_progress"
         }
         
         session_id = str(uuid.uuid4())
         sessions[session_id] = client_id
         
-        # Create knowledge base
+        # Create knowledge base (inactive)
         knowledge_bases[client_id] = KnowledgeBase(client_id, business_name)
         
-        # Create bot
+        # Create bot (inactive)
         bots[client_id] = Bot(client_id, business_name)
         
         logger.info(f"New client created: {business_name} (ID: {client_id})")
         
         response = RedirectResponse(url="/upload_documents", status_code=303)
-        response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="session_id", value=session_id, httponly=True, max_age=3600)  # 1 hour
         return response
         
     except Exception as e:
@@ -229,13 +275,12 @@ async def submit_client_form(
 
 @app.get("/upload_documents", response_class=HTMLResponse)
 async def upload_documents_form(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
+        logger.error("No client found in session for upload_documents")
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    client = clients.get(client_id, {})
     return templates.TemplateResponse("upload_documents.html", {
         "request": request,
         "client": client
@@ -246,15 +291,13 @@ async def process_documents(
     request: Request,
     files: list[UploadFile] = File(...)
 ):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
+        logger.error("No client found in session for process_documents")
         return RedirectResponse(url="/clients/add", status_code=303)
     
     try:
-        client = clients.get(client_id, {})
-        
         upload_dir = f"uploads/{client_id}"
         os.makedirs(upload_dir, exist_ok=True)
         
@@ -269,16 +312,11 @@ async def process_documents(
                     f.write(content)
                 
                 kb.add_document(file.filename, file_path)
-                
-                if client_id not in documents:
-                    documents[client_id] = []
-                
-                documents[client_id].append({
-                    "filename": file.filename,
-                    "uploaded_at": datetime.now().isoformat(),
-                    "file_path": file_path
-                })
                 uploaded_count += 1
+        
+        # Activate knowledge base if documents uploaded
+        if uploaded_count > 0:
+            kb.status = "active"
         
         logger.info(f"Uploaded {uploaded_count} documents for client {client['business_name']}")
         return RedirectResponse(url="/buy_number", status_code=303)
@@ -289,10 +327,10 @@ async def process_documents(
 
 @app.post("/skip_documents")
 async def skip_documents_step(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
+        logger.error("No client found in session for skip_documents")
         return RedirectResponse(url="/clients/add", status_code=303)
     
     logger.info(f"Documents skipped for client {client_id}")
@@ -300,13 +338,12 @@ async def skip_documents_step(request: Request):
 
 @app.get("/buy_number", response_class=HTMLResponse)
 async def buy_number_form(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
+        logger.error("No client found in session for buy_number")
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    client = clients.get(client_id, {})
     return templates.TemplateResponse("buy_number.html", {
         "request": request,
         "client": client
@@ -314,16 +351,13 @@ async def buy_number_form(request: Request):
 
 @app.post("/api/numbers/buy")
 async def buy_number(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
-        return JSONResponse({"status": "error", "message": "No session"})
+    if not client:
+        logger.error("No client found in session for api/numbers/buy")
+        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
     
     try:
-        client_data = clients.get(client_id, {})
-        business_name = client_data.get('business_name', 'Unknown Business')
-        
         # For demo - simulate number purchase
         simulated_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
         
@@ -331,12 +365,12 @@ async def buy_number(request: Request):
             "number": simulated_number,
             "twilio_sid": f"simulated_{uuid.uuid4()}",
             "purchased_at": datetime.now().isoformat(),
-            "client_name": business_name,
+            "client_name": client["business_name"],
             "is_real": False,
             "capabilities": {"sms": True, "voice": True}
         }
         
-        logger.info(f"Number created: {simulated_number} for {business_name}")
+        logger.info(f"Number created: {simulated_number} for {client['business_name']}")
         
         return JSONResponse({
             "status": "success",
@@ -349,12 +383,24 @@ async def buy_number(request: Request):
         logger.error(f"Error buying number: {e}")
         return JSONResponse({"status": "error", "message": "Error buying number"})
 
+# FIXED: This route was missing - causing the "Not Found" error
+@app.post("/buy_number/next")
+async def buy_number_next(request: Request):
+    client, client_id = get_client_from_session(request)
+    
+    if not client:
+        logger.error("No client found in session for buy_number/next")
+        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
+    
+    logger.info(f"Moving to bots configuration for client {client_id}")
+    return JSONResponse({"status": "success", "redirect_url": "/clients_bots"})
+
 @app.post("/skip_number")
 async def skip_number_step(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
+        logger.error("No client found in session for skip_number")
         return RedirectResponse(url="/clients/add", status_code=303)
     
     logger.info(f"Number purchase skipped for client {client_id}")
@@ -362,13 +408,16 @@ async def skip_number_step(request: Request):
 
 @app.get("/clients_bots", response_class=HTMLResponse)
 async def bots_configuration(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
+    if not client:
+        logger.error("No client found in session for clients_bots")
+        # Return proper error response
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_message": "Cannot find client information. Please go back to clients page and try again."
+        })
     
-    client = clients.get(client_id, {})
     phone_data = phone_numbers.get(client_id, {})
     phone_number = phone_data.get("number", "Not purchased")
     
@@ -401,11 +450,10 @@ async def bots_configuration(request: Request):
 
 @app.post("/api/bot/activate_channel")
 async def activate_bot_channel(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
-        return JSONResponse({"status": "error", "message": "No session"})
+    if not client:
+        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
     
     try:
         data = await request.json()
@@ -447,38 +495,44 @@ async def activate_bot_channel(request: Request):
         logger.error(f"Error activating bot channel: {e}")
         return JSONResponse({"status": "error", "message": "Internal server error"})
 
-# Simple complete page using existing template structure
 @app.get("/complete", response_class=HTMLResponse)
 async def complete_setup(request: Request):
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
+    client, client_id = get_client_from_session(request)
     
-    if not client_id:
+    if not client:
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    client = clients.get(client_id, {})
+    # MARK CLIENT AS COMPLETED
+    clients[client_id]["setup_completed"] = True
+    clients[client_id]["status"] = "active"
     
     # Clear session
+    session_id = request.cookies.get("session_id")
     if session_id in sessions:
         del sessions[session_id]
     
-    # Use clients_bots.html as complete page for now
-    return templates.TemplateResponse("clients_bots.html", {
+    response = templates.TemplateResponse("complete.html", {
         "request": request,
         "client": client,
-        "is_complete": True,
-        "completion_message": "✅ Setup completed successfully!"
+        "has_phone": client_id in phone_numbers,
+        "has_knowledge_base": client_id in knowledge_bases and len(knowledge_bases[client_id].documents) > 0
     })
+    response.delete_cookie("session_id")
+    return response
 
 # Health check
 @app.get("/health")
 async def health_check():
+    completed_clients = len([c for c in clients.values() if c.get("setup_completed")])
+    active_bots = len([bot for bot in bots.values() if bot.status == "active"])
+    
     return {
         "status": "success",
         "message": "OwnBot running",
         "timestamp": datetime.now().isoformat(),
-        "clients_count": len(clients),
-        "bots_count": len(bots),
+        "total_clients": len(clients),
+        "completed_clients": completed_clients,
+        "active_bots": active_bots,
         "knowledge_bases_count": len(knowledge_bases)
     }
 
