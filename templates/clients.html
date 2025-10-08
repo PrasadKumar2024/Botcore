@@ -294,7 +294,7 @@
                 <div class="stat-label">Total Clients</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">{{ clients|selectattr("status", "equalto", "active")|list|length }}</div>
+                <div class="stat-number">{{ clients|length }}</div>
                 <div class="stat-label">Active Clients</div>
             </div>
             <div class="stat-card">
@@ -319,7 +319,7 @@
                         <span class="info-label">Created:</span>
                         <span class="info-value">
                             {% if client.created_at %}
-                                {{ client.created_at.strftime('%Y-%m-%d') }}
+                                {{ client.created_at }}
                             {% else %}
                                 Recently
                             {% endif %}
