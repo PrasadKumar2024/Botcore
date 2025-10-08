@@ -3,6 +3,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from typing import Optional
+from datetime import datetime
 
 from app.database import get_db
 from app.services.client_service import ClientService
@@ -114,6 +115,68 @@ async def client_detail(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading client details: {str(e)}")
+
+@router.get("/{client_id}/bots", response_class=HTMLResponse)
+async def client_bots(
+    request: Request,
+    client_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Page 5: Bot configuration page after number purchase/skip
+    """
+    try:
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get phone number if exists
+        phone_number = ClientService.get_phone_number(db, client_id)
+        
+        # Get existing subscriptions
+        subscriptions = ClientService.get_client_subscriptions(db, client_id)
+        
+        # Get WhatsApp profile if exists
+        whatsapp_profile = ClientService.get_whatsapp_profile(db, client_id)
+        
+        # Generate chatbot URL
+        chatbot_url = f"https://ownbot.chat/{client.business_name.lower().replace(' ', '-')}"
+        
+        # Prepare bot data for template
+        bots_data = {
+            "whatsapp": {
+                "name": "WhatsApp Bot",
+                "type": "whatsapp",
+                "phone_number": phone_number.number if phone_number else None,
+                "subscription": next((sub for sub in subscriptions if sub.bot_type == "whatsapp"), None),
+                "profile": whatsapp_profile
+            },
+            "voice": {
+                "name": "Voice Call Bot", 
+                "type": "voice",
+                "phone_number": phone_number.number if phone_number else None,
+                "subscription": next((sub for sub in subscriptions if sub.bot_type == "voice"), None)
+            },
+            "web": {
+                "name": "Web Chat Bot",
+                "type": "web", 
+                "subscription": next((sub for sub in subscriptions if sub.bot_type == "web"), None),
+                "chatbot_url": chatbot_url
+            }
+        }
+        
+        return templates.TemplateResponse("client_bots.html", {
+            "request": request,
+            "client": client,
+            "bots": bots_data,
+            "phone_number": phone_number,
+            "chatbot_url": chatbot_url
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading bot configuration: {str(e)}")
 
 @router.get("/{client_id}/edit", response_class=HTMLResponse)
 async def edit_client_form(
@@ -234,3 +297,105 @@ async def update_client_status(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error updating client status: {str(e)}")
+
+@router.post("/{client_id}/bots/{bot_type}/activate", response_class=HTMLResponse)
+async def activate_bot(
+    request: Request,
+    client_id: int,
+    bot_type: str,
+    months: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Activate a bot subscription for a client
+    """
+    try:
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        if bot_type not in ["whatsapp", "voice", "web"]:
+            raise HTTPException(status_code=400, detail="Invalid bot type")
+        
+        if months not in [1, 2, 3, 6, 12]:
+            raise HTTPException(status_code=400, detail="Invalid months selection")
+        
+        # Activate or extend subscription
+        subscription = ClientService.activate_subscription(
+            db, client_id, bot_type, months
+        )
+        
+        # Redirect back to bots page
+        return RedirectResponse(
+            url=f"/clients/{client_id}/bots",
+            status_code=303
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error activating bot: {str(e)}")
+
+@router.post("/{client_id}/bots/{bot_type}/deactivate", response_class=HTMLResponse)
+async def deactivate_bot(
+    request: Request,
+    client_id: int,
+    bot_type: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Deactivate a bot subscription
+    """
+    try:
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        if bot_type not in ["whatsapp", "voice", "web"]:
+            raise HTTPException(status_code=400, detail="Invalid bot type")
+        
+        # Deactivate subscription
+        ClientService.deactivate_subscription(db, client_id, bot_type)
+        
+        # Redirect back to bots page
+        return RedirectResponse(
+            url=f"/clients/{client_id}/bots",
+            status_code=303
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deactivating bot: {str(e)}")
+
+@router.post("/{client_id}/whatsapp/profile", response_class=HTMLResponse)
+async def update_whatsapp_profile(
+    request: Request,
+    client_id: int,
+    business_name: str = Form(...),
+    address: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Update WhatsApp business profile
+    """
+    try:
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Update WhatsApp profile
+        whatsapp_profile = ClientService.update_whatsapp_profile(
+            db, client_id, business_name, address
+        )
+        
+        # Redirect back to bots page
+        return RedirectResponse(
+            url=f"/clients/{client_id}/bots",
+            status_code=303
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating WhatsApp profile: {str(e)}")
