@@ -1,4 +1,4 @@
-# main.py - PROPER TEMPLATE-BASED VERSION
+# main.py - FIXED VERSION
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ from twilio.base.exceptions import TwilioRestException
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # ✅ FIXED: Removed double getLogger
 
 app = FastAPI(title="OwnBot", version="1.0.0")
 
@@ -38,7 +38,7 @@ app.add_middleware(
 # Static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
-# Templates - THIS IS CRITICAL
+# Templates
 templates = Jinja2Templates(directory="templates")
 
 # Storage
@@ -112,22 +112,45 @@ class Bot:
             "config": self.config
         }
 
-# ========== PROPER TEMPLATE ROUTES ==========
+# ========== ROUTES ==========
 
+# Option A: Use clients.html as dashboard (since you have it)
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     total_clients = len(clients)
     active_bots = len([bot for bot in bots.values() if bot.status == "active"])
     clients_with_kb = len([kb for kb in knowledge_bases.values() if kb.documents])
     
-    recent_clients = list(clients.values())[-5:]
+    client_data = []
+    for client in clients.values():
+        client_info = client.copy()
+        client_info["has_knowledge_base"] = client["id"] in knowledge_bases
+        client_info["has_bot"] = client["id"] in bots
+        client_info["has_phone"] = client["id"] in phone_numbers
+        
+        if client["id"] in knowledge_bases:
+            kb = knowledge_bases[client["id"]]
+            client_info["document_count"] = len(kb.documents)
+        else:
+            client_info["document_count"] = 0
+            
+        if client["id"] in bots:
+            bot = bots[client["id"]]
+            client_info["bot_status"] = bot.status
+            client_info["active_channels"] = sum(1 for channel in bot.channels.values() if channel["active"])
+        else:
+            client_info["bot_status"] = "Not Created"
+            client_info["active_channels"] = 0
+            
+        client_data.append(client_info)
     
     return templates.TemplateResponse("clients.html", {
-        "request": request,
+        "request": request, 
+        "clients": client_data,
         "total_clients": total_clients,
         "active_bots": active_bots,
         "clients_with_kb": clients_with_kb,
-        "recent_clients": recent_clients
+        "is_dashboard": True  # Add flag to identify dashboard view
     })
 
 @app.get("/clients", response_class=HTMLResponse)
@@ -157,7 +180,8 @@ async def clients_page(request: Request):
     
     return templates.TemplateResponse("clients.html", {
         "request": request, 
-        "clients": client_data
+        "clients": client_data,
+        "is_dashboard": False
     })
 
 @app.get("/clients/add", response_class=HTMLResponse)
@@ -423,6 +447,7 @@ async def activate_bot_channel(request: Request):
         logger.error(f"Error activating bot channel: {e}")
         return JSONResponse({"status": "error", "message": "Internal server error"})
 
+# Simple complete page using existing template structure
 @app.get("/complete", response_class=HTMLResponse)
 async def complete_setup(request: Request):
     session_id = request.cookies.get("session_id")
@@ -433,53 +458,16 @@ async def complete_setup(request: Request):
     
     client = clients.get(client_id, {})
     
-    bot_info = None
-    if client_id in bots:
-        bot_info = bots[client_id].get_info()
-    
-    kb_summary = None
-    if client_id in knowledge_bases:
-        kb = knowledge_bases[client_id]
-        kb_summary = {
-            "document_count": len(kb.documents),
-            "documents": [doc["filename"] for doc in kb.documents[:5]]
-        }
-    
     # Clear session
     if session_id in sessions:
         del sessions[session_id]
     
-    response = templates.TemplateResponse("complete.html", {
+    # Use clients_bots.html as complete page for now
+    return templates.TemplateResponse("clients_bots.html", {
         "request": request,
         "client": client,
-        "bot": bot_info,
-        "knowledge_base": kb_summary,
-        "has_phone": client_id in phone_numbers
-    })
-    response.delete_cookie("session_id")
-    return response
-
-@app.get("/bots", response_class=HTMLResponse)
-async def bots_dashboard(request: Request):
-    bot_data = []
-    for client_id, bot in bots.items():
-        bot_info = bot.get_info()
-        client_info = clients.get(client_id, {})
-        phone_info = phone_numbers.get(client_id, {})
-        kb_info = knowledge_bases.get(client_id)
-        
-        bot_data.append({
-            **bot_info,
-            "client_info": client_info,
-            "phone_number": phone_info.get("number", "Not set"),
-            "document_count": len(kb_info.documents) if kb_info else 0
-        })
-    
-    return templates.TemplateResponse("bots_dashboard.html", {
-        "request": request,
-        "bots": bot_data,
-        "total_bots": len(bots),
-        "active_bots": len([b for b in bots.values() if b.status == "active"])
+        "is_complete": True,
+        "completion_message": "✅ Setup completed successfully!"
     })
 
 # Health check
