@@ -122,7 +122,7 @@ async def dashboard(request: Request):
     
     recent_clients = list(clients.values())[-5:]
     
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse("clients.html", {
         "request": request,
         "total_clients": total_clients,
         "active_bots": active_bots,
