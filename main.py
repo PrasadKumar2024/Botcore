@@ -1,4 +1,4 @@
-# main.py - Enhanced with Knowledge Base & Real Twilio
+# main.py - Complete Bot Creation Flow
 from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OwnBot", version="1.0.0")
 
+# Create necessary directories for Render.com
+os.makedirs("app/static", exist_ok=True)
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -41,9 +46,10 @@ phone_numbers = {}
 subscriptions = {}
 sessions = {}
 knowledge_bases = {}
-twilio_numbers = {}  # Store Twilio number details
+twilio_numbers = {}
+bots = {}  # Store bot configurations
 
-# NEW: Knowledge Base Management
+# Knowledge Base Management
 class KnowledgeBase:
     def __init__(self, client_id: str, client_name: str):
         self.client_id = client_id
@@ -74,6 +80,67 @@ class KnowledgeBase:
             "documents": self.documents
         }
 
+# Bot Management
+class Bot:
+    def __init__(self, client_id: str, client_name: str):
+        self.client_id = client_id
+        self.client_name = client_name
+        self.created_at = datetime.now().isoformat()
+        self.status = "active"
+        self.channels = {
+            "whatsapp": {"active": False, "number": None},
+            "website": {"active": False, "widget_id": f"widget_{uuid.uuid4().hex[:8]}"},
+            "telegram": {"active": False, "username": None}
+        }
+        self.config = {
+            "welcome_message": f"Hello! Welcome to {client_name}. How can I help you today?",
+            "response_mode": "auto",
+            "business_hours": "24/7"
+        }
+    
+    def activate_channel(self, channel: str, **kwargs):
+        """Activate a bot channel"""
+        self.channels[channel]["active"] = True
+        for key, value in kwargs.items():
+            self.channels[channel][key] = value
+    
+    def get_info(self):
+        """Return bot info"""
+        return {
+            "client_id": self.client_id,
+            "client_name": self.client_name,
+            "created_at": self.created_at,
+            "status": self.status,
+            "channels": self.channels,
+            "config": self.config
+        }
+
+# Root endpoint - Shows the main dashboard
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    # Get stats for dashboard
+    total_clients = len(clients)
+    active_bots = len([bot for bot in bots.values() if bot.status == "active"])
+    clients_with_kb = len([kb for kb in knowledge_bases.values() if kb.documents])
+    
+    recent_clients = list(clients.values())[-5:]  # Last 5 clients
+    
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "total_clients": total_clients,
+        "active_bots": active_bots,
+        "clients_with_kb": clients_with_kb,
+        "recent_clients": recent_clients
+    })
+
+@app.get("/test")
+async def test_page():
+    return {
+        "message": "Server is running!",
+        "status": "success",
+        "timestamp": datetime.now().isoformat()
+    }
+
 async def buy_simulated_number(client_id: str, business_name: str):
     """Fallback to simulated number if Twilio fails"""
     simulated_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
@@ -96,25 +163,30 @@ async def buy_simulated_number(client_id: str, business_name: str):
         "message": "Demo number created (Twilio not configured)"
     })
 
-# Dashboard
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    return templates.TemplateResponse("clients.html", {
-        "request": request,
-        "clients": list(clients.values())
-    })
-
+# Clients Management
 @app.get("/clients", response_class=HTMLResponse)
 async def clients_page(request: Request):
     client_data = []
     for client in clients.values():
         client_info = client.copy()
         client_info["has_knowledge_base"] = client["id"] in knowledge_bases
+        client_info["has_bot"] = client["id"] in bots
+        client_info["has_phone"] = client["id"] in phone_numbers
+        
         if client["id"] in knowledge_bases:
             kb = knowledge_bases[client["id"]]
             client_info["document_count"] = len(kb.documents)
         else:
             client_info["document_count"] = 0
+            
+        if client["id"] in bots:
+            bot = bots[client["id"]]
+            client_info["bot_status"] = bot.status
+            client_info["active_channels"] = sum(1 for channel in bot.channels.values() if channel["active"])
+        else:
+            client_info["bot_status"] = "Not Created"
+            client_info["active_channels"] = 0
+            
         client_data.append(client_info)
     
     return templates.TemplateResponse("clients.html", {
@@ -131,7 +203,9 @@ async def add_client_form(request: Request):
 async def submit_client_form(
     request: Request,
     business_name: str = Form(...),
-    business_type: str = Form(...)
+    business_type: str = Form(...),
+    industry: str = Form(""),
+    description: str = Form("")
 ):
     try:
         client_id = str(uuid.uuid4())
@@ -140,6 +214,8 @@ async def submit_client_form(
             "id": client_id,
             "business_name": business_name,
             "business_type": business_type,
+            "industry": industry,
+            "description": description,
             "created_at": datetime.now().isoformat()
         }
         
@@ -199,7 +275,7 @@ async def process_documents(
         
         uploaded_count = 0
         for file in files:
-            if file.content_type == "application/pdf":
+            if file.filename.endswith('.pdf'):
                 file_path = f"{upload_dir}/{file.filename}"
                 with open(file_path, "wb") as f:
                     content = await file.read()
@@ -244,7 +320,7 @@ async def skip_documents_step(request: Request):
     logger.info(f"Documents skipped for client {client['business_name']}")
     return RedirectResponse(url="/buy_number", status_code=303)
 
-# Step 3: Buy Number - REAL TWILIO VERSION
+# Step 3: Buy Number
 @app.get("/buy_number", response_class=HTMLResponse)
 async def buy_number_form(request: Request):
     session_id = request.cookies.get("session_id")
@@ -341,11 +417,11 @@ async def skip_number_step(request: Request):
         return RedirectResponse(url="/clients/add", status_code=303)
     
     logger.info(f"Number purchase skipped for client {client_id}")
-    return RedirectResponse(url="/clients_bots", status_code=303)
+    return RedirectResponse(url="/configure_bot", status_code=303)
 
-# Step 4: Bots Configuration
-@app.get("/clients_bots", response_class=HTMLResponse)
-async def bots_configuration(request: Request):
+# Step 4: Configure Bot
+@app.get("/configure_bot", response_class=HTMLResponse)
+async def configure_bot(request: Request):
     session_id = request.cookies.get("session_id")
     client_id = sessions.get(session_id) if session_id else None
     
@@ -353,32 +429,119 @@ async def bots_configuration(request: Request):
         return RedirectResponse(url="/clients/add", status_code=303)
     
     client = clients.get(client_id, {})
+    
+    # Create bot if not exists
+    if client_id not in bots:
+        bots[client_id] = Bot(client_id, client["business_name"])
+        logger.info(f"Created new bot for client: {client['business_name']}")
+    
+    bot = bots[client_id]
+    bot_info = bot.get_info()
+    
     phone_data = phone_numbers.get(client_id, {})
-    phone_number = phone_data.get("number", "Not purchased")
+    phone_number = phone_data.get("number", None)
     
     kb_info = None
     if client_id in knowledge_bases:
         kb_info = knowledge_bases[client_id].get_info()
     
-    if client_id not in subscriptions:
-        subscriptions[client_id] = {
-            "whatsapp": {"active": False, "start_date": None, "end_date": None},
-            "voice": {"active": False, "start_date": None, "end_date": None},
-            "web": {"active": False, "start_date": None, "end_date": None}
-        }
-    
-    return templates.TemplateResponse("clients_bots.html", {
+    return templates.TemplateResponse("configure_bot.html", {
         "request": request,
         "client": client,
+        "bot": bot_info,
         "phone_number": phone_number,
         "has_phone": client_id in phone_numbers,
-        "subscriptions": subscriptions[client_id],
         "knowledge_base": kb_info,
         "chatbot_url": f"https://ownbot.chat/{client_id}",
-        "embed_code": f'<script src="/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
+        "embed_code": f'<script src="https://e-z6j0.onrender.com/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
     })
 
-# Step 5: Complete
+# Bot Configuration APIs
+@app.post("/api/bot/activate_channel")
+async def activate_bot_channel(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
+    
+    if not client_id:
+        return JSONResponse({"status": "error", "message": "No session"})
+    
+    try:
+        data = await request.json()
+        channel = data.get("channel")
+        
+        if client_id not in bots:
+            return JSONResponse({"status": "error", "message": "Bot not found"})
+        
+        bot = bots[client_id]
+        
+        if channel == "whatsapp":
+            phone_data = phone_numbers.get(client_id, {})
+            if not phone_data:
+                return JSONResponse({"status": "error", "message": "No phone number available"})
+            
+            bot.activate_channel("whatsapp", number=phone_data["number"])
+            message = f"WhatsApp bot activated with number: {phone_data['number']}"
+            
+        elif channel == "website":
+            bot.activate_channel("website")
+            message = "Website chat widget activated"
+            
+        elif channel == "telegram":
+            bot.activate_channel("telegram", username=f"{client_id}_bot")
+            message = "Telegram bot activated"
+            
+        else:
+            return JSONResponse({"status": "error", "message": "Invalid channel"})
+        
+        logger.info(f"Activated {channel} channel for client {client_id}")
+        
+        return JSONResponse({
+            "status": "success",
+            "message": message,
+            "bot": bot.get_info()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error activating bot channel: {e}")
+        return JSONResponse({"status": "error", "message": "Internal server error"})
+
+@app.post("/api/bot/update_config")
+async def update_bot_config(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
+    
+    if not client_id:
+        return JSONResponse({"status": "error", "message": "No session"})
+    
+    try:
+        data = await request.json()
+        
+        if client_id not in bots:
+            return JSONResponse({"status": "error", "message": "Bot not found"})
+        
+        bot = bots[client_id]
+        
+        # Update bot configuration
+        if "welcome_message" in data:
+            bot.config["welcome_message"] = data["welcome_message"]
+        if "response_mode" in data:
+            bot.config["response_mode"] = data["response_mode"]
+        if "business_hours" in data:
+            bot.config["business_hours"] = data["business_hours"]
+        
+        logger.info(f"Updated bot configuration for client {client_id}")
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Bot configuration updated",
+            "config": bot.config
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating bot config: {e}")
+        return JSONResponse({"status": "error", "message": "Internal server error"})
+
+# Step 5: Complete Setup
 @app.get("/complete", response_class=HTMLResponse)
 async def complete_setup(request: Request):
     session_id = request.cookies.get("session_id")
@@ -389,6 +552,10 @@ async def complete_setup(request: Request):
     
     client = clients.get(client_id, {})
     
+    bot_info = None
+    if client_id in bots:
+        bot_info = bots[client_id].get_info()
+    
     kb_summary = None
     if client_id in knowledge_bases:
         kb = knowledge_bases[client_id]
@@ -397,17 +564,43 @@ async def complete_setup(request: Request):
             "documents": [doc["filename"] for doc in kb.documents[:5]]
         }
     
+    # Clear session
     if session_id in sessions:
         del sessions[session_id]
     
     response = templates.TemplateResponse("complete.html", {
         "request": request,
         "client": client,
+        "bot": bot_info,
         "knowledge_base": kb_summary,
         "has_phone": client_id in phone_numbers
     })
     response.delete_cookie("session_id")
     return response
+
+# Bot Management Dashboard
+@app.get("/bots", response_class=HTMLResponse)
+async def bots_dashboard(request: Request):
+    bot_data = []
+    for client_id, bot in bots.items():
+        bot_info = bot.get_info()
+        client_info = clients.get(client_id, {})
+        phone_info = phone_numbers.get(client_id, {})
+        kb_info = knowledge_bases.get(client_id)
+        
+        bot_data.append({
+            **bot_info,
+            "client_info": client_info,
+            "phone_number": phone_info.get("number", "Not set"),
+            "document_count": len(kb_info.documents) if kb_info else 0
+        })
+    
+    return templates.TemplateResponse("bots_dashboard.html", {
+        "request": request,
+        "bots": bot_data,
+        "total_bots": len(bots),
+        "active_bots": len([b for b in bots.values() if b.status == "active"])
+    })
 
 # Health check
 @app.get("/health")
@@ -417,18 +610,23 @@ async def health_check():
         "clients_with_kb": [client_id for client_id in knowledge_bases if knowledge_bases[client_id].documents]
     }
     
+    bot_stats = {
+        "total_bots": len(bots),
+        "active_bots": len([b for b in bots.values() if b.status == "active"]),
+        "bots_with_whatsapp": len([b for b in bots.values() if b.channels["whatsapp"]["active"]])
+    }
+    
     return {
         "status": "success",
         "message": "OwnBot running",
         "timestamp": datetime.now().isoformat(),
         "clients_count": len(clients),
-        "knowledge_bases": kb_stats
+        "knowledge_bases": kb_stats,
+        "bots": bot_stats
     }
 
-@app.get("/api/test")
-async def test_endpoint():
-    return {"message": "API is working", "status": "success"}
-
+# Render.com specific configuration
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
