@@ -27,21 +27,22 @@
             background-color: #f5f7fb;
             color: var(--dark);
             line-height: 1.6;
+            min-height: 100vh;
+            padding: 20px;
         }
         
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
         }
         
-        header {
+        .header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #e0e0e0;
+            padding: 20px 0;
+            border-bottom: 2px solid #e0e0e0;
         }
         
         h1 {
@@ -49,216 +50,355 @@
             font-weight: 700;
         }
         
-        .btn {
-            display: inline-block;
-            padding: 10px 20px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            border: none;
+        .search-section {
+            margin-bottom: 30px;
         }
         
-        .btn-primary {
-            background-color: var(--primary);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background-color: var(--secondary);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        
-        .search-bar {
-            margin: 20px 0;
-            display: flex;
-            gap: 10px;
-        }
-        
-        .search-input {
-            flex: 1;
-            padding: 10px 15px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
+        .search-box {
+            width: 100%;
+            max-width: 400px;
+            padding: 12px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
             font-size: 16px;
+        }
+        
+        .search-box:focus {
+            outline: none;
+            border-color: var(--primary);
         }
         
         .clients-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
+            gap: 25px;
+            margin-bottom: 40px;
         }
         
         .client-card {
             background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            cursor: pointer;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s ease;
         }
         
         .client-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.15);
+            border-color: var(--primary);
+        }
+        
+        .client-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
         }
         
         .client-name {
-            font-size: 18px;
-            font-weight: 600;
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--dark);
             margin-bottom: 5px;
-            color: var(--primary);
         }
         
         .client-type {
             color: var(--gray);
             font-size: 14px;
-            margin-bottom: 15px;
+            background: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
         }
         
         .client-status {
             display: inline-block;
-            padding: 4px 10px;
+            padding: 4px 12px;
             border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
+            text-transform: uppercase;
         }
         
         .status-active {
-            background-color: rgba(76, 201, 240, 0.2);
-            color: #4cc9f0;
+            background: #d4edda;
+            color: #155724;
         }
         
-        .status-inactive {
-            background-color: rgba(108, 117, 125, 0.2);
+        .client-info {
+            margin: 15px 0;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .info-label {
             color: var(--gray);
+            font-weight: 500;
         }
         
-        .status-expired {
-            background-color: rgba(247, 37, 133, 0.2);
-            color: var(--danger);
+        .info-value {
+            color: var(--dark);
+            font-weight: 600;
         }
         
-        .client-bots {
-            margin-top: 15px;
+        .client-actions {
             display: flex;
             gap: 10px;
+            margin-top: 20px;
         }
         
-        .bot-indicator {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
             display: inline-block;
+            text-align: center;
+            flex: 1;
         }
         
-        .bot-whatsapp {
-            background-color: #25D366;
+        .btn-primary {
+            background: var(--primary);
+            color: white;
         }
         
-        .bot-voice {
-            background-color: #0088cc;
+        .btn-primary:hover {
+            background: var(--secondary);
         }
         
-        .bot-web {
-            background-color: #ff6b00;
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        .add-client-section {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .btn-large {
+            padding: 15px 30px;
+            font-size: 16px;
+            border-radius: 8px;
         }
         
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 80px 20px;
             color: var(--gray);
         }
         
+        .empty-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+        
         .empty-state h3 {
+            font-size: 24px;
             margin-bottom: 10px;
             color: var(--dark);
         }
         
+        .empty-state p {
+            font-size: 16px;
+            margin-bottom: 30px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            flex: 1;
+            min-width: 150px;
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            color: var(--gray);
+            font-size: 14px;
+        }
+        
         @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+            
+            .search-box {
+                max-width: 100%;
+            }
+            
             .clients-grid {
                 grid-template-columns: 1fr;
             }
             
-            header {
+            .client-actions {
                 flex-direction: column;
-                align-items: flex-start;
-                gap: 15px;
+            }
+            
+            .stats-bar {
+                flex-direction: column;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
+        <div class="header">
             <h1>Client Dashboard</h1>
-            <a href="/clients/add" class="btn btn-primary">+ Add New Client</a>
-        </header>
-        
-        <div class="search-bar">
-            <input type="text" class="search-input" placeholder="Search clients..." id="searchInput">
+            <input type="text" class="search-box" placeholder="Search clients..." id="searchInput">
         </div>
         
         {% if clients %}
-        <div class="clients-grid" id="clientsContainer">
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-number">{{ clients|length }}</div>
+                <div class="stat-label">Total Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ clients|selectattr("status", "equalto", "active")|list|length }}</div>
+                <div class="stat-label">Active Clients</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">0</div>
+                <div class="stat-label">Messages Today</div>
+            </div>
+        </div>
+        
+        <div class="clients-grid" id="clientsGrid">
             {% for client in clients %}
-            <div class="client-card" onclick="window.location.href='/clients/{{ client.id }}'">
-                <div class="client-name">{{ client.business_name }}</div>
-                <div class="client-type">{{ client.business_type }}</div>
-                
-                <div>
-                    {% if client.status == 'active' %}
+            <div class="client-card" data-client-name="{{ client.business_name.lower() }}">
+                <div class="client-header">
+                    <div>
+                        <div class="client-name">{{ client.business_name }}</div>
+                        <span class="client-type">{{ client.business_type }}</span>
+                    </div>
                     <span class="client-status status-active">ACTIVE</span>
-                    {% elif client.status == 'inactive' %}
-                    <span class="client-status status-inactive">INACTIVE</span>
-                    {% else %}
-                    <span class="client-status status-expired">EXPIRED</span>
-                    {% endif %}
                 </div>
                 
-                <div class="client-bots">
-                    {% if client.has_whatsapp_bot %}
-                    <span class="bot-indicator bot-whatsapp" title="WhatsApp Bot"></span>
-                    {% endif %}
-                    
-                    {% if client.has_voice_bot %}
-                    <span class="bot-indicator bot-voice" title="Voice Bot"></span>
-                    {% endif %}
-                    
-                    {% if client.has_web_bot %}
-                    <span class="bot-indicator bot-web" title="Web Chat Bot"></span>
-                    {% endif %}
+                <div class="client-info">
+                    <div class="info-item">
+                        <span class="info-label">Created:</span>
+                        <span class="info-value">
+                            {% if client.created_at %}
+                                {{ client.created_at.strftime('%Y-%m-%d') }}
+                            {% else %}
+                                Recently
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Bots Active:</span>
+                        <span class="info-value">3/3</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Last Active:</span>
+                        <span class="info-value">Today</span>
+                    </div>
+                </div>
+                
+                <div class="client-actions">
+                    <a href="/clients/{{ client.id }}" class="btn btn-primary">View Dashboard</a>
+                    <a href="/clients/{{ client.id }}?tab=data" class="btn btn-secondary">Manage Data</a>
                 </div>
             </div>
             {% endfor %}
         </div>
         {% else %}
         <div class="empty-state">
-            <h3>No clients yet</h3>
-            <p>Get started by adding your first client</p>
-            <a href="/clients/add" class="btn btn-primary" style="margin-top: 15px;">Add Your First Client</a>
+            <div class="empty-icon">👥</div>
+            <h3>No Clients Yet</h3>
+            <p>You haven't completed any client setups yet. Start by adding your first client and completing the setup process.</p>
+            <a href="/clients/add" class="btn btn-primary btn-large">+ Add Your First Client</a>
+            
+            <div style="margin-top: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                <h4 style="margin-bottom: 15px;">Client Setup Process:</h4>
+                <ol style="text-align: left; padding-left: 20px;">
+                    <li style="margin-bottom: 10px;"><strong>Add Client</strong> - Basic business information</li>
+                    <li style="margin-bottom: 10px;"><strong>Upload Documents</strong> - PDF files for training the AI</li>
+                    <li style="margin-bottom: 10px;"><strong>Get Phone Number</strong> - For WhatsApp and voice bots</li>
+                    <li style="margin-bottom: 10px;"><strong>Configure Bots</strong> - Setup and activate all bot types</li>
+                </ol>
+                <p style="text-align: left; margin-top: 15px; font-style: italic;">
+                    Note: Clients will only appear here after completing all setup steps.
+                </p>
+            </div>
+        </div>
+        {% endif %}
+        
+        {% if clients %}
+        <div class="add-client-section">
+            <a href="/clients/add" class="btn btn-primary btn-large">+ Add New Client</a>
         </div>
         {% endif %}
     </div>
 
     <script>
-        // Simple search functionality
-        document.getElementById('searchInput').addEventListener('input', function(e) {
-            const searchTerm = e.target.value.toLowerCase();
+        // Search functionality
+        document.getElementById('searchInput').addEventListener('input', function() {
+            const searchTerm = this.value.toLowerCase();
             const clientCards = document.querySelectorAll('.client-card');
             
             clientCards.forEach(card => {
-                const clientName = card.querySelector('.client-name').textContent.toLowerCase();
-                const clientType = card.querySelector('.client-type').textContent.toLowerCase();
-                
-                if (clientName.includes(searchTerm) || clientType.includes(searchTerm)) {
+                const clientName = card.getAttribute('data-client-name');
+                if (clientName.includes(searchTerm)) {
                     card.style.display = 'block';
                 } else {
                     card.style.display = 'none';
                 }
             });
+        });
+        
+        // Add some sample interaction
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Client dashboard loaded successfully');
+            
+            // Show welcome message for empty state
+            {% if not clients %}
+            setTimeout(() => {
+                if (confirm('Ready to add your first client? Click OK to get started.')) {
+                    window.location.href = '/clients/add';
+                }
+            }, 1000);
+            {% endif %}
         });
     </script>
 </body>
