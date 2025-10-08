@@ -363,11 +363,46 @@
 
     <script>
         let purchasedNumber = null;
-        
-        // Show demo notice on page load
+        let clientId = null;
+
+        // Get client_id from URL when page loads
         document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('demoNotice').style.display = 'block';
+            
+            // Extract client_id from current URL
+            extractClientIdFromUrl();
         });
+
+        function extractClientIdFromUrl() {
+            const currentPath = window.location.pathname;
+            console.log('Current URL path:', currentPath);
+            
+            // Try different URL patterns to extract client_id
+            if (currentPath.includes('/clients/') && currentPath.includes('/numbers')) {
+                // Pattern: /clients/123/numbers
+                const match = currentPath.match(/\/clients\/([^\/]+)\/numbers/);
+                if (match && match[1]) {
+                    clientId = match[1];
+                    console.log('Extracted client ID:', clientId);
+                }
+            } else if (currentPath === '/buy_number') {
+                // If we're at /buy_number, try to get from session storage
+                clientId = sessionStorage.getItem('current_client_id');
+                if (clientId) {
+                    console.log('Got client ID from session storage:', clientId);
+                }
+            }
+            
+            if (!clientId) {
+                console.warn('Could not extract client ID from URL:', currentPath);
+                // Try to get from the previous page's URL stored in session
+                const previousClientId = sessionStorage.getItem('current_client_id');
+                if (previousClientId) {
+                    clientId = previousClientId;
+                    console.log('Using client ID from session storage:', clientId);
+                }
+            }
+        }
         
         function generatePhoneNumber() {
             const countryCode = document.getElementById('country_code').value;
@@ -412,38 +447,61 @@
         }
         
         function skipNumberPurchase() {
-            // Get client_id from the current URL
-            const currentPath = window.location.pathname;
-            const pathParts = currentPath.split('/');
-            const clientId = pathParts[2]; // Extract client_id from /clients/{client_id}/numbers
+            if (!clientId) {
+                extractClientIdFromUrl();
+            }
+            
+            if (!clientId) {
+                alert('Error: Cannot find client information. Please go back to clients page and try again.');
+                window.location.href = '/clients';
+                return;
+            }
             
             if (confirm('Skip phone number? Client will only be able to use web chatbot.')) {
-                // Use the existing skip endpoint which redirects to /clients/{client_id}/bots
+                console.log('Redirecting to skip endpoint for client:', clientId);
                 window.location.href = `/clients/${clientId}/numbers/skip`;
             }
         }
         
         function goToNextStep() {
-            // Get client_id from the current URL
-            const currentPath = window.location.pathname;
-            const pathParts = currentPath.split('/');
-            const clientId = pathParts[2]; // Extract client_id from /clients/{client_id}/numbers
+            if (!clientId) {
+                extractClientIdFromUrl();
+            }
+            
+            if (!clientId) {
+                alert('Error: Cannot find client information. Please go back to clients page and try again.');
+                window.location.href = '/clients';
+                return;
+            }
+            
+            console.log('Proceeding to next step for client:', clientId);
+            
+            // Save client_id to session storage for redundancy
+            sessionStorage.setItem('current_client_id', clientId);
             
             // Use the existing skip endpoint which redirects to /clients/{client_id}/bots
             window.location.href = `/clients/${clientId}/numbers/skip`;
         }
         
         function goBack() {
-            // Get client_id from the current URL
-            const currentPath = window.location.pathname;
-            const pathParts = currentPath.split('/');
-            const clientId = pathParts[2];
+            if (!clientId) {
+                extractClientIdFromUrl();
+            }
             
+            if (!clientId) {
+                alert('Error: Cannot find client information. Please go back to clients page.');
+                window.location.href = '/clients';
+                return;
+            }
+            
+            console.log('Going back to documents for client:', clientId);
             window.location.href = `/clients/${clientId}/documents`;
         }
         
         function cancelSetup() {
             if (confirm('Cancel client setup? All progress will be lost.')) {
+                // Clear session storage
+                sessionStorage.removeItem('current_client_id');
                 window.location.href = '/clients';
             }
         }
