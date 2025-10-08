@@ -412,34 +412,59 @@
         }
         
         function skipNumberPurchase() {
+            // Get client_id from the current URL
+            const currentPath = window.location.pathname;
+            const pathParts = currentPath.split('/');
+            const clientId = pathParts[2]; // Extract client_id from /clients/{client_id}/numbers
+            
             if (confirm('Skip phone number? Client will only be able to use web chatbot.')) {
-                window.location.href = '/clients_bots';
+                // Use the existing skip endpoint which redirects to /clients/{client_id}/bots
+                window.location.href = `/clients/${clientId}/numbers/skip`;
             }
         }
         
         function goToNextStep() {
+            // Get client_id from the current URL
+            const currentPath = window.location.pathname;
+            const pathParts = currentPath.split('/');
+            const clientId = pathParts[2]; // Extract client_id from /clients/{client_id}/numbers
+            
             // Save the number to backend (optional for demo)
             if (purchasedNumber) {
-                fetch('/api/numbers/save', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        phone_number: purchasedNumber,
-                        country_code: document.getElementById('country_code').value,
-                        is_real_number: false
-                    })
-                }).catch(error => {
-                    console.error('Error saving number:', error);
-                });
+                // Create a form to submit the number data
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = `/clients/${clientId}/numbers`;
+                
+                // Add hidden inputs for form data
+                const countryCodeInput = document.createElement('input');
+                countryCodeInput.type = 'hidden';
+                countryCodeInput.name = 'country_code';
+                countryCodeInput.value = document.getElementById('country_code').value;
+                form.appendChild(countryCodeInput);
+                
+                // Add area_code if needed (empty for demo)
+                const areaCodeInput = document.createElement('input');
+                areaCodeInput.type = 'hidden';
+                areaCodeInput.name = 'area_code';
+                areaCodeInput.value = '';
+                form.appendChild(areaCodeInput);
+                
+                document.body.appendChild(form);
+                form.submit();
+            } else {
+                // If no number was generated, use skip endpoint
+                window.location.href = `/clients/${clientId}/numbers/skip`;
             }
-            
-            window.location.href = '/clients_bots';
         }
         
         function goBack() {
-            window.location.href = '/upload_documents';
+            // Get client_id from the current URL
+            const currentPath = window.location.pathname;
+            const pathParts = currentPath.split('/');
+            const clientId = pathParts[2];
+            
+            window.location.href = `/clients/${clientId}/documents`;
         }
         
         function cancelSetup() {
