@@ -15,13 +15,22 @@ templates = Jinja2Templates(directory="templates")
 @router.get("/", response_class=HTMLResponse)
 async def list_clients(request: Request, db: Session = Depends(get_db)):
     """
-    Page 1: Dashboard - Display all existing clients with +Add New Client button
+    Page 1: Dashboard - Display only COMPLETED clients (with phone numbers)
     """
     try:
+        # Get all clients
         clients = ClientService.get_all_clients(db)
+        
+        # Filter only completed clients (those that have phone numbers)
+        completed_clients = []
+        for client in clients:
+            phone_number = ClientService.get_phone_number(db, client.id)
+            if phone_number:
+                completed_clients.append(client)
+        
         return templates.TemplateResponse("clients.html", {
             "request": request,
-            "clients": clients
+            "clients": completed_clients  # Only show completed ones
         })
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving clients: {str(e)}")
@@ -80,11 +89,21 @@ async def client_detail(
 ):
     """
     Client detail page with tabs for Bots, Data, and Analytics
+    Only accessible for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            # If client is incomplete, redirect to document upload to continue setup
+            return RedirectResponse(
+                url=f"/clients/{client_id}/documents",
+                status_code=303
+            )
         
         # Get additional data based on the selected tab
         context = {
@@ -101,7 +120,6 @@ async def client_detail(
         elif tab == "bots":
             # Get subscriptions and phone number for bots tab
             subscriptions = ClientService.get_client_subscriptions(db, client_id)
-            phone_number = ClientService.get_client_phone_number(db, client_id)
             whatsapp_profile = ClientService.get_whatsapp_profile(db, client_id)
             
             context["subscriptions"] = subscriptions
@@ -124,14 +142,21 @@ async def client_bots(
 ):
     """
     Page 5: Bot configuration page after number purchase/skip
+    Only accessible for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
-        # Get phone number if exists
+        # Check if client is completed (has phone number)
         phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            # If client is incomplete, redirect to document upload to continue setup
+            return RedirectResponse(
+                url=f"/clients/{client_id}/documents",
+                status_code=303
+            )
         
         # Get existing subscriptions
         subscriptions = ClientService.get_client_subscriptions(db, client_id)
@@ -165,7 +190,6 @@ async def client_bots(
             }
         }
         
-        # FIXED: Changed template name from "client_bots.html" to "clients_bots.html"
         return templates.TemplateResponse("clients_bots.html", {
             "request": request,
             "client": client,
@@ -187,11 +211,17 @@ async def edit_client_form(
 ):
     """
     Show form to edit client information
+    Only accessible for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=404, detail="Client setup not completed")
         
         return templates.TemplateResponse("edit_client.html", {
             "request": request,
@@ -213,11 +243,17 @@ async def update_client(
 ):
     """
     Update client information
+    Only allowed for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="Cannot edit incomplete client")
         
         # Validate input
         if not business_name.strip():
@@ -276,11 +312,17 @@ async def update_client_status(
 ):
     """
     Update client status (active/inactive)
+    Only allowed for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="Cannot update status of incomplete client")
         
         if status not in ["active", "inactive"]:
             raise HTTPException(status_code=400, detail="Invalid status")
@@ -309,11 +351,17 @@ async def activate_bot(
 ):
     """
     Activate a bot subscription for a client
+    Only allowed for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="Cannot activate bot for incomplete client")
         
         if bot_type not in ["whatsapp", "voice", "web"]:
             raise HTTPException(status_code=400, detail="Invalid bot type")
@@ -346,11 +394,17 @@ async def deactivate_bot(
 ):
     """
     Deactivate a bot subscription
+    Only allowed for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="Cannot deactivate bot for incomplete client")
         
         if bot_type not in ["whatsapp", "voice", "web"]:
             raise HTTPException(status_code=400, detail="Invalid bot type")
@@ -379,11 +433,17 @@ async def update_whatsapp_profile(
 ):
     """
     Update WhatsApp business profile
+    Only allowed for completed clients
     """
     try:
         client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Check if client is completed (has phone number)
+        phone_number = ClientService.get_phone_number(db, client_id)
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="Cannot update WhatsApp profile for incomplete client")
         
         # Update WhatsApp profile
         whatsapp_profile = ClientService.update_whatsapp_profile(
