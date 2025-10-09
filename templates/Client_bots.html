@@ -3,556 +3,324 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Configuration - OwnBot</title>
+    <title>Bot Configuration - {{ client.business_name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        :root {
-            --primary: #4361ee;
-            --secondary: #3a0ca3;
-            --success: #4cc9f0;
-            --danger: #f72585;
-            --warning: #fca311;
-            --light: #f8f9fa;
-            --dark: #212529;
-            --gray: #6c757d;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        
-        body {
-            background-color: #f5f7fb;
-            color: var(--dark);
-            line-height: 1.6;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-            padding: 20px;
-        }
-        
-        h1 {
-            color: var(--primary);
-            font-weight: 700;
-            margin-bottom: 10px;
-        }
-        
-        .subtitle {
-            color: var(--gray);
-            font-size: 16px;
-        }
-        
-        .client-info {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        
-        .bots-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 25px;
-            margin-bottom: 30px;
-        }
-        
-        .bot-card {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            border: 2px solid #e0e0e0;
-        }
-        
-        .bot-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #f0f0f0;
-        }
-        
-        .bot-icon {
-            width: 50px;
-            height: 50px;
-            background: var(--primary);
+        .bot-section {
+            border: 1px solid #ddd;
             border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 15px;
-            color: white;
-            font-size: 20px;
-        }
-        
-        .bot-title {
-            font-size: 20px;
-            font-weight: 700;
-            color: var(--dark);
-        }
-        
-        .bot-subtitle {
-            color: var(--gray);
-            font-size: 14px;
-        }
-        
-        .section {
-            margin-bottom: 20px;
-        }
-        
-        .section-title {
-            font-weight: 600;
-            margin-bottom: 10px;
-            color: var(--dark);
-            font-size: 16px;
-        }
-        
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            padding: 8px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        
-        .info-label {
-            color: var(--gray);
-            font-weight: 500;
-        }
-        
-        .info-value {
-            color: var(--dark);
-            font-weight: 600;
-        }
-        
-        .phone-number {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--primary);
-            text-align: center;
-            padding: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
             background: #f8f9fa;
-            border-radius: 8px;
-            margin: 10px 0;
         }
-        
         .subscription-buttons {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            display: flex;
             gap: 10px;
             margin: 15px 0;
         }
-        
-        .month-btn {
-            padding: 10px;
-            border: 2px solid #e0e0e0;
-            background: white;
-            border-radius: 6px;
-            cursor: pointer;
-            text-align: center;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-        
-        .month-btn:hover {
-            border-color: var(--primary);
-            background: #f8f9ff;
-        }
-        
-        .month-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .status-badge {
-            display: inline-block;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        
         .status-active {
-            background: #d4edda;
-            color: #155724;
+            color: green;
+            font-weight: bold;
         }
-        
         .status-inactive {
-            background: #f8d7da;
-            color: #721c24;
+            color: red;
+            font-weight: bold;
         }
-        
-        .btn {
-            padding: 12px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-align: center;
-            display: inline-block;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--secondary);
-        }
-        
-        .btn-secondary {
-            background: #6c757d;
-            color: white;
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        
-        .embed-code {
-            background: #2d3748;
-            color: #e2e8f0;
-            padding: 15px;
-            border-radius: 6px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            margin: 10px 0;
-            overflow-x: auto;
-        }
-        
-        .copy-btn {
-            background: #4a5568;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-top: 5px;
-        }
-        
-        .copy-btn:hover {
-            background: #2d3748;
-        }
-        
-        .navigation {
-            text-align: center;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 2px solid #e0e0e0;
-        }
-        
-        .nav-btn {
-            padding: 12px 30px;
-            margin: 0 10px;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
-        }
-        
-        .nav-btn-secondary {
+        .profile-section {
             background: white;
-            color: var(--gray);
-            border: 2px solid #e0e0e0;
-        }
-        
-        .nav-btn-primary {
-            background: var(--primary);
-            color: white;
-            border: 2px solid var(--primary);
-        }
-        
-        .demo-notice {
-            background: #fff3cd;
-            color: #856404;
             padding: 15px;
-            border-radius: 6px;
-            margin: 20px 0;
-            text-align: center;
+            border-radius: 5px;
+            margin: 15px 0;
         }
-        
-        @media (max-width: 768px) {
-            .bots-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .subscription-buttons {
-                grid-template-columns: repeat(2, 1fr);
-            }
+        .embed-code {
+            background: #2d2d2d;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>Bot Configuration</h1>
-            <p class="subtitle">Setup WhatsApp, Voice Call, and Web Chat bots for {{ client.business_name }}</p>
+    <div class="container mt-4">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1>Bot Configuration - {{ client.business_name }}</h1>
+            <a href="/clients" class="btn btn-secondary">← Back to Clients</a>
         </div>
-        
-        <div class="demo-notice">
-            <strong>💡 Demo Mode:</strong> All bot features are simulated for testing. Real functionality available with full implementation.
-        </div>
-        
-        <div class="client-info">
-            <h3>Client: {{ client.business_name }}</h3>
-            <p>Business Type: {{ client.business_type }}</p>
-            {% if phone_number %}
-            <p>Phone Number: <strong>{{ phone_number.number }}</strong></p>
-            {% endif %}
-        </div>
-        
-        <div class="bots-grid">
-            <!-- WhatsApp Bot Card -->
-            <div class="bot-card">
-                <div class="bot-header">
-                    <div class="bot-icon">📱</div>
-                    <div>
-                        <div class="bot-title">WhatsApp Bot</div>
-                        <div class="bot-subtitle">
-                            {% if phone_number %}
-                            Uses: {{ phone_number.number }}
-                            {% else %}
-                            No phone number assigned
-                            {% endif %}
+
+        <!-- WhatsApp Bot Section -->
+        <div class="bot-section">
+            <h3>📱 WhatsApp Bot</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <p><strong>Phone Number:</strong> {{ phone_number if phone_number != "Not purchased" else "Not purchased" }}</p>
+                    
+                    <!-- Business Profile -->
+                    <div class="profile-section">
+                        <h5>Business Profile</h5>
+                        <div class="mb-2">
+                            <strong>Name:</strong> 
+                            <span id="whatsapp-business-name">{{ client.business_name }}</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-business-name')">Edit</button>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Address:</strong> 
+                            <span id="whatsapp-address">123 Main Street</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-address')">Edit</button>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Logo:</strong> 
+                            <span id="whatsapp-logo">suresh-logo.png</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="uploadLogo()">Change</button>
                         </div>
                     </div>
                 </div>
                 
-                <div class="section">
-                    <div class="section-title">Business Profile</div>
-                    <div class="info-row">
-                        <span class="info-label">Business Name:</span>
-                        <span class="info-value">{{ client.business_name }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Address:</span>
-                        <span class="info-value">123 Main Street</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Logo:</span>
-                        <span class="info-value">default-logo.png</span>
-                    </div>
-                    <button class="btn btn-secondary" style="width: 100%; margin-top: 10px;">
-                        Edit Profile
-                    </button>
-                </div>
-                
-                <div class="section">
-                    <div class="section-title">Subscription</div>
-                    <div class="info-row">
-                        <span class="info-label">Start Date:</span>
-                        <span class="info-value">--/--/----</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Expiry Date:</span>
-                        <span class="info-value">--/--/----</span>
+                <div class="col-md-6">
+                    <!-- Subscription Section -->
+                    <div class="profile-section">
+                        <h5>Subscription</h5>
+                        <div class="mb-2">
+                            <strong>Start Date:</strong> <span id="whatsapp-start-date">--/--/----</span>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Expiry Date:</strong> <span id="whatsapp-expiry-date">--/--/----</span>
+                        </div>
+                        
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 12)">12 Months</button>
+                        </div>
                     </div>
                     
-                    <div class="subscription-buttons">
-                        <button class="month-btn">1 Month</button>
-                        <button class="month-btn">2 Months</button>
-                        <button class="month-btn">3 Months</button>
-                        <button class="month-btn">6 Months</button>
-                        <button class="month-btn">12 Months</button>
-                    </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Status:</span>
-                        <span class="status-badge status-inactive">INACTIVE</span>
-                    </div>
-                    
-                    <button class="btn btn-primary" style="width: 100%; margin-top: 15px;">
-                        Activate WhatsApp Bot
-                    </button>
-                </div>
-            </div>
-            
-            <!-- Voice Call Bot Card -->
-            <div class="bot-card">
-                <div class="bot-header">
-                    <div class="bot-icon">📞</div>
-                    <div>
-                        <div class="bot-title">Voice Call Bot</div>
-                        <div class="bot-subtitle">
-                            {% if phone_number %}
-                            Uses: {{ phone_number.number }}
-                            {% else %}
-                            No phone number assigned
-                            {% endif %}
+                    <!-- Status and Actions -->
+                    <div class="mt-3">
+                        <strong>Status:</strong> 
+                        <span id="whatsapp-status" class="status-inactive">INACTIVE</span>
+                        <div class="mt-2">
+                            <button id="whatsapp-activate-btn" class="btn btn-success" onclick="toggleBot('whatsapp')">Activate WhatsApp Bot</button>
+                            <button id="whatsapp-deactivate-btn" class="btn btn-danger" onclick="toggleBot('whatsapp')" style="display: none;">Deactivate WhatsApp Bot</button>
                         </div>
                     </div>
                 </div>
-                
-                <div class="section">
-                    <div class="section-title">Phone Number</div>
-                    {% if phone_number %}
-                    <div class="phone-number">{{ phone_number.number }}</div>
-                    {% else %}
-                    <div style="text-align: center; color: var(--gray); padding: 20px;">
-                        No phone number purchased
-                    </div>
-                    {% endif %}
-                </div>
-                
-                <div class="section">
-                    <div class="section-title">Subscription</div>
-                    <div class="info-row">
-                        <span class="info-label">Start Date:</span>
-                        <span class="info-value">--/--/----</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Expiry Date:</span>
-                        <span class="info-value">--/--/----</span>
-                    </div>
-                    
-                    <div class="subscription-buttons">
-                        <button class="month-btn">1 Month</button>
-                        <button class="month-btn">2 Months</button>
-                        <button class="month-btn">3 Months</button>
-                        <button class="month-btn">6 Months</button>
-                        <button class="month-btn">12 Months</button>
-                    </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Status:</span>
-                        <span class="status-badge status-inactive">INACTIVE</span>
-                    </div>
-                    
-                    <button class="btn btn-primary" style="width: 100%; margin-top: 15px;">
-                        Activate Voice Bot
-                    </button>
-                </div>
             </div>
-            
-            <!-- Web Chat Bot Card -->
-            <div class="bot-card">
-                <div class="bot-header">
-                    <div class="bot-icon">🌐</div>
-                    <div>
-                        <div class="bot-title">Web Chat Bot</div>
-                        <div class="bot-subtitle">Embeddable chatbot for your website</div>
-                    </div>
+        </div>
+
+        <!-- Voice Call Bot Section -->
+        <div class="bot-section">
+            <h3>📞 Voice Call Bot</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <p><strong>Phone Number:</strong> {{ phone_number if phone_number != "Not purchased" else "Not purchased" }}</p>
                 </div>
                 
-                <div class="section">
-                    <div class="section-title">Your Chatbot Link</div>
-                    <div class="info-value" style="word-break: break-all; margin: 10px 0;">
-                        {{ chatbot_url }}
-                    </div>
-                </div>
-                
-                <div class="section">
-                    <div class="section-title">Embed Code</div>
-                    <div class="embed-code">
-                        &lt;script src="/static/js/chat-widget.js" data-client-id="{{ client.id }}"&gt;&lt;/script&gt;
-                    </div>
-                    <button class="copy-btn" onclick="copyEmbedCode()">
-                        Copy Embed Code
-                    </button>
-                </div>
-                
-                <div class="section">
-                    <div class="section-title">Subscription</div>
-                    <div class="info-row">
-                        <span class="info-label">Start Date:</span>
-                        <span class="info-value">--/--/----</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Expiry Date:</span>
-                        <span class="info-value">--/--/----</span>
+                <div class="col-md-6">
+                    <!-- Subscription Section -->
+                    <div class="profile-section">
+                        <h5>Subscription</h5>
+                        <div class="mb-2">
+                            <strong>Start Date:</strong> <span id="voice-start-date">--/--/----</span>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Expiry Date:</strong> <span id="voice-expiry-date">--/--/----</span>
+                        </div>
+                        
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 12)">12 Months</button>
+                        </div>
                     </div>
                     
-                    <div class="subscription-buttons">
-                        <button class="month-btn">1 Month</button>
-                        <button class="month-btn">2 Months</button>
-                        <button class="month-btn">3 Months</button>
-                        <button class="month-btn">6 Months</button>
-                        <button class="month-btn">12 Months</button>
+                    <!-- Status and Actions -->
+                    <div class="mt-3">
+                        <strong>Status:</strong> 
+                        <span id="voice-status" class="status-inactive">INACTIVE</span>
+                        <div class="mt-2">
+                            <button id="voice-activate-btn" class="btn btn-success" onclick="toggleBot('voice')">Activate Voice Bot</button>
+                            <button id="voice-deactivate-btn" class="btn btn-danger" onclick="toggleBot('voice')" style="display: none;">Deactivate Voice Bot</button>
+                        </div>
                     </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Status:</span>
-                        <span class="status-badge status-inactive">INACTIVE</span>
-                    </div>
-                    
-                    <button class="btn btn-primary" style="width: 100%; margin-top: 15px;">
-                        Activate Web Chat Bot
-                    </button>
                 </div>
             </div>
         </div>
-        
-        <div class="navigation">
-            <a href="/clients" class="nav-btn nav-btn-secondary">← Back to Clients</a>
-            <a href="/clients/{{ client.id }}" class="nav-btn nav-btn-primary">View Client Dashboard</a>
+
+        <!-- Web Chat Bot Section -->
+        <div class="bot-section">
+            <h3>💬 Web Chat Bot</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="mb-3">
+                        <strong>Your Chatbot Link:</strong>
+                        <div class="input-group mt-1">
+                            <input type="text" class="form-control" id="chatbot-url" value="{{ chatbot_url }}" readonly>
+                            <button class="btn btn-outline-secondary" onclick="copyToClipboard('chatbot-url')">Copy</button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <strong>Embed Code:</strong>
+                        <div class="embed-code mt-1" id="embed-code">
+{{ embed_code }}
+                        </div>
+                        <button class="btn btn-outline-primary mt-2" onclick="copyToClipboard('embed-code')">Copy Embed Code</button>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <!-- Subscription Section -->
+                    <div class="profile-section">
+                        <h5>Subscription</h5>
+                        <div class="mb-2">
+                            <strong>Start Date:</strong> <span id="web-start-date">--/--/----</span>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Expiry Date:</strong> <span id="web-expiry-date">--/--/----</span>
+                        </div>
+                        
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 12)">12 Months</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Status and Actions -->
+                    <div class="mt-3">
+                        <strong>Status:</strong> 
+                        <span id="web-status" class="status-inactive">INACTIVE</span>
+                        <div class="mt-2">
+                            <button id="web-activate-btn" class="btn btn-success" onclick="toggleBot('web')">Activate Web Chat</button>
+                            <button id="web-deactivate-btn" class="btn btn-danger" onclick="toggleBot('web')" style="display: none;">Deactivate Web Chat</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <div class="d-flex justify-content-between mt-4">
+            <a href="/skip_number" class="btn btn-secondary">← Previous</a>
+            <a href="/clients" class="btn btn-primary">Finish Setup</a>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        function copyEmbedCode() {
-            const embedCode = document.querySelector('.embed-code').textContent;
-            navigator.clipboard.writeText(embedCode).then(function() {
-                alert('Embed code copied to clipboard!');
+        // Edit field functionality
+        function editField(fieldId) {
+            const field = document.getElementById(fieldId);
+            const currentValue = field.textContent;
+            const newValue = prompt(`Edit ${fieldId.replace('-', ' ')}:`, currentValue);
+            if (newValue !== null) {
+                field.textContent = newValue;
+                // Here you would typically send this to your backend
+                console.log(`Updated ${fieldId} to:`, newValue);
+            }
+        }
+
+        // Upload logo functionality
+        function uploadLogo() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    document.getElementById('whatsapp-logo').textContent = file.name;
+                    // Here you would typically upload the file to your backend
+                    console.log('Logo file selected:', file.name);
+                }
+            };
+            input.click();
+        }
+
+        // Copy to clipboard functionality
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            let text = element.value || element.textContent;
+            
+            navigator.clipboard.writeText(text).then(function() {
+                alert('Copied to clipboard!');
             }, function(err) {
                 console.error('Could not copy text: ', err);
             });
         }
-        
-        // Add active state to month buttons
-        document.querySelectorAll('.month-btn').forEach(button => {
-            button.addEventListener('click', function() {
-                // Remove active class from all buttons in the same subscription section
-                const parentSection = this.closest('.section');
-                parentSection.querySelectorAll('.month-btn').forEach(btn => {
-                    btn.classList.remove('active');
-                });
+
+        // Add months subscription functionality
+        function addMonths(botType, months) {
+            if (confirm(`Add ${months} month(s) to ${botType} bot?`)) {
+                // Here you would call your backend API to add months
+                console.log(`Adding ${months} months to ${botType} bot`);
                 
-                // Add active class to clicked button
-                this.classList.add('active');
-            });
-        });
-        
-        // Simulate bot activation
-        document.querySelectorAll('.btn-primary').forEach(button => {
-            button.addEventListener('click', function() {
-                const botType = this.textContent.includes('WhatsApp') ? 'WhatsApp' : 
-                              this.textContent.includes('Voice') ? 'Voice' : 'Web Chat';
+                // Update dates (this is just frontend simulation - real data should come from backend)
+                const today = new Date();
+                const startDateElement = document.getElementById(`${botType}-start-date`);
+                const expiryDateElement = document.getElementById(`${botType}-expiry-date`);
                 
-                if (confirm(`Activate ${botType} Bot? This will start the subscription.`)) {
-                    // Find the status badge in the same card
-                    const card = this.closest('.bot-card');
-                    const statusBadge = card.querySelector('.status-badge');
-                    
-                    // Update status
-                    statusBadge.textContent = 'ACTIVE';
-                    statusBadge.className = 'status-badge status-active';
-                    
-                    // Update button text
-                    this.textContent = 'Deactivate Bot';
-                    this.classList.remove('btn-primary');
-                    this.classList.add('btn-secondary');
-                    
-                    alert(`${botType} Bot activated successfully!`);
+                // If no start date set, set it to today
+                if (startDateElement.textContent === '--/--/----') {
+                    startDateElement.textContent = today.toLocaleDateString();
                 }
-            });
+                
+                // Calculate new expiry date
+                const currentExpiry = expiryDateElement.textContent === '--/--/----' ? today : new Date(expiryDateElement.textContent);
+                const newExpiry = new Date(currentExpiry);
+                newExpiry.setMonth(newExpiry.getMonth() + months);
+                
+                expiryDateElement.textContent = newExpiry.toLocaleDateString();
+                
+                alert(`${months} month(s) added to ${botType} bot!`);
+            }
+        }
+
+        // Toggle bot activation
+        function toggleBot(botType) {
+            const statusElement = document.getElementById(`${botType}-status`);
+            const activateBtn = document.getElementById(`${botType}-activate-btn`);
+            const deactivateBtn = document.getElementById(`${botType}-deactivate-btn`);
+            
+            if (statusElement.classList.contains('status-inactive')) {
+                // Check if subscription is active
+                const expiryDate = document.getElementById(`${botType}-expiry-date`).textContent;
+                if (expiryDate === '--/--/----') {
+                    alert('Please add subscription months first!');
+                    return;
+                }
+                
+                // Activate bot
+                statusElement.textContent = 'ACTIVE';
+                statusElement.classList.remove('status-inactive');
+                statusElement.classList.add('status-active');
+                activateBtn.style.display = 'none';
+                deactivateBtn.style.display = 'inline-block';
+                
+                console.log(`${botType} bot activated`);
+            } else {
+                // Deactivate bot
+                statusElement.textContent = 'INACTIVE';
+                statusElement.classList.remove('status-active');
+                statusElement.classList.add('status-inactive');
+                activateBtn.style.display = 'inline-block';
+                deactivateBtn.style.display = 'none';
+                
+                console.log(`${botType} bot deactivated`);
+            }
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Bot configuration page loaded for client:', '{{ client.business_name }}');
         });
     </script>
 </body>
