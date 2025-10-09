@@ -1,5 +1,5 @@
-# main.py - FIXED SESSION & CLIENT STATUS
-from fastapi import FastAPI, Request, Form, UploadFile, File
+# main.py - Fixed version with proper template flow
+from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -12,8 +12,7 @@ import random
 import shutil
 from typing import Dict, List
 import json
-from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
+import pickle
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +20,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OwnBot", version="1.0.0")
 
-# Create necessary directories for Render.com
-os.makedirs("app/static", exist_ok=True)
+# Create necessary directories
+os.makedirs("static", exist_ok=True)
 os.makedirs("uploads", exist_ok=True)
+os.makedirs("data", exist_ok=True)
 os.makedirs("templates", exist_ok=True)
+
+# Templates
+templates = Jinja2Templates(directory="templates")
 
 # CORS
 app.add_middleware(
@@ -36,56 +39,49 @@ app.add_middleware(
 )
 
 # Static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Templates
-templates = Jinja2Templates(directory="templates")
+# Persistent storage files
+CLIENTS_FILE = "data/clients.pkl"
+BOTS_FILE = "data/bots.pkl"
+SESSIONS_FILE = "data/sessions.pkl"
+PHONE_NUMBERS_FILE = "data/phone_numbers.pkl"
 
-# Storage
-clients = {}
+def load_data(filename, default=None):
+    """Load data from pickle file"""
+    try:
+        if os.path.exists(filename):
+            with open(filename, 'rb') as f:
+                return pickle.load(f)
+    except Exception as e:
+        logger.error(f"Error loading {filename}: {e}")
+    return default if default is not None else {}
+
+def save_data(filename, data):
+    """Save data to pickle file"""
+    try:
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        with open(filename, 'wb') as f:
+            pickle.dump(data, f)
+    except Exception as e:
+        logger.error(f"Error saving {filename}: {e}")
+
+# Load persistent data
+clients = load_data(CLIENTS_FILE, {})
+bots = load_data(BOTS_FILE, {})
+sessions = load_data(SESSIONS_FILE, {})
+phone_numbers = load_data(PHONE_NUMBERS_FILE, {})
+
+# Other storage
 documents = {}
-phone_numbers = {}
-subscriptions = {}
-sessions = {}
 knowledge_bases = {}
-twilio_numbers = {}
-bots = {}
-
-# Knowledge Base Management
-class KnowledgeBase:
-    def __init__(self, client_id: str, client_name: str):
-        self.client_id = client_id
-        self.client_name = client_name
-        self.created_at = datetime.now().isoformat()
-        self.documents = []
-        self.status = "inactive"  # Start as inactive
-        
-    def add_document(self, filename: str, file_path: str):
-        document_info = {
-            "filename": filename,
-            "file_path": file_path,
-            "uploaded_at": datetime.now().isoformat(),
-            "processed": False
-        }
-        self.documents.append(document_info)
-        return document_info
-    
-    def get_info(self):
-        return {
-            "client_id": self.client_id,
-            "client_name": self.client_name,
-            "created_at": self.created_at,
-            "document_count": len(self.documents),
-            "status": self.status,
-            "documents": self.documents
-        }
 
 class Bot:
     def __init__(self, client_id: str, client_name: str):
         self.client_id = client_id
         self.client_name = client_name
         self.created_at = datetime.now().isoformat()
-        self.status = "inactive"  # Start as inactive
+        self.status = "inactive"
         self.channels = {
             "whatsapp": {"active": False, "number": None},
             "website": {"active": False, "widget_id": f"widget_{uuid.uuid4().hex[:8]}"},
@@ -101,10 +97,9 @@ class Bot:
         self.channels[channel]["active"] = True
         for key, value in kwargs.items():
             self.channels[channel][key] = value
-        
-        # Activate bot if any channel is active
-        if any(channel["active"] for channel in self.channels.values()):
-            self.status = "active"
+        # Update bot status
+        active_channels = sum(1 for channel in self.channels.values() if channel["active"])
+        self.status = "active" if active_channels > 0 else "inactive"
     
     def get_info(self):
         active_channels = sum(1 for channel in self.channels.values() if channel["active"])
@@ -113,122 +108,36 @@ class Bot:
             "client_name": self.client_name,
             "created_at": self.created_at,
             "status": self.status,
-            "channels": self.channels,
             "active_channels": active_channels,
             "total_channels": len(self.channels),
+            "channels": self.channels,
             "config": self.config
         }
 
-# Helper function to get client from session
-def get_client_from_session(request: Request):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        logger.warning("No session ID in cookie")
-        return None, None
-    
-    client_id = sessions.get(session_id)
-    if not client_id:
-        logger.warning(f"No client ID found for session: {session_id}")
-        return None, None
-    
-    client = clients.get(client_id)
-    if not client:
-        logger.warning(f"No client found for ID: {client_id}")
-        return None, None
-    
-    return client, client_id
-
-# ========== ROUTES ==========
-
-@app.get("/", response_class=HTMLResponse)
+# Root endpoint
+@app.get("/")
 async def dashboard(request: Request):
-    # Only count completed clients (have phone or completed setup)
-    completed_clients = [c for c in clients.values() if c.get("id") in phone_numbers or c.get("setup_completed")]
+    total_clients = len(clients)
     active_bots = len([bot for bot in bots.values() if bot.status == "active"])
     
-    client_data = []
-    for client in clients.values():
-        client_info = client.copy()
-        client_id = client["id"]
-        
-        # Only show as active if setup is completed
-        client_info["is_active"] = client.get("setup_completed", False)
-        client_info["has_knowledge_base"] = client_id in knowledge_bases and knowledge_bases[client_id].documents
-        client_info["has_bot"] = client_id in bots
-        client_info["has_phone"] = client_id in phone_numbers
-        client_info["setup_completed"] = client.get("setup_completed", False)
-        
-        if client_id in knowledge_bases:
-            kb = knowledge_bases[client_id]
-            client_info["document_count"] = len(kb.documents)
-            client_info["kb_status"] = kb.status
-        else:
-            client_info["document_count"] = 0
-            client_info["kb_status"] = "not_created"
-            
-        if client_id in bots:
-            bot = bots[client_id]
-            bot_info = bot.get_info()
-            client_info["bot_status"] = bot.status
-            client_info["active_channels"] = bot_info["active_channels"]
-            client_info["total_channels"] = bot_info["total_channels"]
-        else:
-            client_info["bot_status"] = "not_created"
-            client_info["active_channels"] = 0
-            client_info["total_channels"] = 3
-            
-        client_data.append(client_info)
-    
-    return templates.TemplateResponse("clients.html", {
-        "request": request, 
-        "clients": client_data,
-        "total_clients": len(clients),
-        "completed_clients": len(completed_clients),
-        "active_bots": active_bots,
-        "is_dashboard": True
+    return templates.TemplateResponse("base.html", {
+        "request": request,
+        "total_clients": total_clients,
+        "active_clients": active_bots,
+        "messages_today": 0,
+        "clients": clients.values()
     })
 
-@app.get("/clients", response_class=HTMLResponse)
+# Clients Management
+@app.get("/clients")
 async def clients_page(request: Request):
-    client_data = []
-    for client in clients.values():
-        client_info = client.copy()
-        client_id = client["id"]
-        
-        client_info["is_active"] = client.get("setup_completed", False)
-        client_info["has_knowledge_base"] = client_id in knowledge_bases and knowledge_bases[client_id].documents
-        client_info["has_bot"] = client_id in bots
-        client_info["has_phone"] = client_id in phone_numbers
-        client_info["setup_completed"] = client.get("setup_completed", False)
-        
-        if client_id in knowledge_bases:
-            kb = knowledge_bases[client_id]
-            client_info["document_count"] = len(kb.documents)
-            client_info["kb_status"] = kb.status
-        else:
-            client_info["document_count"] = 0
-            client_info["kb_status"] = "not_created"
-            
-        if client_id in bots:
-            bot = bots[client_id]
-            bot_info = bot.get_info()
-            client_info["bot_status"] = bot.status
-            client_info["active_channels"] = bot_info["active_channels"]
-            client_info["total_channels"] = bot_info["total_channels"]
-        else:
-            client_info["bot_status"] = "not_created"
-            client_info["active_channels"] = 0
-            client_info["total_channels"] = 3
-            
-        client_data.append(client_info)
-    
     return templates.TemplateResponse("clients.html", {
-        "request": request, 
-        "clients": client_data,
-        "is_dashboard": False
+        "request": request,
+        "clients": clients.values()
     })
 
-@app.get("/clients/add", response_class=HTMLResponse)
+# Add Client
+@app.get("/clients/add")
 async def add_client_form(request: Request):
     return templates.TemplateResponse("add_client.html", {"request": request})
 
@@ -249,211 +158,163 @@ async def submit_client_form(
             "business_type": business_type,
             "industry": industry,
             "description": description,
-            "created_at": datetime.now().isoformat(),
-            "setup_completed": False,  # Mark as incomplete initially
-            "status": "setup_in_progress"
+            "created_at": datetime.now().isoformat()
         }
         
+        # Save to persistent storage
+        save_data(CLIENTS_FILE, clients)
+        
+        # Create session
         session_id = str(uuid.uuid4())
         sessions[session_id] = client_id
-        
-        # Create knowledge base (inactive)
-        knowledge_bases[client_id] = KnowledgeBase(client_id, business_name)
-        
-        # Create bot (inactive)
-        bots[client_id] = Bot(client_id, business_name)
-        
-        logger.info(f"New client created: {business_name} (ID: {client_id})")
+        save_data(SESSIONS_FILE, sessions)
         
         response = RedirectResponse(url="/upload_documents", status_code=303)
-        response.set_cookie(key="session_id", value=session_id, httponly=True, max_age=3600)  # 1 hour
+        response.set_cookie(key="session_id", value=session_id)
         return response
         
     except Exception as e:
         logger.error(f"Error creating client: {e}")
-        return JSONResponse(status_code=500, content={"detail": "Error creating client"})
+        raise HTTPException(status_code=500, detail="Error creating client")
 
-@app.get("/upload_documents", response_class=HTMLResponse)
+# Upload Documents
+@app.get("/upload_documents")
 async def upload_documents_form(request: Request):
-    client, client_id = get_client_from_session(request)
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        logger.error("No client found in session for upload_documents")
+    if not client_id:
         return RedirectResponse(url="/clients/add", status_code=303)
     
+    client = clients.get(client_id, {})
     return templates.TemplateResponse("upload_documents.html", {
         "request": request,
         "client": client
     })
 
 @app.post("/upload_documents")
-async def process_documents(
+async def upload_documents(
     request: Request,
-    files: list[UploadFile] = File(...)
+    files: List[UploadFile] = File(...)
 ):
-    client, client_id = get_client_from_session(request)
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        logger.error("No client found in session for process_documents")
+    if not client_id:
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    try:
-        upload_dir = f"uploads/{client_id}"
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        kb = knowledge_bases[client_id]
-        
-        uploaded_count = 0
-        for file in files:
-            if file.filename.endswith('.pdf'):
-                file_path = f"{upload_dir}/{file.filename}"
-                with open(file_path, "wb") as f:
-                    content = await file.read()
-                    f.write(content)
-                
-                kb.add_document(file.filename, file_path)
-                uploaded_count += 1
-        
-        # Activate knowledge base if documents uploaded
-        if uploaded_count > 0:
-            kb.status = "active"
-        
-        logger.info(f"Uploaded {uploaded_count} documents for client {client['business_name']}")
-        return RedirectResponse(url="/buy_number", status_code=303)
-        
-    except Exception as e:
-        logger.error(f"Error uploading documents: {e}")
-        return JSONResponse(status_code=500, content={"detail": "Error uploading documents"})
-
-@app.post("/skip_documents")
-async def skip_documents_step(request: Request):
-    client, client_id = get_client_from_session(request)
+    client = clients.get(client_id, {})
     
-    if not client:
-        logger.error("No client found in session for skip_documents")
-        return RedirectResponse(url="/clients/add", status_code=303)
+    # Process uploaded files
+    for file in files:
+        if file.filename:
+            file_path = f"uploads/{client_id}_{file.filename}"
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Store document info
+            if client_id not in documents:
+                documents[client_id] = []
+            documents[client_id].append({
+                "filename": file.filename,
+                "file_path": file_path,
+                "uploaded_at": datetime.now().isoformat()
+            })
     
-    logger.info(f"Documents skipped for client {client_id}")
+    logger.info(f"Uploaded {len(files)} documents for client {client['business_name']}")
+    
+    # Redirect to buy number page
     return RedirectResponse(url="/buy_number", status_code=303)
 
-@app.get("/buy_number", response_class=HTMLResponse)
+# Buy Number
+@app.get("/buy_number")
 async def buy_number_form(request: Request):
-    client, client_id = get_client_from_session(request)
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        logger.error("No client found in session for buy_number")
+    if not client_id:
         return RedirectResponse(url="/clients/add", status_code=303)
     
+    client = clients.get(client_id, {})
     return templates.TemplateResponse("buy_number.html", {
         "request": request,
         "client": client
     })
 
-@app.post("/api/numbers/buy")
-async def buy_number(request: Request):
-    client, client_id = get_client_from_session(request)
+@app.post("/buy_number")
+async def buy_number_post(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        logger.error("No client found in session for api/numbers/buy")
-        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
-    
-    try:
-        # For demo - simulate number purchase
-        simulated_number = f"+91 {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
-        
-        phone_numbers[client_id] = {
-            "number": simulated_number,
-            "twilio_sid": f"simulated_{uuid.uuid4()}",
-            "purchased_at": datetime.now().isoformat(),
-            "client_name": client["business_name"],
-            "is_real": False,
-            "capabilities": {"sms": True, "voice": True}
-        }
-        
-        logger.info(f"Number created: {simulated_number} for {client['business_name']}")
-        
-        return JSONResponse({
-            "status": "success",
-            "phone_number": simulated_number,
-            "is_real_number": False,
-            "message": "Demo number created successfully!"
-        })
-        
-    except Exception as e:
-        logger.error(f"Error buying number: {e}")
-        return JSONResponse({"status": "error", "message": "Error buying number"})
-
-# FIXED: This route was missing - causing the "Not Found" error
-@app.post("/buy_number/next")
-async def buy_number_next(request: Request):
-    client, client_id = get_client_from_session(request)
-    
-    if not client:
-        logger.error("No client found in session for buy_number/next")
-        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
-    
-    logger.info(f"Moving to bots configuration for client {client_id}")
-    return JSONResponse({"status": "success", "redirect_url": "/clients_bots"})
-
-@app.post("/skip_number")
-async def skip_number_step(request: Request):
-    client, client_id = get_client_from_session(request)
-    
-    if not client:
-        logger.error("No client found in session for skip_number")
+    if not client_id:
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    logger.info(f"Number purchase skipped for client {client_id}")
+    client = clients.get(client_id, {})
+    
+    # Generate a random phone number (in real app, this would be from Twilio)
+    phone_number = f"+1{random.randint(200, 999)}{random.randint(200, 999)}{random.randint(1000, 9999)}"
+    
+    # Store phone number
+    phone_numbers[client_id] = {
+        "number": phone_number,
+        "purchased_at": datetime.now().isoformat(),
+        "status": "active"
+    }
+    save_data(PHONE_NUMBERS_FILE, phone_numbers)
+    
+    # Redirect to clients bots configuration
     return RedirectResponse(url="/clients_bots", status_code=303)
 
-@app.get("/clients_bots", response_class=HTMLResponse)
-async def bots_configuration(request: Request):
-    client, client_id = get_client_from_session(request)
+# Clients Bots Configuration
+@app.get("/clients_bots")
+async def clients_bots(request: Request):
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        logger.error("No client found in session for clients_bots")
-        # Return proper error response
-        return templates.TemplateResponse("error.html", {
-            "request": request,
-            "error_message": "Cannot find client information. Please go back to clients page and try again."
-        })
+    if not client_id:
+        return RedirectResponse(url="/clients/add", status_code=303)
     
-    phone_data = phone_numbers.get(client_id, {})
-    phone_number = phone_data.get("number", "Not purchased")
+    client = clients.get(client_id, {})
     
-    kb_info = None
-    if client_id in knowledge_bases:
-        kb_info = knowledge_bases[client_id].get_info()
+    # Create bot if not exists
+    if client_id not in bots:
+        bots[client_id] = Bot(client_id, client["business_name"])
+        save_data(BOTS_FILE, bots)
     
-    bot_info = None
-    if client_id in bots:
-        bot_info = bots[client_id].get_info()
-    
-    if client_id not in subscriptions:
-        subscriptions[client_id] = {
-            "whatsapp": {"active": False, "start_date": None, "end_date": None},
-            "voice": {"active": False, "start_date": None, "end_date": None},
-            "web": {"active": False, "start_date": None, "end_date": None}
-        }
+    bot = bots[client_id]
     
     return templates.TemplateResponse("clients_bots.html", {
         "request": request,
         "client": client,
-        "phone_number": phone_number,
-        "has_phone": client_id in phone_numbers,
-        "subscriptions": subscriptions[client_id],
-        "knowledge_base": kb_info,
-        "bot": bot_info,
-        "chatbot_url": f"https://ownbot.chat/{client_id}",
-        "embed_code": f'<script src="https://e-z6j0.onrender.com/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
+        "bot": bot.get_info(),
+        "phone_number": phone_numbers.get(client_id, {}).get("number", "Not purchased")
     })
 
+# Client Detail
+@app.get("/clients/{client_id}")
+async def client_detail(request: Request, client_id: str):
+    client = clients.get(client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    bot_info = bots.get(client_id)
+    phone_info = phone_numbers.get(client_id)
+    
+    return templates.TemplateResponse("client_detail.html", {
+        "request": request,
+        "client": client,
+        "bot": bot_info.get_info() if bot_info else None,
+        "phone": phone_info
+    })
+
+# Bot Configuration API
 @app.post("/api/bot/activate_channel")
 async def activate_bot_channel(request: Request):
-    client, client_id = get_client_from_session(request)
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
-        return JSONResponse({"status": "error", "message": "Session expired. Please start over."})
+    if not client_id:
+        return JSONResponse({"status": "error", "message": "No session"})
     
     try:
         data = await request.json()
@@ -467,7 +328,7 @@ async def activate_bot_channel(request: Request):
         if channel == "whatsapp":
             phone_data = phone_numbers.get(client_id, {})
             if not phone_data:
-                return JSONResponse({"status": "error", "message": "No phone number available. Please buy a number first."})
+                return JSONResponse({"status": "error", "message": "No phone number available"})
             
             bot.activate_channel("whatsapp", number=phone_data["number"])
             message = f"WhatsApp bot activated with number: {phone_data['number']}"
@@ -483,7 +344,8 @@ async def activate_bot_channel(request: Request):
         else:
             return JSONResponse({"status": "error", "message": "Invalid channel"})
         
-        logger.info(f"Activated {channel} channel for client {client_id}")
+        # Save bot state
+        save_data(BOTS_FILE, bots)
         
         return JSONResponse({
             "status": "success",
@@ -492,56 +354,58 @@ async def activate_bot_channel(request: Request):
         })
         
     except Exception as e:
-        logger.error(f"Error activating bot channel: {e}")
+        logger.error(f"Error activating channel: {e}")
         return JSONResponse({"status": "error", "message": "Internal server error"})
 
-@app.get("/complete", response_class=HTMLResponse)
+# Complete Setup
+@app.get("/complete")
 async def complete_setup(request: Request):
-    client, client_id = get_client_from_session(request)
+    session_id = request.cookies.get("session_id")
+    client_id = sessions.get(session_id) if session_id else None
     
-    if not client:
+    if not client_id:
         return RedirectResponse(url="/clients/add", status_code=303)
     
-    # MARK CLIENT AS COMPLETED
-    clients[client_id]["setup_completed"] = True
-    clients[client_id]["status"] = "active"
+    client = clients.get(client_id, {})
+    
+    # Get setup status
+    bot_info = bots.get(client_id)
+    phone_info = phone_numbers.get(client_id)
+    doc_count = len(documents.get(client_id, []))
     
     # Clear session
-    session_id = request.cookies.get("session_id")
     if session_id in sessions:
         del sessions[session_id]
+        save_data(SESSIONS_FILE, sessions)
     
-    response = templates.TemplateResponse("complete.html", {
+    return templates.TemplateResponse("complete.html", {
         "request": request,
         "client": client,
-        "has_phone": client_id in phone_numbers,
-        "has_knowledge_base": client_id in knowledge_bases and len(knowledge_bases[client_id].documents) > 0
+        "bot": bot_info.get_info() if bot_info else {},
+        "phone": phone_info,
+        "document_count": doc_count
     })
-    response.delete_cookie("session_id")
-    return response
 
 # Health check
 @app.get("/health")
 async def health_check():
-    completed_clients = len([c for c in clients.values() if c.get("setup_completed")])
-    active_bots = len([bot for bot in bots.values() if bot.status == "active"])
-    
     return {
         "status": "success",
         "message": "OwnBot running",
         "timestamp": datetime.now().isoformat(),
-        "total_clients": len(clients),
-        "completed_clients": completed_clients,
-        "active_bots": active_bots,
-        "knowledge_bases_count": len(knowledge_bases)
+        "clients_count": len(clients),
+        "bots_count": len(bots)
     }
 
 @app.get("/test")
 async def test_page():
-    return {"message": "Server is working", "status": "success"}
+    return {"message": "Server is working!", "status": "success"}
 
-# Render.com configuration
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+# Save data on shutdown
+import atexit
+@atexit.register
+def save_on_exit():
+    save_data(CLIENTS_FILE, clients)
+    save_data(BOTS_FILE, bots)
+    save_data(SESSIONS_FILE, sessions)
+    save_data(PHONE_NUMBERS_FILE, phone_numbers)
