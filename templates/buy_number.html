@@ -239,7 +239,6 @@
             padding: 15px;
             border-radius: 6px;
             margin: 20px 0;
-            display: none;
         }
         
         .loading {
@@ -263,6 +262,10 @@
             100% { transform: rotate(360deg); }
         }
         
+        .form-container {
+            margin-top: 20px;
+        }
+        
         @media (max-width: 576px) {
             .container {
                 padding: 20px;
@@ -281,8 +284,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Add New Client</h1>
-            <p class="subtitle">Step 3 of 5: Phone Number</p>
+            <h1>Get Phone Number</h1>
+            <p class="subtitle">Step 3 of 4: Setup WhatsApp & Voice Bots</p>
         </div>
         
         <div class="progress-bar">
@@ -302,213 +305,90 @@
                 4
                 <span class="step-label">Bots</span>
             </div>
-            <div class="progress-step step-5">
-                5
-                <span class="step-label">Complete</span>
-            </div>
         </div>
         
+        <div class="demo-notice">
+            <strong>💡 Demo Mode:</strong> Using simulated phone numbers for testing. Real numbers available with Twilio integration.
+        </div>
+
+        <div class="form-container">
+            <!-- Form for buying number -->
+            <form method="POST" action="/buy_number" id="buyNumberForm">
+                <div class="form-group">
+                    <label for="country">Select Country</label>
+                    <select id="country" name="country" required>
+                        <option value="">Choose Country</option>
+                        <option value="India" selected>India (+91)</option>
+                        <option value="USA">United States (+1)</option>
+                        <option value="UK">United Kingdom (+44)</option>
+                        <option value="Australia">Australia (+61)</option>
+                    </select>
+                </div>
+                
+                <div class="btn-group">
+                    <button type="button" class="btn btn-secondary" onclick="goBack()">
+                        ← Back to Documents
+                    </button>
+                    <button type="submit" class="btn btn-primary" id="buyBtn">
+                        Get Phone Number & Continue
+                    </button>
+                </div>
+            </form>
+
+            <!-- Separate form for skipping -->
+            <form method="POST" action="/skip_number" id="skipForm" style="display: none;">
+                <!-- This form will be submitted programmatically -->
+            </form>
+        </div>
+
         <div class="skip-section">
             <button type="button" class="skip-btn" onclick="skipNumberPurchase()">
-                Skip This Step (Client only wants web chatbot)
-            </button>
-        </div>
-        
-        <div class="demo-notice" id="demoNotice">
-            <strong>💡 Demo Mode:</strong> Using simulated phone numbers for testing. Real numbers available with Twilio upgrade.
-        </div>
-        
-        <div class="form-group">
-            <label for="country_code">Select Country</label>
-            <select id="country_code" name="country_code" required>
-                <option value="">Choose Country</option>
-                <option value="US">United States (+1)</option>
-                <option value="GB">United Kingdom (+44)</option>
-                <option value="IN">India (+91)</option>
-                <option value="CA">Canada (+1)</option>
-                <option value="AU">Australia (+61)</option>
-                <option value="DE">Germany (+49)</option>
-                <option value="FR">France (+33)</option>
-                <option value="SG">Singapore (+65)</option>
-                <option value="AE">UAE (+971)</option>
-                <option value="SA">Saudi Arabia (+966)</option>
-            </select>
-        </div>
-        
-        <div class="loading" id="loadingSection">
-            <div class="spinner"></div>
-            <p>Generating phone number...</p>
-        </div>
-        
-        <div class="number-display" id="numberDisplay">
-            <div class="number" id="purchasedNumber">+1 234 567 8900</div>
-            <div class="status">✅ Demo number generated successfully!</div>
-        </div>
-        
-        <div class="btn-group">
-            <button type="button" class="btn btn-secondary" onclick="goBack()">
-                ← Back
-            </button>
-            <button type="button" class="btn btn-secondary" onclick="cancelSetup()">
-                Cancel
-            </button>
-            <button type="button" class="btn btn-primary" id="buyBtn" onclick="generatePhoneNumber()">
-                Generate Number
-            </button>
-            <button type="button" class="btn btn-success" id="nextBtn" onclick="goToNextStep()" style="display: none;">
-                Next →
+                Skip Phone Number (Web Chat Only)
             </button>
         </div>
     </div>
 
     <script>
-        let purchasedNumber = null;
-        let clientId = null;
-
-        // Get client_id from URL when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            document.getElementById('demoNotice').style.display = 'block';
-            
-            // Extract client_id from current URL
-            extractClientIdFromUrl();
-        });
-
-        function extractClientIdFromUrl() {
-            const currentPath = window.location.pathname;
-            console.log('Current URL path:', currentPath);
-            
-            // Try different URL patterns to extract client_id
-            if (currentPath.includes('/clients/') && currentPath.includes('/numbers')) {
-                // Pattern: /clients/123/numbers
-                const match = currentPath.match(/\/clients\/([^\/]+)\/numbers/);
-                if (match && match[1]) {
-                    clientId = match[1];
-                    console.log('Extracted client ID:', clientId);
-                }
-            } else if (currentPath === '/buy_number') {
-                // If we're at /buy_number, try to get from session storage
-                clientId = sessionStorage.getItem('current_client_id');
-                if (clientId) {
-                    console.log('Got client ID from session storage:', clientId);
-                }
-            }
-            
-            if (!clientId) {
-                console.warn('Could not extract client ID from URL:', currentPath);
-                // Try to get from the previous page's URL stored in session
-                const previousClientId = sessionStorage.getItem('current_client_id');
-                if (previousClientId) {
-                    clientId = previousClientId;
-                    console.log('Using client ID from session storage:', clientId);
-                }
+        function skipNumberPurchase() {
+            if (confirm('Skip phone number? Client will only be able to use web chatbot (no WhatsApp or Voice bots).')) {
+                // Submit the skip form
+                document.getElementById('skipForm').submit();
             }
         }
         
-        function generatePhoneNumber() {
-            const countryCode = document.getElementById('country_code').value;
-            
-            if (!countryCode) {
+        function goBack() {
+            // Go back to upload documents page
+            window.location.href = '/upload_documents';
+        }
+
+        // Handle form submission
+        document.getElementById('buyNumberForm').addEventListener('submit', function(e) {
+            const country = document.getElementById('country').value;
+            if (!country) {
+                e.preventDefault();
                 alert('Please select a country first');
                 return;
             }
             
-            // Show loading
-            document.getElementById('loadingSection').style.display = 'block';
-            document.getElementById('buyBtn').disabled = true;
+            // Show loading state
+            const buyBtn = document.getElementById('buyBtn');
+            buyBtn.disabled = true;
+            buyBtn.textContent = 'Getting Number...';
             
-            // Generate simulated phone number based on country
-            setTimeout(() => {
-                const countryFormats = {
-                    'US': () => `+1 (${Math.floor(Math.random() * 900) + 100}) ${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`,
-                    'GB': () => `+44 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 900000) + 100000}`,
-                    'IN': () => `+91 ${Math.floor(Math.random() * 90000) + 10000} ${Math.floor(Math.random() * 90000) + 10000}`,
-                    'CA': () => `+1 (${Math.floor(Math.random() * 900) + 100}) ${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 9000) + 1000}`,
-                    'AU': () => `+61 ${Math.floor(Math.random() * 9) + 1} ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000) + 1000}`,
-                    'DE': () => `+49 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000000) + 1000000}`,
-                    'FR': () => `+33 ${Math.floor(Math.random() * 9) + 1} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 90) + 10}`,
-                    'SG': () => `+65 ${Math.floor(Math.random() * 9000) + 1000} ${Math.floor(Math.random() * 9000) + 1000}`,
-                    'AE': () => `+971 ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 900) + 100} ${Math.floor(Math.random() * 9000) + 1000}`,
-                    'SA': () => `+966 ${Math.floor(Math.random() * 90) + 10} ${Math.floor(Math.random() * 900) + 100} ${Math.floor(Math.random() * 9000) + 1000}`
-                };
-                
-                const formatFunction = countryFormats[countryCode] || countryFormats['US'];
-                purchasedNumber = formatFunction();
-                
-                // Hide loading, show number
-                document.getElementById('loadingSection').style.display = 'none';
-                document.getElementById('purchasedNumber').textContent = purchasedNumber;
-                document.getElementById('numberDisplay').style.display = 'block';
-                
-                // Update buttons
-                document.getElementById('buyBtn').style.display = 'none';
-                document.getElementById('nextBtn').style.display = 'block';
-                
-            }, 1000); // Simulate 1 second processing
-        }
-        
-        function skipNumberPurchase() {
-            if (!clientId) {
-                extractClientIdFromUrl();
-            }
-            
-            if (!clientId) {
-                alert('Error: Cannot find client information. Please go back to clients page and try again.');
-                window.location.href = '/clients';
-                return;
-            }
-            
-            if (confirm('Skip phone number? Client will only be able to use web chatbot.')) {
-                console.log('Redirecting to skip endpoint for client:', clientId);
-                window.location.href = `/clients/${clientId}/numbers/skip`;
-            }
-        }
-        
-        function goToNextStep() {
-            if (!clientId) {
-                extractClientIdFromUrl();
-            }
-            
-            if (!clientId) {
-                alert('Error: Cannot find client information. Please go back to clients page and try again.');
-                window.location.href = '/clients';
-                return;
-            }
-            
-            console.log('Proceeding to next step for client:', clientId);
-            
-            // Save client_id to session storage for redundancy
-            sessionStorage.setItem('current_client_id', clientId);
-            
-            // Use the existing skip endpoint which redirects to /clients/{client_id}/bots
-            window.location.href = `/clients/${clientId}/numbers/skip`;
-        }
-        
-        function goBack() {
-            if (!clientId) {
-                extractClientIdFromUrl();
-            }
-            
-            if (!clientId) {
-                alert('Error: Cannot find client information. Please go back to clients page.');
-                window.location.href = '/clients';
-                return;
-            }
-            
-            console.log('Going back to documents for client:', clientId);
-            window.location.href = `/clients/${clientId}/documents`;
-        }
-        
-        function cancelSetup() {
-            if (confirm('Cancel client setup? All progress will be lost.')) {
-                // Clear session storage
-                sessionStorage.removeItem('current_client_id');
-                window.location.href = '/clients';
-            }
-        }
-        
-        // Enable/disable generate button based on country selection
-        document.getElementById('country_code').addEventListener('change', function() {
+            // Form will submit normally to /buy_number (POST)
+        });
+
+        // Enable/disable buy button based on country selection
+        document.getElementById('country').addEventListener('change', function() {
             document.getElementById('buyBtn').disabled = !this.value;
+        });
+
+        // Initialize - enable buy button if country is pre-selected
+        document.addEventListener('DOMContentLoaded', function() {
+            const countrySelect = document.getElementById('country');
+            if (countrySelect.value) {
+                document.getElementById('buyBtn').disabled = false;
+            }
         });
     </script>
 </body>
