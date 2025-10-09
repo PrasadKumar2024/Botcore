@@ -387,7 +387,7 @@ async def clients_bots(request: Request):
     phone_info = phone_numbers.get(client_id, {})
     doc_info = documents.get(client_id, [])
     
-    return templates.TemplateResponse("clients_bots.html", {
+    return templates.TemplateResponse("Clients_bots.html", {
         "request": request,
         "client": client,
         "bot": bot.get_info(),
