@@ -331,10 +331,11 @@
                     
                     {% if clients %}
                     <div class="row">
-                        {% for client in clients[:6] %}
+                        {% for client in clients %}
+                        {% if loop.index <= 6 %}
                         <div class="col-md-6 col-lg-4 mb-3">
                             <a href="/client/{{ client.id }}" class="quick-action">
-                                <div class="client-avatar" style="background: linear-gradient(135deg, #{{ client.id[:6] }} 0%, #{{ client.id[6:12] }} 100%);">
+                                <div class="client-avatar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
                                     {{ client.business_name[:2]|upper }}
                                 </div>
                                 <div>
@@ -355,6 +356,7 @@
                                 </div>
                             </a>
                         </div>
+                        {% endif %}
                         {% endfor %}
                     </div>
                     {% else %}
@@ -373,7 +375,8 @@
                 <div class="dashboard-card">
                     <h4 class="mb-4">Recent Activity</h4>
                     <ul class="recent-activity">
-                        {% for client in (clients|sort(attribute='completed_at', reverse=true))[:5] %}
+                        {% for client in clients %}
+                        {% if loop.index <= 5 %}
                         <li class="activity-item">
                             <div class="activity-icon bg-success text-white">
                                 <i class="bi bi-check-lg"></i>
@@ -383,6 +386,7 @@
                                 <div class="small text-muted">{{ client.completed_at[:10] if client.completed_at else 'Recently' }}</div>
                             </div>
                         </li>
+                        {% endif %}
                         {% endfor %}
                         
                         {% if clients|length == 0 %}
