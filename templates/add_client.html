@@ -11,6 +11,7 @@
             --light: #f8f9fa;
             --dark: #212529;
             --gray: #6c757d;
+            --success: #4bb543;
         }
         
         * {
@@ -96,6 +97,8 @@
             transition: all 0.3s ease;
             border: none;
             text-align: center;
+            text-decoration: none;
+            display: inline-block;
         }
         
         .btn-secondary {
@@ -127,7 +130,7 @@
         .progress-bar::before {
             content: '';
             position: absolute;
-            top: 12px;
+            top: 15px;
             left: 0;
             right: 0;
             height: 4px;
@@ -136,8 +139,8 @@
         }
         
         .progress-step {
-            width: 28px;
-            height: 28px;
+            width: 30px;
+            height: 30px;
             border-radius: 50%;
             background-color: white;
             border: 2px solid #e0e0e0;
@@ -155,6 +158,12 @@
             color: white;
         }
         
+        .progress-step.completed {
+            background-color: var(--success);
+            border-color: var(--success);
+            color: white;
+        }
+        
         .step-label {
             position: absolute;
             top: 35px;
@@ -163,6 +172,15 @@
             font-size: 12px;
             color: var(--gray);
             white-space: nowrap;
+        }
+        
+        .progress-connector {
+            position: absolute;
+            top: 15px;
+            height: 4px;
+            background-color: var(--primary);
+            z-index: 1;
+            transition: width 0.3s ease;
         }
         
         @media (max-width: 576px) {
@@ -198,7 +216,7 @@
             </div>
             <div class="progress-step">
                 3
-                <span class="step-label">Number</span>
+                <span class="step-label">Numbers</span>
             </div>
             <div class="progress-step">
                 4
@@ -236,14 +254,32 @@
             </div>
             
             <div class="btn-group">
-                <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients'">
-                    Cancel
-                </button>
-                <button type="submit" class="btn btn-primary">
-                    Next →
-                </button>
+                <a href="/clients" class="btn btn-secondary">Cancel</a>
+                <button type="submit" class="btn btn-primary">Next →</button>
             </div>
         </form>
     </div>
+
+    <script>
+        // Simple form validation
+        document.querySelector('form').addEventListener('submit', function(e) {
+            const businessName = document.getElementById('business_name').value.trim();
+            const businessType = document.getElementById('business_type').value;
+            
+            if (!businessName) {
+                e.preventDefault();
+                alert('Please enter a business name');
+                document.getElementById('business_name').focus();
+                return;
+            }
+            
+            if (!businessType) {
+                e.preventDefault();
+                alert('Please select a business type');
+                document.getElementById('business_type').focus();
+                return;
+            }
+        });
+    </script>
 </body>
 </html>
