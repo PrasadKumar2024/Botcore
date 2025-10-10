@@ -1,585 +1,551 @@
-# main.py - Complete Fixed Version
-from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
-import logging
-import os
-from datetime import datetime, timedelta
-import uuid
-import random
-import shutil
-from typing import Dict, List
-import json
-import pickle
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(title="OwnBot", version="1.0.0")
-
-# Create necessary directories
-os.makedirs("static", exist_ok=True)
-os.makedirs("uploads", exist_ok=True)
-os.makedirs("data", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
-
-# Templates
-templates = Jinja2Templates(directory="templates")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Persistent storage files
-CLIENTS_FILE = "data/clients.pkl"
-BOTS_FILE = "data/bots.pkl"
-SESSIONS_FILE = "data/sessions.pkl"
-PHONE_NUMBERS_FILE = "data/phone_numbers.pkl"
-DOCUMENTS_FILE = "data/documents.pkl"
-
-def load_data(filename, default=None):
-    """Load data from pickle file"""
-    try:
-        if os.path.exists(filename):
-            with open(filename, 'rb') as f:
-                return pickle.load(f)
-    except Exception as e:
-        logger.error(f"Error loading {filename}: {e}")
-    return default if default is not None else {}
-
-def save_data(filename, data):
-    """Save data to pickle file"""
-    try:
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, 'wb') as f:
-            pickle.dump(data, f)
-    except Exception as e:
-        logger.error(f"Error saving {filename}: {e}")
-
-# Load persistent data
-clients = load_data(CLIENTS_FILE, {})
-bots = load_data(BOTS_FILE, {})
-sessions = load_data(SESSIONS_FILE, {})
-phone_numbers = load_data(PHONE_NUMBERS_FILE, {})
-documents = load_data(DOCUMENTS_FILE, {})
-
-# Bot Class
-class Bot:
-    def __init__(self, client_id: str, client_name: str):
-        self.client_id = client_id
-        self.client_name = client_name
-        self.created_at = datetime.now().isoformat()
-        self.status = "inactive"  # Start as inactive
-        self.channels = {
-            "whatsapp": {"active": False, "number": None},
-            "voice": {"active": False, "number": None},
-            "website": {"active": False, "widget_id": f"widget_{uuid.uuid4().hex[:8]}"}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Configuration - {{ client.business_name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .bot-section {
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            background: #f8f9fa;
         }
-        self.subscriptions = {
-            "whatsapp": {"start_date": None, "end_date": None, "active": False},
-            "voice": {"start_date": None, "end_date": None, "active": False},
-            "website": {"start_date": None, "end_date": None, "active": False}
+        .subscription-buttons {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+            flex-wrap: wrap;
         }
-        self.config = {
-            "welcome_message": f"Hello! Welcome to {client_name}. How can I help you today?",
-            "response_mode": "auto",
-            "business_hours": "24/7"
+        .status-active {
+            color: #28a745;
+            font-weight: bold;
         }
-    
-    def activate_channel(self, channel: str, **kwargs):
-        """Activate a bot channel"""
-        if channel in self.channels:
-            self.channels[channel]["active"] = True
-            for key, value in kwargs.items():
-                self.channels[channel][key] = value
-            # Update overall bot status
-            self._update_status()
-    
-    def deactivate_channel(self, channel: str):
-        """Deactivate a bot channel"""
-        if channel in self.channels:
-            self.channels[channel]["active"] = False
-            self._update_status()
-    
-    def _update_status(self):
-        """Update bot status based on active channels"""
-        active_channels = sum(1 for channel in self.channels.values() if channel["active"])
-        self.status = "active" if active_channels > 0 else "inactive"
-    
-    def get_info(self):
-        """Get bot information"""
-        active_channels = sum(1 for channel in self.channels.values() if channel["active"])
-        return {
-            "client_id": self.client_id,
-            "client_name": self.client_name,
-            "created_at": self.created_at,
-            "status": self.status,
-            "active_channels": active_channels,
-            "total_channels": len(self.channels),
-            "channels": self.channels,
-            "subscriptions": self.subscriptions,
-            "config": self.config
+        .status-inactive {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .status-expired {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .profile-section {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            border-left: 4px solid #007bff;
+        }
+        .embed-code {
+            background: #2d2d2d;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-size: 14px;
+        }
+        .section-divider {
+            border-top: 2px solid #dee2e6;
+            margin: 20px 0;
+        }
+        .bot-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .bot-icon {
+            font-size: 24px;
+        }
+        .number-badge {
+            background: #17a2b8;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h1>Configure Bots - {{ client.business_name }}</h1>
+                <p class="text-muted">Set up WhatsApp, Voice Call, and Web Chat bots for your client</p>
+            </div>
+            <a href="/clients" class="btn btn-outline-secondary">← Back to Clients</a>
+        </div>
+
+        <!-- Progress Indicator -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h6 class="card-title">Setup Progress</h6>
+                <div class="progress mb-2">
+                    <div class="progress-bar" role="progressbar" style="width: 75%" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100">75% Complete</div>
+                </div>
+                <small class="text-muted">Step 4 of 4: Bot Configuration</small>
+            </div>
+        </div>
+
+        <!-- WhatsApp Bot Section -->
+        <div class="bot-section">
+            <div class="bot-header">
+                <span class="bot-icon">📱</span>
+                <h3 class="mb-0">WhatsApp Business Bot</h3>
+                {% if phone_number != "Not purchased" %}
+                <span class="number-badge">{{ phone_number }}</span>
+                {% endif %}
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <!-- Business Profile -->
+                    <div class="profile-section">
+                        <h5>📊 Business Profile</h5>
+                        <div class="mb-2">
+                            <strong>Business Name:</strong> 
+                            <span id="whatsapp-business-name">{{ client.business_name }}</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-business-name', 'business_name')">Edit</button>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Business Address:</strong> 
+                            <span id="whatsapp-address">Add business address...</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-address', 'address')">Edit</button>
+                        </div>
+                        <div class="mb-2">
+                            <strong>Business Logo:</strong> 
+                            <span id="whatsapp-logo">No logo uploaded</span>
+                            <button class="btn btn-sm btn-outline-primary ms-2" onclick="uploadLogo()">Upload</button>
+                        </div>
+                        <small class="text-muted">This information will be shown in WhatsApp Business profile</small>
+                    </div>
+
+                    <!-- Current Status -->
+                    <div class="mt-3">
+                        <h6>Bot Status</h6>
+                        <div class="d-flex align-items-center gap-3">
+                            <span id="whatsapp-status" class="status-inactive">INACTIVE</span>
+                            <div class="btn-group">
+                                <button id="whatsapp-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('whatsapp', 'activate')">Activate</button>
+                                <button id="whatsapp-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('whatsapp', 'deactivate')" style="display: none;">Deactivate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <!-- Subscription Management -->
+                    <div class="profile-section">
+                        <h5>💰 Subscription</h5>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <strong>Start Date:</strong><br>
+                                <span id="whatsapp-start-date" class="text-muted">--/--/----</span>
+                            </div>
+                            <div class="col-6">
+                                <strong>Expiry Date:</strong><br>
+                                <span id="whatsapp-expiry-date" class="text-muted">--/--/----</span>
+                            </div>
+                        </div>
+                        
+                        <div class="section-divider"></div>
+                        
+                        <h6>Add Subscription Time:</h6>
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 12)">12 Months</button>
+                        </div>
+                        <small class="text-muted">First payment sets start date. Renewals extend expiry date.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Call Bot Section -->
+        <div class="bot-section">
+            <div class="bot-header">
+                <span class="bot-icon">📞</span>
+                <h3 class="mb-0">Voice Call Bot</h3>
+                {% if phone_number != "Not purchased" %}
+                <span class="number-badge">{{ phone_number }}</span>
+                {% endif %}
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <p>Automated voice responses based on your business knowledge base.</p>
+                    
+                    <!-- Current Status -->
+                    <div class="mt-3">
+                        <h6>Bot Status</h6>
+                        <div class="d-flex align-items-center gap-3">
+                            <span id="voice-status" class="status-inactive">INACTIVE</span>
+                            <div class="btn-group">
+                                <button id="voice-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('voice', 'activate')">Activate</button>
+                                <button id="voice-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('voice', 'deactivate')" style="display: none;">Deactivate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <!-- Subscription Management -->
+                    <div class="profile-section">
+                        <h5>💰 Subscription</h5>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <strong>Start Date:</strong><br>
+                                <span id="voice-start-date" class="text-muted">--/--/----</span>
+                            </div>
+                            <div class="col-6">
+                                <strong>Expiry Date:</strong><br>
+                                <span id="voice-expiry-date" class="text-muted">--/--/----</span>
+                            </div>
+                        </div>
+                        
+                        <div class="section-divider"></div>
+                        
+                        <h6>Add Subscription Time:</h6>
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('voice', 12)">12 Months</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Web Chat Bot Section -->
+        <div class="bot-section">
+            <div class="bot-header">
+                <span class="bot-icon">💬</span>
+                <h3 class="mb-0">Web Chat Bot</h3>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6">
+                    <!-- Chatbot Links -->
+                    <div class="profile-section">
+                        <h5>🔗 Integration</h5>
+                        
+                        <div class="mb-3">
+                            <strong>Chatbot URL:</strong>
+                            <div class="input-group mt-1">
+                                <input type="text" class="form-control" id="chatbot-url" value="{{ chatbot_url }}" readonly>
+                                <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('chatbot-url')">Copy</button>
+                            </div>
+                            <small class="text-muted">Share this link with your client</small>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <strong>Embed Code:</strong>
+                            <div class="embed-code mt-1" id="embed-code">{{ embed_code }}</div>
+                            <button class="btn btn-outline-primary mt-2" onclick="copyToClipboard('embed-code')">Copy Embed Code</button>
+                            <small class="text-muted d-block mt-1">Add this code to your client's website</small>
+                        </div>
+                    </div>
+
+                    <!-- Current Status -->
+                    <div class="mt-3">
+                        <h6>Bot Status</h6>
+                        <div class="d-flex align-items-center gap-3">
+                            <span id="web-status" class="status-inactive">INACTIVE</span>
+                            <div class="btn-group">
+                                <button id="web-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('web', 'activate')">Activate</button>
+                                <button id="web-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('web', 'deactivate')" style="display: none;">Deactivate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <!-- Subscription Management -->
+                    <div class="profile-section">
+                        <h5>💰 Subscription</h5>
+                        <div class="row mb-2">
+                            <div class="col-6">
+                                <strong>Start Date:</strong><br>
+                                <span id="web-start-date" class="text-muted">--/--/----</span>
+                            </div>
+                            <div class="col-6">
+                                <strong>Expiry Date:</strong><br>
+                                <span id="web-expiry-date" class="text-muted">--/--/----</span>
+                            </div>
+                        </div>
+                        
+                        <div class="section-divider"></div>
+                        
+                        <h6>Add Subscription Time:</h6>
+                        <div class="subscription-buttons">
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 1)">1 Month</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 2)">2 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 3)">3 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 6)">6 Months</button>
+                            <button class="btn btn-outline-success" onclick="addMonths('web', 12)">12 Months</button>
+                        </div>
+                    </div>
+
+                    <!-- Demo Instructions -->
+                    <div class="alert alert-info mt-3">
+                        <h6>🚀 Ready to Test</h6>
+                        <small>
+                            <strong>Web Chat Bot is ready to use!</strong><br>
+                            • Copy the embed code to client's website<br>
+                            • Or share the chatbot URL directly<br>
+                            • Bot answers based on uploaded PDF knowledge
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation & Actions -->
+        <div class="card mt-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <a href="/buy_number" class="btn btn-outline-secondary">← Previous Step</a>
+                    
+                    <div class="text-center">
+                        <p class="mb-1 text-muted">Ready to complete setup?</p>
+                        <form action="/complete_setup" method="post" style="display: inline;">
+                            <button type="submit" class="btn btn-success btn-lg">
+                                ✅ Finish Setup & Go to Dashboard
+                            </button>
+                        </form>
+                    </div>
+
+                    <a href="/client/{{ client.id }}" class="btn btn-outline-primary">
+                        Skip & View Client Page →
+                    </a>
+                </div>
+                
+                <div class="text-center mt-3">
+                    <small class="text-muted">
+                        After finishing setup, client will appear in your dashboard where you can manage bots and add more PDFs anytime.
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Edit field functionality
+        function editField(fieldId, fieldType) {
+            const field = document.getElementById(fieldId);
+            const currentValue = field.textContent;
+            const fieldName = fieldType === 'business_name' ? 'Business Name' : 
+                            fieldType === 'address' ? 'Business Address' : 'Field';
+            
+            const newValue = prompt(`Edit ${fieldName}:`, currentValue);
+            if (newValue !== null && newValue.trim() !== '') {
+                field.textContent = newValue;
+                // Here you would typically send this to your backend
+                updateWhatsAppProfile(fieldType, newValue);
+            }
         }
 
-# ========== ROUTES ==========
-
-# Root Dashboard
-@app.get("/")
-async def dashboard(request: Request):
-    """Main dashboard - only shows completed clients"""
-    # Filter out clients that are still in setup (in sessions)
-    active_session_clients = set(sessions.values())
-    completed_clients = [
-        client for client in clients.values() 
-        if client["id"] not in active_session_clients
-    ]
-    
-    total_clients = len(completed_clients)
-    active_bots = len([
-        bot for bot in bots.values() 
-        if bot.status == "active" and bot.client_id not in active_session_clients
-    ])
-    
-    return templates.TemplateResponse("base.html", {
-        "request": request,
-        "total_clients": total_clients,
-        "active_clients": active_bots,
-        "messages_today": 0,
-        "clients": completed_clients
-    })
-
-# Clients Page
-@app.get("/clients")
-async def clients_page(request: Request):
-    """View all completed clients"""
-    # Filter out clients still in setup
-    active_session_clients = set(sessions.values())
-    completed_clients = [
-        client for client in clients.values() 
-        if client["id"] not in active_session_clients
-    ]
-    
-    return templates.TemplateResponse("clients.html", {
-        "request": request,
-        "clients": completed_clients
-    })
-
-# Add Client Form
-@app.get("/clients/add")
-async def add_client_form(request: Request):
-    """Show add client form"""
-    return templates.TemplateResponse("add_client.html", {"request": request})
-
-# Submit Add Client Form
-@app.post("/clients/add")
-async def submit_client_form(
-    request: Request,
-    business_name: str = Form(...),
-    business_type: str = Form(...),
-    industry: str = Form(""),
-    description: str = Form("")
-):
-    """Create new client and start setup flow"""
-    try:
-        client_id = str(uuid.uuid4())
-        
-        # Create client record
-        clients[client_id] = {
-            "id": client_id,
-            "business_name": business_name,
-            "business_type": business_type,
-            "industry": industry,
-            "description": description,
-            "created_at": datetime.now().isoformat(),
-            "status": "setup_in_progress"
+        // Upload logo functionality
+        function uploadLogo() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    document.getElementById('whatsapp-logo').textContent = file.name;
+                    // Here you would typically upload the file to your backend
+                    console.log('Logo file selected:', file.name);
+                    // Simulate upload
+                    alert('Logo uploaded successfully! (Simulated)');
+                }
+            };
+            input.click();
         }
-        
-        # Save to persistent storage
-        save_data(CLIENTS_FILE, clients)
-        
-        # Create session for this client setup
-        session_id = str(uuid.uuid4())
-        sessions[session_id] = client_id
-        save_data(SESSIONS_FILE, sessions)
-        
-        logger.info(f"New client created: {business_name} (ID: {client_id})")
-        
-        # Redirect to document upload
-        response = RedirectResponse(url="/upload_documents", status_code=303)
-        response.set_cookie(key="session_id", value=session_id)
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error creating client: {e}")
-        raise HTTPException(status_code=500, detail="Error creating client")
 
-# Upload Documents Form
-@app.get("/upload_documents")
-async def upload_documents_form(request: Request):
-    """Show document upload form"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    return templates.TemplateResponse("upload_documents.html", {
-        "request": request,
-        "client": client
-    })
+        // Update WhatsApp profile via API
+        async function updateWhatsAppProfile(field, value) {
+            try {
+                // Simulated API call
+                console.log(`Updating ${field} to: ${value}`);
+                // In real implementation, you would call your backend API
+                // await fetch('/api/whatsapp/profile', { method: 'POST', ... });
+                
+                alert('Profile updated successfully! (Simulated)');
+            } catch (error) {
+                console.error('Error updating profile:', error);
+                alert('Error updating profile. Please try again.');
+            }
+        }
 
-# Process Document Upload
-@app.post("/upload_documents")
-async def upload_documents(
-    request: Request,
-    files: List[UploadFile] = File(...)
-):
-    """Process uploaded documents"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    
-    # Create upload directory for client
-    upload_dir = f"uploads/{client_id}"
-    os.makedirs(upload_dir, exist_ok=True)
-    
-    # Process uploaded files
-    uploaded_count = 0
-    for file in files:
-        if file.filename and file.filename.endswith('.pdf'):
-            file_path = os.path.join(upload_dir, file.filename)
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+        // Copy to clipboard functionality
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            let text = element.value || element.textContent || element.innerText;
             
-            # Store document info
-            if client_id not in documents:
-                documents[client_id] = []
+            // Clean up text for embed code
+            text = text.replace(/\s+/g, ' ').trim();
             
-            documents[client_id].append({
-                "filename": file.filename,
-                "file_path": file_path,
-                "uploaded_at": datetime.now().isoformat()
-            })
-            uploaded_count += 1
-    
-    # Save documents
-    save_data(DOCUMENTS_FILE, documents)
-    
-    logger.info(f"Uploaded {uploaded_count} documents for client {client['business_name']}")
-    
-    # Redirect to buy number page
-    return RedirectResponse(url="/buy_number", status_code=303)
+            navigator.clipboard.writeText(text).then(function() {
+                // Show success feedback
+                const originalText = element.type === 'button' ? element.textContent : null;
+                if (element.type === 'button') {
+                    element.textContent = 'Copied!';
+                    setTimeout(() => {
+                        element.textContent = originalText;
+                    }, 2000);
+                } else {
+                    alert('✅ Copied to clipboard!');
+                }
+            }).catch(function(err) {
+                console.error('Could not copy text: ', err);
+                alert('Failed to copy. Please select and copy manually.');
+            });
+        }
 
-# Skip Documents
-@app.post("/skip_documents")
-async def skip_documents(request: Request):
-    """Skip document upload step"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    logger.info(f"Documents skipped for client {client_id}")
-    return RedirectResponse(url="/buy_number", status_code=303)
+        // Add months subscription functionality
+        async function addMonths(botType, months) {
+            if (confirm(`Add ${months} month(s) to ${botType} bot subscription?\n\nFirst payment sets start date to today.\nRenewals extend from current expiry date.`)) {
+                try {
+                    // Simulated API call
+                    console.log(`Adding ${months} months to ${botType} bot`);
+                    
+                    // Update UI immediately (in real app, wait for API response)
+                    updateSubscriptionDates(botType, months);
+                    
+                    alert(`✅ ${months} month(s) added to ${botType} bot!\n\nBot can now be activated.`);
+                    
+                } catch (error) {
+                    console.error('Error adding months:', error);
+                    alert('Error adding months. Please try again.');
+                }
+            }
+        }
 
-# Buy Number Form
-@app.get("/buy_number")
-async def buy_number_form(request: Request):
-    """Show phone number purchase form"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    return templates.TemplateResponse("buy_number.html", {
-        "request": request,
-        "client": client
-    })
-
-# Process Number Purchase
-@app.post("/buy_number")
-async def buy_number_post(request: Request, country: str = Form("India")):
-    """Purchase phone number for client"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    
-    # Generate demo phone number
-    country_codes = {
-        "India": "+91",
-        "USA": "+1",
-        "UK": "+44",
-        "Australia": "+61"
-    }
-    
-    country_code = country_codes.get(country, "+91")
-    phone_number = f"{country_code} {random.randint(70000, 99999)} {random.randint(10000, 99999)}"
-    
-    # Store phone number
-    phone_numbers[client_id] = {
-        "number": phone_number,
-        "country": country,
-        "purchased_at": datetime.now().isoformat(),
-        "status": "active",
-        "is_demo": True
-    }
-    save_data(PHONE_NUMBERS_FILE, phone_numbers)
-    
-    logger.info(f"Phone number {phone_number} assigned to client {client['business_name']}")
-    
-    # Redirect to bot configuration
-    return RedirectResponse(url="/clients_bots", status_code=303)
-
-# Skip Number Purchase
-@app.post("/skip_number")
-async def skip_number(request: Request):
-    """Skip phone number purchase step"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    logger.info(f"Number purchase skipped for client {client_id}")
-    return RedirectResponse(url="/clients_bots", status_code=303)
-
-# Bot Configuration Page
-@app.get("/clients_bots")
-async def clients_bots(request: Request):
-    """Show bot configuration page"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    
-    # Create bot if not exists
-    if client_id not in bots:
-        bots[client_id] = Bot(client_id, client["business_name"])
-        save_data(BOTS_FILE, bots)
-    
-    bot = bots[client_id]
-    phone_info = phone_numbers.get(client_id, {})
-    doc_info = documents.get(client_id, [])
-    
-    return templates.TemplateResponse("client_bots.html", {
-        "request": request,
-        "client": client,
-        "bot": bot.get_info(),
-        "phone_number": phone_info.get("number", "Not purchased"),
-        "has_phone": client_id in phone_numbers,
-        "document_count": len(doc_info),
-        "chatbot_url": f"https://ownbot.chat/{client_id}",
-        "embed_code": f'<script src="https://yourdomain.com/static/js/chat-widget.js" data-client-id="{client_id}"></script>'
-    })
-
-# Activate Bot Channel API
-@app.post("/api/bot/activate_channel")
-async def activate_bot_channel(request: Request):
-    """Activate a specific bot channel"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return JSONResponse({"status": "error", "message": "No active session"})
-    
-    try:
-        data = await request.json()
-        channel = data.get("channel")
-        
-        if client_id not in bots:
-            return JSONResponse({"status": "error", "message": "Bot not found"})
-        
-        bot = bots[client_id]
-        
-        # Activate channel based on type
-        if channel == "whatsapp" or channel == "voice":
-            phone_data = phone_numbers.get(client_id, {})
-            if not phone_data:
-                return JSONResponse({
-                    "status": "error", 
-                    "message": "No phone number available. Please buy a number first."
-                })
+        // Update subscription dates in UI
+        function updateSubscriptionDates(botType, months) {
+            const startDateElement = document.getElementById(`${botType}-start-date`);
+            const expiryDateElement = document.getElementById(`${botType}-expiry-date`);
             
-            bot.activate_channel(channel, number=phone_data["number"])
-            message = f"{channel.title()} bot activated with number: {phone_data['number']}"
+            const today = new Date();
+            let newExpiryDate;
             
-        elif channel == "website":
-            bot.activate_channel("website")
-            message = "Website chat widget activated"
+            // If no start date set, set it to today
+            if (startDateElement.textContent === '--/--/----') {
+                startDateElement.textContent = formatDate(today);
+                newExpiryDate = new Date(today);
+            } else {
+                // Extend from current expiry date
+                const currentExpiry = parseDate(expiryDateElement.textContent);
+                newExpiryDate = currentExpiry > today ? currentExpiry : today;
+            }
             
-        else:
-            return JSONResponse({"status": "error", "message": "Invalid channel"})
-        
-        # Save bot state
-        save_data(BOTS_FILE, bots)
-        
-        logger.info(f"Activated {channel} channel for client {client_id}")
-        
-        return JSONResponse({
-            "status": "success",
-            "message": message,
-            "bot": bot.get_info()
-        })
-        
-    except Exception as e:
-        logger.error(f"Error activating channel: {e}")
-        return JSONResponse({"status": "error", "message": "Internal server error"})
+            // Add months to expiry date
+            newExpiryDate.setMonth(newExpiryDate.getMonth() + months);
+            expiryDateElement.textContent = formatDate(newExpiryDate);
+            
+            // Enable activate button if dates are set
+            checkActivationEligibility(botType);
+        }
 
-# Deactivate Bot Channel API
-@app.post("/api/bot/deactivate_channel")
-async def deactivate_bot_channel(request: Request):
-    """Deactivate a specific bot channel"""
-    try:
-        data = await request.json()
-        client_id = data.get("client_id")
-        channel = data.get("channel")
-        
-        if not client_id or client_id not in bots:
-            return JSONResponse({"status": "error", "message": "Bot not found"})
-        
-        bot = bots[client_id]
-        bot.deactivate_channel(channel)
-        
-        # Save bot state
-        save_data(BOTS_FILE, bots)
-        
-        return JSONResponse({
-            "status": "success",
-            "message": f"{channel.title()} bot deactivated",
-            "bot": bot.get_info()
-        })
-        
-    except Exception as e:
-        logger.error(f"Error deactivating channel: {e}")
-        return JSONResponse({"status": "error", "message": "Internal server error"})
+        // Toggle bot activation
+        async function toggleBot(botType, action) {
+            const statusElement = document.getElementById(`${botType}-status`);
+            const activateBtn = document.getElementById(`${botType}-activate-btn`);
+            const deactivateBtn = document.getElementById(`${botType}-deactivate-btn`);
+            const expiryDate = document.getElementById(`${botType}-expiry-date`).textContent;
+            
+            if (action === 'activate') {
+                // Check if subscription is active
+                if (expiryDate === '--/--/----') {
+                    alert('❌ Please add subscription months first!');
+                    return;
+                }
+                
+                const expiryDateObj = parseDate(expiryDate);
+                if (expiryDateObj < new Date()) {
+                    alert('❌ Subscription has expired! Please add more months.');
+                    return;
+                }
+                
+                if (confirm(`Activate ${botType} bot?`)) {
+                    try {
+                        // Simulated activation
+                        statusElement.textContent = 'ACTIVE';
+                        statusElement.className = 'status-active';
+                        activateBtn.style.display = 'none';
+                        deactivateBtn.style.display = 'inline-block';
+                        
+                        alert(`✅ ${botType.charAt(0).toUpperCase() + botType.slice(1)} bot activated!`);
+                    } catch (error) {
+                        console.error('Error activating bot:', error);
+                        alert('Error activating bot. Please try again.');
+                    }
+                }
+            } else {
+                if (confirm(`Deactivate ${botType} bot?`)) {
+                    try {
+                        // Simulated deactivation
+                        statusElement.textContent = 'INACTIVE';
+                        statusElement.className = 'status-inactive';
+                        activateBtn.style.display = 'inline-block';
+                        deactivateBtn.style.display = 'none';
+                        
+                        alert(`⏸️ ${botType.charAt(0).toUpperCase() + botType.slice(1)} bot deactivated.`);
+                    } catch (error) {
+                        console.error('Error deactivating bot:', error);
+                        alert('Error deactivating bot. Please try again.');
+                    }
+                }
+            }
+        }
 
-# Complete Setup
-@app.get("/complete")
-async def complete_setup(request: Request):
-    """Complete client setup and show summary"""
-    session_id = request.cookies.get("session_id")
-    client_id = sessions.get(session_id) if session_id else None
-    
-    if not client_id:
-        return RedirectResponse(url="/clients/add", status_code=303)
-    
-    client = clients.get(client_id, {})
-    
-    # Update client status to completed
-    if client:
-        client["status"] = "completed"
-        save_data(CLIENTS_FILE, clients)
-    
-    # Get setup summary
-    bot_info = bots.get(client_id)
-    phone_info = phone_numbers.get(client_id)
-    doc_count = len(documents.get(client_id, []))
-    
-    # Clear session - client setup is complete
-    if session_id in sessions:
-        del sessions[session_id]
-        save_data(SESSIONS_FILE, sessions)
-    
-    response = templates.TemplateResponse("complete.html", {
-        "request": request,
-        "client": client,
-        "bot": bot_info.get_info() if bot_info else None,
-        "phone": phone_info,
-        "document_count": doc_count
-    })
-    
-    # Delete session cookie
-    response.delete_cookie("session_id")
-    
-    logger.info(f"Client setup completed: {client['business_name']}")
-    
-    return response
+        // Check if bot can be activated
+        function checkActivationEligibility(botType) {
+            const expiryDate = document.getElementById(`${botType}-expiry-date`).textContent;
+            if (expiryDate !== '--/--/----') {
+                const expiryDateObj = parseDate(expiryDate);
+                if (expiryDateObj > new Date()) {
+                    // Enable activate button
+                    document.getElementById(`${botType}-activate-btn`).disabled = false;
+                }
+            }
+        }
 
-# Client Detail Page
-@app.get("/clients/{client_id}")
-async def client_detail(request: Request, client_id: str):
-    """View detailed client information"""
-    client = clients.get(client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    bot_info = bots.get(client_id)
-    phone_info = phone_numbers.get(client_id)
-    doc_info = documents.get(client_id, [])
-    
-    return templates.TemplateResponse("client_detail.html", {
-        "request": request,
-        "client": client,
-        "bot": bot_info.get_info() if bot_info else None,
-        "phone": phone_info,
-        "documents": doc_info
-    })
+        // Date formatting utilities
+        function formatDate(date) {
+            return date.toLocaleDateString('en-GB'); // DD/MM/YYYY format
+        }
 
-# Health Check
-@app.get("/health")
-async def health_check():
-    """API health check endpoint"""
-    return {
-        "status": "success",
-        "message": "OwnBot is running",
-        "timestamp": datetime.now().isoformat(),
-        "clients_count": len(clients),
-        "bots_count": len(bots),
-        "active_sessions": len(sessions)
-    }
+        function parseDate(dateString) {
+            if (dateString === '--/--/----') return new Date();
+            const [day, month, year] = dateString.split('/');
+            return new Date(year, month - 1, day);
+        }
 
-# Test Endpoint
-@app.get("/test")
-async def test_page():
-    """Simple test endpoint"""
-    return {
-        "message": "Server is working!",
-        "status": "success",
-        "timestamp": datetime.now().isoformat()
-    }
-
-# Save data on shutdown
-import atexit
-
-@atexit.register
-def save_on_exit():
-    """Save all data when application exits"""
-    logger.info("Saving data on application exit...")
-    save_data(CLIENTS_FILE, clients)
-    save_data(BOTS_FILE, bots)
-    save_data(SESSIONS_FILE, sessions)
-    save_data(PHONE_NUMBERS_FILE, phone_numbers)
-    save_data(DOCUMENTS_FILE, documents)
-    logger.info("Data saved successfully")
-
-# Run server
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Bot configuration page loaded for client:', '{{ client.business_name }}');
+            
+            // Check if phone number was purchased
+            {% if phone_number == "Not purchased" %}
+            document.querySelectorAll('.number-badge').forEach(badge => {
+                badge.style.backgroundColor = '#6c757d';
+                badge.textContent = 'No Number';
+            });
+            {% endif %}
+        });
+    </script>
+</body>
+</html>
