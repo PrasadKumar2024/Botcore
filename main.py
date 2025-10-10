@@ -13,7 +13,7 @@ import random
 app = FastAPI(title="OwnBot", version="1.0.0")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Setup templates
 templates = Jinja2Templates(directory="templates")
