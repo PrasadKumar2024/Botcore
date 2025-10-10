@@ -281,7 +281,7 @@ async def clients_bots(request: Request):
     
     save_data()
     
-    return templates.TemplateResponse("clients_bots.html", {
+    return templates.TemplateResponse("client_bots.html", {
         "request": request,
         "client": client,
         "phone_number": phone_info.get("number", "Not purchased"),
