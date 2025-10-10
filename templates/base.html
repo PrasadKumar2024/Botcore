@@ -373,7 +373,7 @@
                 <div class="dashboard-card">
                     <h4 class="mb-4">Recent Activity</h4>
                     <ul class="recent-activity">
-                        {% for client in clients|sort(attribute='completed_at', reverse=true)[:5] %}
+                        {% for client in (clients|sort(attribute='completed_at', reverse=true))[:5] %}
                         <li class="activity-item">
                             <div class="activity-icon bg-success text-white">
                                 <i class="bi bi-check-lg"></i>
