@@ -3,531 +3,577 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OwnBot - AI-Powered Business Automation</title>
-    
-    <!-- Favicon -->
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
-    
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+    <title>OwnBot - AI Bot Management Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.0/font/bootstrap-icons.css">
     <style>
         :root {
-            --primary: #4361ee;
-            --primary-dark: #3a0ca3;
-            --primary-light: #4895ef;
-            --secondary: #7209b7;
-            --success: #4cc9f0;
-            --success-dark: #3a86ff;
-            --danger: #f72585;
-            --warning: #fca311;
-            --info: #4cc9f0;
-            --light: #f8f9fa;
-            --dark: #212529;
-            --gray-100: #f8f9fa;
-            --gray-200: #e9ecef;
-            --gray-300: #dee2e6;
-            --gray-400: #ced4da;
-            --gray-500: #adb5bd;
-            --gray-600: #6c757d;
-            --gray-700: #495057;
-            --gray-800: #343a40;
-            --gray-900: #212529;
-            
-            --border-radius: 8px;
-            --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
-            --transition: all 0.3s ease;
+            --primary-color: #667eea;
+            --secondary-color: #764ba2;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --info-color: #3b82f6;
         }
         
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        .gradient-bg {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
         }
         
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--gray-100);
-            color: var(--gray-800);
-            line-height: 1.6;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        /* Header Styles */
-        header {
+        .dashboard-card {
             background: white;
-            box-shadow: var(--box-shadow);
-            padding: 1rem 2rem;
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            border: 1px solid #f1f5f9;
+            transition: all 0.3s ease;
         }
         
-        .header-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            text-decoration: none;
-            color: var(--dark);
-        }
-        
-        .logo-icon {
-            font-size: 1.5rem;
-            color: var(--primary);
-        }
-        
-        .logo-text {
-            font-size: 1.25rem;
-            font-weight: 700;
-        }
-        
-        .nav-links {
-            display: flex;
-            gap: 1.5rem;
-        }
-        
-        .nav-link {
-            color: var(--gray-600);
-            text-decoration: none;
-            font-weight: 500;
-            transition: var(--transition);
-        }
-        
-        .nav-link:hover {
-            color: var(--primary);
-        }
-        
-        /* Main Content */
-        main {
-            flex: 1;
-            padding: 2rem;
-            max-width: 1200px;
-            margin: 0 auto;
-            width: 100%;
-        }
-        
-        /* Footer */
-        footer {
-            background: var(--gray-800);
-            color: white;
-            padding: 2rem;
-            margin-top: auto;
-        }
-        
-        .footer-container {
-            max-width: 1200px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .footer-links {
-            display: flex;
-            gap: 1.5rem;
-        }
-        
-        .footer-link {
-            color: var(--gray-300);
-            text-decoration: none;
-            transition: var(--transition);
-        }
-        
-        .footer-link:hover {
-            color: white;
-        }
-        
-        /* Dashboard Styles */
-        .dashboard-header {
-            margin-bottom: 2rem;
-        }
-        
-        .dashboard-title {
-            font-size: 2rem;
-            font-weight: 700;
-            color: var(--dark);
-            margin-bottom: 0.5rem;
-        }
-        
-        .dashboard-subtitle {
-            color: var(--gray-600);
-            font-size: 1.1rem;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
         }
         
         .stat-card {
-            background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--box-shadow);
-            padding: 1.5rem;
             text-align: center;
+            padding: 20px;
         }
         
         .stat-number {
             font-size: 2.5rem;
-            font-weight: 700;
-            color: var(--primary);
-            margin-bottom: 0.5rem;
+            font-weight: bold;
+            margin-bottom: 5px;
         }
         
         .stat-label {
-            color: var(--gray-600);
-            font-size: 0.95rem;
-            font-weight: 500;
+            color: #64748b;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
         
-        .actions-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+        .quick-action {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            background: #f8fafc;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            color: inherit;
         }
         
-        .action-card {
-            background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--box-shadow);
-            padding: 1.5rem;
-            text-align: center;
+        .quick-action:hover {
+            background: #e2e8f0;
+            transform: translateX(5px);
+            color: inherit;
+            text-decoration: none;
         }
         
         .action-icon {
-            font-size: 2.5rem;
-            color: var(--primary);
-            margin-bottom: 1rem;
-        }
-        
-        .action-title {
-            font-size: 1.25rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-        
-        .action-description {
-            color: var(--gray-600);
-            margin-bottom: 1.5rem;
-        }
-        
-        .btn {
-            display: inline-flex;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
             align-items: center;
-            gap: 0.5rem;
-            padding: 0.75rem 1.5rem;
-            border-radius: var(--border-radius);
-            font-weight: 500;
-            text-decoration: none;
-            cursor: pointer;
-            transition: var(--transition);
-            border: none;
-            font-family: inherit;
-            font-size: 0.95rem;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 1.2rem;
         }
         
-        .btn-primary {
-            background-color: var(--primary);
+        .client-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
             color: white;
+            font-size: 1.2rem;
         }
         
-        .btn-primary:hover {
-            background-color: var(--primary-dark);
-            transform: translateY(-2px);
+        .recent-activity {
+            list-style: none;
+            padding: 0;
+            margin: 0;
         }
         
-        .btn-secondary {
-            background-color: var(--gray-200);
-            color: var(--gray-700);
+        .activity-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #e2e8f0;
         }
         
-        .btn-secondary:hover {
-            background-color: var(--gray-300);
+        .activity-item:last-child {
+            border-bottom: none;
         }
         
-        .clients-section {
-            background: white;
-            border-radius: var(--border-radius);
-            box-shadow: var(--box-shadow);
-            padding: 1.5rem;
-        }
-        
-        .section-title {
-            font-size: 1.5rem;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-            color: var(--dark);
-        }
-        
-        .clients-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 1.5rem;
-        }
-        
-        .client-card {
-            border: 1px solid var(--gray-200);
-            border-radius: var(--border-radius);
-            padding: 1.25rem;
-            transition: var(--transition);
-        }
-        
-        .client-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-        
-        .client-name {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: var(--dark);
-            margin-bottom: 0.5rem;
-        }
-        
-        .client-type {
-            color: var(--gray-600);
+        .activity-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
             font-size: 0.9rem;
-            margin-bottom: 1rem;
         }
         
-        .client-meta {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.85rem;
-            color: var(--gray-600);
-            margin-bottom: 1rem;
+        .bot-status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
         }
         
-        .client-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-        
-        .btn-sm {
-            padding: 0.5rem 1rem;
-            font-size: 0.85rem;
-            flex: 1;
-        }
+        .status-active { background: var(--success-color); }
+        .status-inactive { background: #94a3b8; }
+        .status-expired { background: var(--warning-color); }
         
         .empty-state {
             text-align: center;
-            padding: 3rem 2rem;
-            color: var(--gray-500);
+            padding: 60px 20px;
+            background: #f8fafc;
+            border-radius: 15px;
+            border: 2px dashed #cbd5e1;
         }
         
-        .empty-icon {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-            opacity: 0.5;
-        }
-        
-        .empty-title {
+        .navbar-brand {
+            font-weight: bold;
             font-size: 1.5rem;
-            margin-bottom: 0.5rem;
-            color: var(--gray-600);
         }
         
-        .empty-description {
-            margin-bottom: 2rem;
-            max-width: 500px;
-            margin-left: auto;
-            margin-right: auto;
+        .welcome-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 0;
+            border-radius: 0 0 20px 20px;
+            margin-bottom: 30px;
         }
         
-        /* Responsive */
-        @media (max-width: 768px) {
-            .header-container {
-                flex-direction: column;
-                gap: 1rem;
-            }
-            
-            .nav-links {
-                gap: 1rem;
-            }
-            
-            .footer-container {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-            
-            .footer-links {
-                justify-content: center;
-            }
-            
-            main {
-                padding: 1rem;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .actions-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .clients-grid {
-                grid-template-columns: 1fr;
-            }
+        .feature-highlight {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 1.2rem;
         }
     </style>
 </head>
 <body>
-    <header>
-        <div class="header-container">
-            <a href="/" class="logo">
-                <span class="logo-icon">🤖</span>
-                <span class="logo-text">OwnBot</span>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark gradient-bg">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-robot"></i> OwnBot
             </a>
-            
-            <nav class="nav-links">
-                <a href="/" class="nav-link"><i class="fas fa-home"></i> Dashboard</a>
-                <a href="/clients" class="nav-link"><i class="fas fa-users"></i> Clients</a>
-                <a href="#" class="nav-link"><i class="fas fa-cog"></i> Settings</a>
-            </nav>
-        </div>
-    </header>
-    
-    <main>
-        <div class="dashboard-header">
-            <h1 class="dashboard-title">Dashboard</h1>
-            <p class="dashboard-subtitle">Manage your AI-powered business automation</p>
-        </div>
-        
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-number">{{ total_clients }}</div>
-                <div class="stat-label">Total Clients</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{{ active_clients }}</div>
-                <div class="stat-label">Active Clients</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{{ messages_today }}</div>
-                <div class="stat-label">Messages Today</div>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/">Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/clients">Clients</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/add_client">Add Client</a>
+                    </li>
+                </ul>
+                <div class="navbar-text">
+                    <i class="bi bi-person-circle me-2"></i>Admin Panel
+                </div>
             </div>
         </div>
-        
-        <div class="actions-grid">
-            <div class="action-card">
-                <div class="action-icon">👥</div>
-                <h3 class="action-title">Add New Client</h3>
-                <p class="action-description">Create a new client and set up their AI automation</p>
-                <a href="/clients/add" class="btn btn-primary">
-                    <i class="fas fa-plus"></i> Add Client
-                </a>
-            </div>
-            
-            <div class="action-card">
-                <div class="action-icon">📊</div>
-                <h3 class="action-title">View All Clients</h3>
-                <p class="action-description">Manage existing clients and their configurations</p>
-                <a href="/clients" class="btn btn-secondary">
-                    <i class="fas fa-list"></i> View Clients
-                </a>
-            </div>
-            
-            <div class="action-card">
-                <div class="action-icon">🚀</div>
-                <h3 class="action-title">Quick Start</h3>
-                <p class="action-description">Complete setup guide for new clients</p>
-                <a href="/clients/add" class="btn btn-secondary">
-                    <i class="fas fa-rocket"></i> Get Started
-                </a>
-            </div>
-        </div>
-        
-        <div class="clients-section">
-            <h2 class="section-title">Recent Clients</h2>
-            
-            {% if clients %}
-            <div class="clients-grid">
-                {% for client in clients %}
-                <div class="client-card">
-                    <h3 class="client-name">{{ client.business_name }}</h3>
-                    <p class="client-type">{{ client.business_type }}</p>
-                    <div class="client-meta">
-                        <span>Created: {{ client.created_at[:10] if client.created_at else 'Recently' }}</span>
-                        <span>Active</span>
-                    </div>
-                    <div class="client-actions">
-                        <a href="/clients/{{ client.id }}" class="btn btn-primary btn-sm">View</a>
-                        <a href="/configure_bot?client_id={{ client.id }}" class="btn btn-secondary btn-sm">Configure</a>
+    </nav>
+
+    <!-- Welcome Section -->
+    <div class="welcome-section">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-8">
+                    <h1 class="display-5 fw-bold">Welcome to OwnBot</h1>
+                    <p class="lead mb-4">Manage AI-powered WhatsApp, Voice, and Web Chat bots for all your clients in one place.</p>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="feature-highlight">
+                                <div class="feature-icon">
+                                    <i class="bi bi-whatsapp"></i>
+                                </div>
+                                <div>
+                                    <strong>WhatsApp Business Bots</strong>
+                                    <div class="small">Automated customer support</div>
+                                </div>
+                            </div>
+                            <div class="feature-highlight">
+                                <div class="feature-icon">
+                                    <i class="bi bi-telephone"></i>
+                                </div>
+                                <div>
+                                    <strong>Voice Call Bots</strong>
+                                    <div class="small">24/7 phone assistance</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="feature-highlight">
+                                <div class="feature-icon">
+                                    <i class="bi bi-chat-dots"></i>
+                                </div>
+                                <div>
+                                    <strong>Web Chat Bots</strong>
+                                    <div class="small">Website integration</div>
+                                </div>
+                            </div>
+                            <div class="feature-highlight">
+                                <div class="feature-icon">
+                                    <i class="bi bi-file-text"></i>
+                                </div>
+                                <div>
+                                    <strong>PDF Knowledge Base</strong>
+                                    <div class="small">AI trained on your documents</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                {% endfor %}
+                <div class="col-lg-4 text-center">
+                    <div class="dashboard-card">
+                        <h4>Ready to Start?</h4>
+                        <p class="text-muted">Create your first AI bot client in minutes</p>
+                        <a href="/add_client" class="btn btn-primary btn-lg w-100">
+                            <i class="bi bi-plus-circle"></i> Add New Client
+                        </a>
+                    </div>
+                </div>
             </div>
-            {% else %}
-            <div class="empty-state">
-                <div class="empty-icon">👥</div>
-                <h3 class="empty-title">No Clients Yet</h3>
-                <p class="empty-description">
-                    Get started by adding your first client. The setup process will guide you through 
-                    document upload, phone number purchase, and bot configuration.
-                </p>
-                <a href="/clients/add" class="btn btn-primary btn-lg">
-                    <i class="fas fa-plus"></i> Add Your First Client
-                </a>
-            </div>
-            {% endif %}
         </div>
-    </main>
-    
-    <footer>
-        <div class="footer-container">
-            <p>&copy; 2025 OwnBot. All rights reserved.</p>
-            <div class="footer-links">
-                <a href="#" class="footer-link">Privacy Policy</a>
-                <a href="#" class="footer-link">Terms of Service</a>
-                <a href="#" class="footer-link">Contact</a>
+    </div>
+
+    <!-- Main Dashboard Content -->
+    <div class="container mt-4">
+        <!-- Stats Overview -->
+        <div class="row">
+            <div class="col-xl-3 col-md-6">
+                <div class="dashboard-card stat-card">
+                    <div class="stat-number text-primary">{{ clients|length }}</div>
+                    <div class="stat-label">Total Clients</div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6">
+                <div class="dashboard-card stat-card">
+                    {% set active_bots = 0 %}
+                    {% for client in clients %}
+                        {% if client.id in subscriptions %}
+                            {% for bot, sub in subscriptions[client.id].items() %}
+                                {% if sub.status == 'active' %}
+                                    {% set active_bots = active_bots + 1 %}
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+                    {% endfor %}
+                    <div class="stat-number text-success">{{ active_bots }}</div>
+                    <div class="stat-label">Active Bots</div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6">
+                <div class="dashboard-card stat-card">
+                    {% set total_docs = 0 %}
+                    {% for client in clients %}
+                        {% if client.id in documents %}
+                            {% set total_docs = total_docs + documents[client.id]|length %}
+                        {% endif %}
+                    {% endfor %}
+                    <div class="stat-number text-info">{{ total_docs }}</div>
+                    <div class="stat-label">PDF Documents</div>
+                </div>
+            </div>
+            <div class="col-xl-3 col-md-6">
+                <div class="dashboard-card stat-card">
+                    {% set clients_with_phone = 0 %}
+                    {% for client in clients %}
+                        {% if client.id in phone_numbers %}
+                            {% set clients_with_phone = clients_with_phone + 1 %}
+                        {% endif %}
+                    {% endfor %}
+                    <div class="stat-number text-warning">{{ clients_with_phone }}</div>
+                    <div class="stat-label">Phone Numbers</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Recent Clients & Quick Actions -->
+            <div class="col-lg-8">
+                <!-- Recent Clients -->
+                <div class="dashboard-card">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h4>Recent Clients</h4>
+                        <a href="/clients" class="btn btn-outline-primary btn-sm">View All</a>
+                    </div>
+                    
+                    {% if clients %}
+                    <div class="row">
+                        {% for client in clients[:6] %}
+                        <div class="col-md-6 col-lg-4 mb-3">
+                            <a href="/client/{{ client.id }}" class="quick-action">
+                                <div class="client-avatar" style="background: linear-gradient(135deg, #{{ client.id[:6] }} 0%, #{{ client.id[6:12] }} 100%);">
+                                    {{ client.business_name[:2]|upper }}
+                                </div>
+                                <div>
+                                    <strong>{{ client.business_name }}</strong>
+                                    <div class="small text-muted">
+                                        {% if client.id in subscriptions %}
+                                            {% set active_count = 0 %}
+                                            {% for bot, sub in subscriptions[client.id].items() %}
+                                                {% if sub.status == 'active' %}
+                                                    {% set active_count = active_count + 1 %}
+                                                {% endif %}
+                                            {% endfor %}
+                                            {{ active_count }}/3 bots active
+                                        {% else %}
+                                            No bots active
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </a>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="empty-state">
+                        <i class="bi bi-people" style="font-size: 3rem; color: #cbd5e1;"></i>
+                        <h5 class="mt-3">No Clients Yet</h5>
+                        <p class="text-muted">Get started by adding your first client</p>
+                        <a href="/add_client" class="btn btn-primary">
+                            <i class="bi bi-plus-circle"></i> Add First Client
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="dashboard-card">
+                    <h4 class="mb-4">Recent Activity</h4>
+                    <ul class="recent-activity">
+                        {% for client in clients|sort(attribute='completed_at', reverse=true)[:5] %}
+                        <li class="activity-item">
+                            <div class="activity-icon bg-success text-white">
+                                <i class="bi bi-check-lg"></i>
+                            </div>
+                            <div class="flex-grow-1">
+                                <strong>{{ client.business_name }}</strong> setup completed
+                                <div class="small text-muted">{{ client.completed_at[:10] if client.completed_at else 'Recently' }}</div>
+                            </div>
+                        </li>
+                        {% endfor %}
+                        
+                        {% if clients|length == 0 %}
+                        <li class="activity-item text-center text-muted py-4">
+                            <i class="bi bi-activity me-2"></i>No recent activity
+                        </li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Quick Actions & Bot Status -->
+            <div class="col-lg-4">
+                <!-- Quick Actions -->
+                <div class="dashboard-card">
+                    <h4 class="mb-4">Quick Actions</h4>
+                    <a href="/add_client" class="quick-action">
+                        <div class="action-icon bg-primary text-white">
+                            <i class="bi bi-person-plus"></i>
+                        </div>
+                        <div>
+                            <strong>Add New Client</strong>
+                            <div class="small text-muted">Create new bot client</div>
+                        </div>
+                    </a>
+                    
+                    <a href="/clients" class="quick-action">
+                        <div class="action-icon bg-success text-white">
+                            <i class="bi bi-people"></i>
+                        </div>
+                        <div>
+                            <strong>Manage Clients</strong>
+                            <div class="small text-muted">View all clients</div>
+                        </div>
+                    </a>
+                    
+                    <a href="#" class="quick-action">
+                        <div class="action-icon bg-info text-white">
+                            <i class="bi bi-graph-up"></i>
+                        </div>
+                        <div>
+                            <strong>View Analytics</strong>
+                            <div class="small text-muted">Usage statistics</div>
+                        </div>
+                    </a>
+                    
+                    <a href="#" class="quick-action">
+                        <div class="action-icon bg-warning text-white">
+                            <i class="bi bi-gear"></i>
+                        </div>
+                        <div>
+                            <strong>Settings</strong>
+                            <div class="small text-muted">Platform configuration</div>
+                        </div>
+                    </a>
+                </div>
+
+                <!-- Bot Status Overview -->
+                <div class="dashboard-card">
+                    <h4 class="mb-4">Bot Status Overview</h4>
+                    
+                    {% if clients %}
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>WhatsApp Bots</span>
+                            <span>
+                                {% set whatsapp_active = 0 %}
+                                {% for client in clients %}
+                                    {% if client.id in subscriptions and subscriptions[client.id].whatsapp.status == 'active' %}
+                                        {% set whatsapp_active = whatsapp_active + 1 %}
+                                    {% endif %}
+                                {% endfor %}
+                                {{ whatsapp_active }}/{{ clients|length }}
+                            </span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div class="progress-bar bg-success" style="width: {{ (whatsapp_active / clients|length * 100) if clients|length > 0 else 0 }}%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Voice Bots</span>
+                            <span>
+                                {% set voice_active = 0 %}
+                                {% for client in clients %}
+                                    {% if client.id in subscriptions and subscriptions[client.id].voice.status == 'active' %}
+                                        {% set voice_active = voice_active + 1 %}
+                                    {% endif %}
+                                {% endfor %}
+                                {{ voice_active }}/{{ clients|length }}
+                            </span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div class="progress-bar bg-info" style="width: {{ (voice_active / clients|length * 100) if clients|length > 0 else 0 }}%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Web Chat Bots</span>
+                            <span>
+                                {% set web_active = 0 %}
+                                {% for client in clients %}
+                                    {% if client.id in subscriptions and subscriptions[client.id].web.status == 'active' %}
+                                        {% set web_active = web_active + 1 %}
+                                    {% endif %}
+                                {% endfor %}
+                                {{ web_active }}/{{ clients|length }}
+                            </span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div class="progress-bar bg-warning" style="width: {{ (web_active / clients|length * 100) if clients|length > 0 else 0 }}%"></div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="text-center text-muted py-3">
+                        <i class="bi bi-robot" style="font-size: 2rem;"></i>
+                        <div class="mt-2">No bots configured yet</div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- System Status -->
+                <div class="dashboard-card">
+                    <h4 class="mb-4">System Status</h4>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>API Service</span>
+                        <span class="badge bg-success">Online</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>Database</span>
+                        <span class="badge bg-success">Connected</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>AI Service</span>
+                        <span class="badge bg-success">Ready</span>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span>Twilio API</span>
+                        <span class="badge bg-warning">Simulated</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-5 py-4 bg-light">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5><i class="bi bi-robot"></i> OwnBot</h5>
+                    <p class="text-muted">AI-powered bot management platform for businesses of all sizes.</p>
+                </div>
+                <div class="col-md-6 text-end">
+                    <div class="text-muted">
+                        &copy; 2024 OwnBot. All rights reserved.
+                    </div>
+                </div>
             </div>
         </div>
     </footer>
-    
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Simple dashboard interactions
+        // Initialize tooltips
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        });
+
+        // Auto-update dashboard every 30 seconds
+        setInterval(function() {
+            // In a real application, you might fetch updated stats here
+            console.log('Dashboard auto-refresh...');
+        }, 30000);
+
+        // Add smooth animations
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('Dashboard loaded successfully');
-            
-            // Add some interactive elements
+            // Animate stats cards
             const statCards = document.querySelectorAll('.stat-card');
-            statCards.forEach(card => {
-                card.addEventListener('click', function() {
-                    this.style.transform = 'scale(1.02)';
-                    setTimeout(() => {
-                        this.style.transform = 'scale(1)';
-                    }, 150);
-                });
+            statCards.forEach((card, index) => {
+                card.style.animationDelay = `${index * 0.1}s`;
             });
             
-            // Show welcome message for new users
-            {% if not clients %}
-            setTimeout(() => {
-                if (confirm('Welcome to OwnBot! Ready to add your first client?')) {
-                    window.location.href = '/clients/add';
-                }
-            }, 1000);
-            {% endif %}
+            // Animate dashboard cards
+            const dashboardCards = document.querySelectorAll('.dashboard-card');
+            dashboardCards.forEach((card, index) => {
+                card.style.animationDelay = `${index * 0.05}s`;
+            });
         });
     </script>
 </body>
