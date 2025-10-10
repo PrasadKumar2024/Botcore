@@ -13,7 +13,7 @@ import random
 app = FastAPI(title="OwnBot", version="1.0.0")
 
 # Mount static files
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Setup templates
 templates = Jinja2Templates(directory="templates")
@@ -132,16 +132,14 @@ async def clients_list(request: Request):
         "subscriptions": subscriptions
     })
 
-# FIXED: Changed back to /add_client to match your button
 @app.get("/add_client", response_class=HTMLResponse)
 async def add_client_form(request: Request):
     """Show add client form"""
     return templates.TemplateResponse("add_client.html", {"request": request})
 
-# FIXED: Changed back to /add_client to match your form
-@app.post("/add_client")
-async def add_client(
-    request: Request,
+# FIXED: Added this route to match the form action
+@app.post("/clients/add")
+async def clients_add(
     business_name: str = Form(...),
     business_type: str = Form(...)
 ):
@@ -551,4 +549,4 @@ async def delete_client(client_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=10000)
