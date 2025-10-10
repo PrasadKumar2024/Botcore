@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -114,7 +114,10 @@ async def dashboard(request: Request):
     completed_clients = {k: v for k, v in clients.items() if v.get("status") == "completed"}
     return templates.TemplateResponse("base.html", {
         "request": request,
-        "clients": list(completed_clients.values())
+        "clients": list(completed_clients.values()),
+        "documents": documents,
+        "phone_numbers": phone_numbers,
+        "subscriptions": subscriptions
     })
 
 @app.get("/clients", response_class=HTMLResponse)
@@ -123,15 +126,18 @@ async def clients_list(request: Request):
     completed_clients = {k: v for k, v in clients.items() if v.get("status") == "completed"}
     return templates.TemplateResponse("clients.html", {
         "request": request,
-        "clients": list(completed_clients.values())
+        "clients": list(completed_clients.values()),
+        "documents": documents,
+        "phone_numbers": phone_numbers,
+        "subscriptions": subscriptions
     })
 
-@app.get("/add_client", response_class=HTMLResponse)
+@app.get("/clients/add", response_class=HTMLResponse)
 async def add_client_form(request: Request):
     """Show add client form"""
     return templates.TemplateResponse("add_client.html", {"request": request})
 
-@app.post("/add_client")
+@app.post("/clients/add")
 async def add_client(
     request: Request,
     business_name: str = Form(...),
@@ -186,13 +192,15 @@ async def upload_documents(
         documents[client_id] = []
     
     for file in files:
-        if file.filename.endswith('.pdf'):
+        if file.filename and file.filename.endswith('.pdf'):
             document_id = str(uuid.uuid4())
+            # Read file content to get size
+            content = await file.read()
             documents[client_id].append({
                 "id": document_id,
                 "filename": file.filename,
                 "uploaded_at": datetime.now().isoformat(),
-                "file_size": len(await file.read()),
+                "file_size": len(content),
                 "processed": False
             })
     
@@ -270,6 +278,8 @@ async def clients_bots(request: Request):
             "logo": "",
             "updated_at": datetime.now().isoformat()
         }
+    
+    save_data()
     
     return templates.TemplateResponse("Clients_bots.html", {
         "request": request,
@@ -362,7 +372,7 @@ async def add_months(request: Request):
         if client_id not in subscriptions:
             subscriptions[client_id] = {}
         
-        if bot_type not in subscriptions[client_id]:
+        if bot_type not in subscriptions[client_id] or not subscriptions[client_id][bot_type].get("start_date"):
             # First time subscription
             start_date = datetime.now()
             expiry_date = start_date + timedelta(days=30 * months)
@@ -373,15 +383,22 @@ async def add_months(request: Request):
             }
         else:
             # Extend existing subscription
-            current_expiry = datetime.fromisoformat(subscriptions[client_id][bot_type]["expiry_date"])
-            if current_expiry < datetime.now():
-                # Subscription expired, start from today
+            current_expiry_str = subscriptions[client_id][bot_type]["expiry_date"]
+            if current_expiry_str:
+                current_expiry = datetime.fromisoformat(current_expiry_str)
+                if current_expiry < datetime.now():
+                    # Subscription expired, start from today
+                    start_date = datetime.now()
+                    expiry_date = start_date + timedelta(days=30 * months)
+                    subscriptions[client_id][bot_type]["start_date"] = start_date.isoformat()
+                else:
+                    # Extend from current expiry
+                    expiry_date = current_expiry + timedelta(days=30 * months)
+            else:
+                # No expiry date set, start from today
                 start_date = datetime.now()
                 expiry_date = start_date + timedelta(days=30 * months)
                 subscriptions[client_id][bot_type]["start_date"] = start_date.isoformat()
-            else:
-                # Extend from current expiry
-                expiry_date = current_expiry + timedelta(days=30 * months)
             
             subscriptions[client_id][bot_type]["expiry_date"] = expiry_date.isoformat()
             subscriptions[client_id][bot_type]["status"] = "active"
@@ -416,7 +433,11 @@ async def toggle_bot(request: Request):
         
         if action == "activate":
             # Check if subscription is valid
-            expiry_date = datetime.fromisoformat(subscriptions[client_id][bot_type]["expiry_date"])
+            expiry_date_str = subscriptions[client_id][bot_type].get("expiry_date")
+            if not expiry_date_str:
+                return JSONResponse({"status": "error", "message": "No expiry date set"})
+            
+            expiry_date = datetime.fromisoformat(expiry_date_str)
             if expiry_date < datetime.now():
                 return JSONResponse({"status": "error", "message": "Subscription expired"})
             
@@ -451,11 +472,13 @@ async def update_whatsapp_profile(request: Request):
         if client_id not in whatsapp_profiles:
             whatsapp_profiles[client_id] = {}
         
-        whatsapp_profiles[client_id].update({
-            "business_name": business_name,
-            "address": address,
-            "updated_at": datetime.now().isoformat()
-        })
+        update_data = {"updated_at": datetime.now().isoformat()}
+        if business_name is not None:
+            update_data["business_name"] = business_name
+        if address is not None:
+            update_data["address"] = address
+            
+        whatsapp_profiles[client_id].update(update_data)
         
         save_data()
         
@@ -486,6 +509,41 @@ async def chat_endpoint(client_id: str, request: Request):
             "response": response,
             "client_id": client_id
         })
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)})
+
+# Delete client API
+@app.delete("/api/clients/{client_id}")
+async def delete_client(client_id: str):
+    """Delete client and all associated data"""
+    try:
+        if client_id in clients:
+            del clients[client_id]
+        
+        if client_id in documents:
+            del documents[client_id]
+            
+        if client_id in phone_numbers:
+            del phone_numbers[client_id]
+            
+        if client_id in subscriptions:
+            del subscriptions[client_id]
+            
+        if client_id in whatsapp_profiles:
+            del whatsapp_profiles[client_id]
+        
+        # Remove from sessions
+        sessions_to_remove = [sid for sid, cid in sessions.items() if cid == client_id]
+        for session_id in sessions_to_remove:
+            del sessions[session_id]
+        
+        save_data()
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Client deleted successfully"
+        })
+        
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)})
 
