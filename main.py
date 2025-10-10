@@ -132,12 +132,14 @@ async def clients_list(request: Request):
         "subscriptions": subscriptions
     })
 
-@app.get("/clients/add", response_class=HTMLResponse)
+# FIXED: Changed back to /add_client to match your button
+@app.get("/add_client", response_class=HTMLResponse)
 async def add_client_form(request: Request):
     """Show add client form"""
     return templates.TemplateResponse("add_client.html", {"request": request})
 
-@app.post("/clients/add")
+# FIXED: Changed back to /add_client to match your form
+@app.post("/add_client")
 async def add_client(
     request: Request,
     business_name: str = Form(...),
