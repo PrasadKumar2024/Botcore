@@ -1,625 +1,806 @@
-
-{% extends "base.html" %}
-
-{% block title %}{{ client.business_name }} - OwnBot{% endblock %}
-
-{% block extra_css %}
-<style>
-    .client-detail-container {
-        max-width: 1200px;
-        margin: 0 auto;
-    }
-    
-    .client-header {
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        padding: 2rem;
-        margin-bottom: 2rem;
-    }
-    
-    .client-info {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 1.5rem;
-    }
-    
-    .client-name {
-        font-size: 2rem;
-        font-weight: 700;
-        color: var(--primary);
-        margin-bottom: 0.5rem;
-    }
-    
-    .client-type {
-        color: var(--gray-600);
-        font-size: 1.1rem;
-    }
-    
-    .client-status {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        border-radius: 50rem;
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-    
-    .status-active {
-        background-color: rgba(76, 201, 240, 0.15);
-        color: var(--success-dark);
-    }
-    
-    .status-inactive {
-        background-color: rgba(108, 117, 125, 0.15);
-        color: var(--gray-600);
-    }
-    
-    .status-expired {
-        background-color: rgba(247, 37, 133, 0.15);
-        color: var(--danger);
-    }
-    
-    .tabs-container {
-        margin-bottom: 2rem;
-    }
-    
-    /* Bots Tab Styles */
-    .bots-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-        gap: 1.5rem;
-        margin-bottom: 2rem;
-    }
-    
-    .bot-card {
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        padding: 1.5rem;
-        transition: transform 0.3s ease;
-    }
-    
-    .bot-card:hover {
-        transform: translateY(-5px);
-    }
-    
-    .bot-header {
-        display: flex;
-        align-items: center;
-        margin-bottom: 1rem;
-        padding-bottom: 1rem;
-        border-bottom: 1px solid var(--gray-200);
-    }
-    
-    .bot-icon {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 1rem;
-        font-size: 1.2rem;
-    }
-    
-    .bot-whatsapp .bot-icon {
-        background-color: #25D366;
-        color: white;
-    }
-    
-    .bot-voice .bot-icon {
-        background-color: var(--primary);
-        color: white;
-    }
-    
-    .bot-web .bot-icon {
-        background-color: var(--warning);
-        color: white;
-    }
-    
-    .bot-title {
-        font-size: 1.25rem;
-        font-weight: 600;
-    }
-    
-    .bot-number {
-        color: var(--gray-600);
-        font-size: 0.9rem;
-        margin-top: 0.25rem;
-    }
-    
-    .subscription-info {
-        margin-bottom: 1.5rem;
-    }
-    
-    .date-row {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 0.5rem;
-        font-size: 0.9rem;
-    }
-    
-    .date-label {
-        color: var(--gray-600);
-    }
-    
-    .date-value {
-        font-weight: 500;
-    }
-    
-    .months-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 0.5rem;
-        margin-bottom: 1rem;
-    }
-    
-    .month-btn {
-        padding: 0.5rem;
-        border: 1px solid var(--gray-300);
-        border-radius: var(--border-radius);
-        background: white;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        font-weight: 500;
-    }
-    
-    .month-btn:hover {
-        background: var(--primary);
-        color: white;
-        border-color: var(--primary);
-    }
-    
-    .action-buttons {
-        display: flex;
-        gap: 0.5rem;
-    }
-    
-    /* Data Tab Styles */
-    .upload-section {
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        padding: 1.5rem;
-        margin-bottom: 2rem;
-    }
-    
-    .upload-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
-    }
-    
-    .documents-list {
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        overflow: hidden;
-    }
-    
-    .document-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 1rem 1.5rem;
-        border-bottom: 1px solid var(--gray-200);
-    }
-    
-    .document-item:last-child {
-        border-bottom: none;
-    }
-    
-    .document-info {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-    }
-    
-    .document-icon {
-        color: var(--danger);
-        font-size: 1.25rem;
-    }
-    
-    .document-name {
-        font-weight: 500;
-    }
-    
-    .document-size {
-        color: var(--gray-600);
-        font-size: 0.85rem;
-    }
-    
-    .document-actions {
-        display: flex;
-        gap: 0.5rem;
-    }
-    
-    /* Analytics Tab Styles */
-    .analytics-placeholder {
-        background: white;
-        border-radius: var(--border-radius);
-        box-shadow: var(--box-shadow);
-        padding: 3rem;
-        text-align: center;
-        color: var(--gray-600);
-    }
-    
-    .analytics-placeholder i {
-        font-size: 3rem;
-        margin-bottom: 1rem;
-        color: var(--gray-400);
-    }
-    
-    @media (max-width: 768px) {
-        .client-info {
-            flex-direction: column;
-            gap: 1rem;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ client.business_name }} - Manage Bots & Data</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.0/font/bootstrap-icons.css">
+    <style>
+        .client-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 0;
+            margin-bottom: 30px;
         }
         
-        .bots-grid {
-            grid-template-columns: 1fr;
+        .tab-content {
+            min-height: 500px;
         }
         
-        .months-grid {
-            grid-template-columns: repeat(2, 1fr);
+        .bot-section {
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 25px;
+            background: #f8f9fa;
+        }
+        
+        .subscription-buttons {
+            display: flex;
+            gap: 8px;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+        
+        .status-active {
+            color: #28a745;
+            font-weight: bold;
+        }
+        
+        .status-inactive {
+            color: #6c757d;
+            font-weight: bold;
+        }
+        
+        .status-expired {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        
+        .profile-section {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border-left: 4px solid #007bff;
+        }
+        
+        .embed-code {
+            background: #2d2d2d;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-size: 14px;
+        }
+        
+        .document-list {
+            max-height: 400px;
+            overflow-y: auto;
         }
         
         .document-item {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 1rem;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: white;
         }
         
-        .document-actions {
-            align-self: flex-end;
+        .upload-area {
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 40px 20px;
+            text-align: center;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
         }
-    }
-</style>
-{% endblock %}
-
-{% block content %}
-<div class="client-detail-container">
+        
+        .upload-area:hover {
+            border-color: #007bff;
+            background: #e7f1ff;
+        }
+        
+        .upload-area.dragover {
+            border-color: #007bff;
+            background: #d4edda;
+        }
+        
+        .bot-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #dee2e6;
+        }
+        
+        .bot-icon {
+            font-size: 24px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #007bff;
+            color: white;
+        }
+        
+        .number-badge {
+            background: #17a2b8;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .knowledge-base-status {
+            background: #e7f3ff;
+            border: 1px solid #b3d7ff;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
     <!-- Client Header -->
     <div class="client-header">
-        <div class="client-info">
-            <div>
-                <h1 class="client-name">{{ client.business_name }}</h1>
-                <div class="client-type">{{ client.business_type }}</div>
-            </div>
-            <div class="client-status status-{{ client.status|lower }}">
-                {{ client.status }}
-            </div>
-        </div>
-        
-        <div class="tabs">
-            <a href="?tab=bots" class="tab {% if tab == 'bots' %}active{% endif %}">Bots</a>
-            <a href="?tab=data" class="tab {% if tab == 'data' %}active{% endif %}">Data</a>
-            <a href="?tab=analytics" class="tab {% if tab == 'analytics' %}active{% endif %}">Analytics</a>
-        </div>
-    </div>
-
-    <!-- Bots Tab -->
-    {% if tab == 'bots' %}
-    <div class="bots-grid">
-        <!-- WhatsApp Bot Card -->
-        <div class="bot-card bot-whatsapp">
-            <div class="bot-header">
-                <div class="bot-icon">
-                    <i class="fab fa-whatsapp"></i>
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <nav aria-label="breadcrumb">
+                        <ol class="breadcrumb" style="background: transparent; padding: 0;">
+                            <li class="breadcrumb-item"><a href="/" class="text-white">Dashboard</a></li>
+                            <li class="breadcrumb-item"><a href="/clients" class="text-white">Clients</a></li>
+                            <li class="breadcrumb-item active text-white">{{ client.business_name }}</li>
+                        </ol>
+                    </nav>
+                    <h1 class="display-6 fw-bold">{{ client.business_name }}</h1>
+                    <p class="lead mb-0">{{ client.business_type }} • Created: {{ client.created_at[:10] }}</p>
                 </div>
-                <div>
-                    <div class="bot-title">WhatsApp Bot</div>
-                    {% if client.phone_number %}
-                    <div class="bot-number">Uses: {{ client.phone_number.number }}</div>
-                    {% endif %}
-                </div>
-            </div>
-            
-            <div class="subscription-info">
-                <div class="date-row">
-                    <span class="date-label">Start Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.whatsapp and subscriptions.whatsapp.start_date %}
-                            {{ subscriptions.whatsapp.start_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Expiry Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.whatsapp and subscriptions.whatsapp.expiry_date %}
-                            {{ subscriptions.whatsapp.expiry_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Status:</span>
-                    <span class="date-value">
-                        {% if subscriptions.whatsapp and subscriptions.whatsapp.active %}
-                            ACTIVE ✅
-                        {% else %}
-                            INACTIVE
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
-            
-            <div class="months-grid">
-                <button class="month-btn" onclick="addMonths('whatsapp', 1)">1 Month</button>
-                <button class="month-btn" onclick="addMonths('whatsapp', 2)">2 Months</button>
-                <button class="month-btn" onclick="addMonths('whatsapp', 3)">3 Months</button>
-                <button class="month-btn" onclick="addMonths('whatsapp', 6)">6 Months</button>
-                <button class="month-btn" onclick="addMonths('whatsapp', 12)">12 Months</button>
-            </div>
-            
-            <div class="action-buttons">
-                {% if subscriptions.whatsapp and subscriptions.whatsapp.active %}
-                <form action="/clients/{{ client.id }}/subscriptions/whatsapp/deactivate" method="post">
-                    <button type="submit" class="btn btn-danger btn-sm">Deactivate</button>
-                </form>
-                {% else %}
-                <form action="/clients/{{ client.id }}/subscriptions/whatsapp/reactivate" method="post">
-                    <button type="submit" class="btn btn-success btn-sm">Activate</button>
-                </form>
-                {% endif %}
-                
-                {% if client.phone_number %}
-                <a href="/clients/{{ client.id }}/whatsapp-profile" class="btn btn-primary btn-sm">Edit Profile</a>
-                {% endif %}
-            </div>
-        </div>
-
-        <!-- Voice Bot Card -->
-        <div class="bot-card bot-voice">
-            <div class="bot-header">
-                <div class="bot-icon">
-                    <i class="fas fa-phone"></i>
-                </div>
-                <div>
-                    <div class="bot-title">Voice Call Bot</div>
-                    {% if client.phone_number %}
-                    <div class="bot-number">Uses: {{ client.phone_number.number }}</div>
-                    {% endif %}
-                </div>
-            </div>
-            
-            <div class="subscription-info">
-                <div class="date-row">
-                    <span class="date-label">Start Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.voice and subscriptions.voice.start_date %}
-                            {{ subscriptions.voice.start_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Expiry Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.voice and subscriptions.voice.expiry_date %}
-                            {{ subscriptions.voice.expiry_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Status:</span>
-                    <span class="date-value">
-                        {% if subscriptions.voice and subscriptions.voice.active %}
-                            ACTIVE ✅
-                        {% else %}
-                            INACTIVE
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
-            
-            <div class="months-grid">
-                <button class="month-btn" onclick="addMonths('voice', 1)">1 Month</button>
-                <button class="month-btn" onclick="addMonths('voice', 2)">2 Months</button>
-                <button class="month-btn" onclick="addMonths('voice', 3)">3 Months</button>
-                <button class="month-btn" onclick="addMonths('voice', 6)">6 Months</button>
-                <button class="month-btn" onclick="addMonths('voice', 12)">12 Months</button>
-            </div>
-            
-            <div class="action-buttons">
-                {% if subscriptions.voice and subscriptions.voice.active %}
-                <form action="/clients/{{ client.id }}/subscriptions/voice/deactivate" method="post">
-                    <button type="submit" class="btn btn-danger btn-sm">Deactivate</button>
-                </form>
-                {% else %}
-                <form action="/clients/{{ client.id }}/subscriptions/voice/reactivate" method="post">
-                    <button type="submit" class="btn btn-success btn-sm">Activate</button>
-                </form>
-                {% endif %}
-            </div>
-        </div>
-
-        <!-- Web Chat Bot Card -->
-        <div class="bot-card bot-web">
-            <div class="bot-header">
-                <div class="bot-icon">
-                    <i class="fas fa-comments"></i>
-                </div>
-                <div>
-                    <div class="bot-title">Web Chat Bot</div>
-                    <div class="bot-number">Always available</div>
-                </div>
-            </div>
-            
-            <div class="subscription-info">
-                <div class="date-row">
-                    <span class="date-label">Start Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.web and subscriptions.web.start_date %}
-                            {{ subscriptions.web.start_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Expiry Date:</span>
-                    <span class="date-value">
-                        {% if subscriptions.web and subscriptions.web.expiry_date %}
-                            {{ subscriptions.web.expiry_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            --/--/----
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="date-row">
-                    <span class="date-label">Status:</span>
-                    <span class="date-value">
-                        {% if subscriptions.web and subscriptions.web.active %}
-                            ACTIVE ✅
-                        {% else %}
-                            INACTIVE
-                        {% endif %}
-                    </span>
-                </div>
-            </div>
-            
-            <div class="months-grid">
-                <button class="month-btn" onclick="addMonths('web', 1)">1 Month</button>
-                <button class="month-btn" onclick="addMonths('web', 2)">2 Months</button>
-                <button class="month-btn" onclick="addMonths('web', 3)">3 Months</button>
-                <button class="month-btn" onclick="addMonths('web', 6)">6 Months</button>
-                <button class="month-btn" onclick="addMonths('web', 12)">12 Months</button>
-            </div>
-            
-            <div class="action-buttons">
-                {% if subscriptions.web and subscriptions.web.active %}
-                <form action="/clients/{{ client.id }}/subscriptions/web/deactivate" method="post">
-                    <button type="submit" class="btn btn-danger btn-sm">Deactivate</button>
-                </form>
-                {% else %}
-                <form action="/clients/{{ client.id }}/subscriptions/web/reactivate" method="post">
-                    <button type="submit" class="btn btn-success btn-sm">Activate</button>
-                </form>
-                {% endif %}
-                
-                <button class="btn btn-primary btn-sm" onclick="copyEmbedCode()">Copy Embed Code</button>
-            </div>
-            
-            <div style="margin-top: 1rem; font-size: 0.9rem; color: var(--gray-600);">
-                Chatbot Link: <a href="{{ chatbot_url }}" target="_blank">{{ chatbot_url }}</a>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- Data Tab -->
-    {% if tab == 'data' %}
-    <div class="upload-section">
-        <div class="upload-header">
-            <h3>Upload New PDF</h3>
-            <form action="/clients/{{ client.id }}/documents/reprocess" method="post">
-                <button type="submit" class="btn btn-primary">
-                    <i class="fas fa-sync"></i> Reprocess Knowledge Base
-                </button>
-            </form>
-        </div>
-        
-        <form action="/clients/{{ client.id }}/documents/upload" method="post" enctype="multipart/form-data">
-            <div class="form-group">
-                <input type="file" name="file" accept=".pdf" required>
-            </div>
-            <button type="submit" class="btn btn-success">
-                <i class="fas fa-upload"></i> Upload PDF
-            </button>
-        </form>
-    </div>
-    
-    <div class="documents-list">
-        <h3 style="padding: 1rem 1.5rem; margin: 0; border-bottom: 1px solid var(--gray-200);">
-            Uploaded Documents
-        </h3>
-        
-        {% if documents %}
-            {% for document in documents %}
-            <div class="document-item">
-                <div class="document-info">
-                    <i class="fas fa-file-pdf document-icon"></i>
-                    <div>
-                        <div class="document-name">{{ document.filename }}</div>
-                        <div class="document-size">{{ document.file_size|filesizeformat }} • Uploaded {{ document.uploaded_at.strftime('%Y-%m-%d') }}</div>
+                <div class="col-md-4 text-end">
+                    <div class="btn-group">
+                        <a href="/clients" class="btn btn-light">
+                            <i class="bi bi-arrow-left"></i> Back to Clients
+                        </a>
+                        <button class="btn btn-outline-light dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            <i class="bi bi-gear"></i>
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#editClientModal"><i class="bi bi-pencil"></i> Edit Client</a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-danger" href="#" onclick="deleteClient('{{ client.id }}')"><i class="bi bi-trash"></i> Delete Client</a></li>
+                        </ul>
                     </div>
                 </div>
-                <div class="document-actions">
-                    <form action="/clients/{{ client.id }}/documents/{{ document.id }}/delete" method="post">
-                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete this document?')">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Tabs Navigation -->
+        <ul class="nav nav-tabs" id="clientTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link {% if active_tab == 'bots' %}active{% endif %}" id="bots-tab" data-bs-toggle="tab" data-bs-target="#bots" type="button" role="tab">
+                    <i class="bi bi-robot"></i> Bots Configuration
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link {% if active_tab == 'data' %}active{% endif %}" id="data-tab" data-bs-toggle="tab" data-bs-target="#data" type="button" role="tab">
+                    <i class="bi bi-files"></i> Data & Documents
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content p-4 border border-top-0 rounded-bottom" id="clientTabsContent">
+            <!-- Bots Tab -->
+            <div class="tab-pane fade {% if active_tab == 'bots' %}show active{% endif %}" id="bots" role="tabpanel">
+                <!-- WhatsApp Bot Section -->
+                <div class="bot-section">
+                    <div class="bot-header">
+                        <div class="bot-icon">
+                            <i class="bi bi-whatsapp"></i>
+                        </div>
+                        <h3 class="mb-0">WhatsApp Business Bot</h3>
+                        {% if phone_number != "Not purchased" %}
+                        <span class="number-badge">{{ phone_number }}</span>
+                        {% else %}
+                        <span class="badge bg-secondary">No Number</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <!-- Business Profile -->
+                            <div class="profile-section">
+                                <h5><i class="bi bi-building"></i> Business Profile</h5>
+                                <div class="mb-2">
+                                    <strong>Business Name:</strong> 
+                                    <span id="whatsapp-business-name">{{ client.business_name }}</span>
+                                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-business-name', 'business_name')">Edit</button>
+                                </div>
+                                <div class="mb-2">
+                                    <strong>Business Address:</strong> 
+                                    <span id="whatsapp-address">{% if whatsapp_profile.address %}{{ whatsapp_profile.address }}{% else %}Add business address...{% endif %}</span>
+                                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="editField('whatsapp-address', 'address')">Edit</button>
+                                </div>
+                                <div class="mb-2">
+                                    <strong>Business Logo:</strong> 
+                                    <span id="whatsapp-logo">{% if whatsapp_profile.logo %}{{ whatsapp_profile.logo }}{% else %}No logo uploaded{% endif %}</span>
+                                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="uploadLogo()">Upload</button>
+                                </div>
+                            </div>
+
+                            <!-- Current Status -->
+                            <div class="mt-4">
+                                <h6>Bot Status</h6>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span id="whatsapp-status" class="{% if subscriptions.whatsapp.status == 'active' %}status-active{% else %}status-inactive{% endif %}">
+                                        {{ subscriptions.whatsapp.status.upper() if subscriptions.whatsapp.status else 'INACTIVE' }}
+                                    </span>
+                                    <div class="btn-group">
+                                        <button id="whatsapp-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('whatsapp', 'activate')" 
+                                                {% if subscriptions.whatsapp.status == 'active' %}style="display: none;"{% endif %}>
+                                            Activate
+                                        </button>
+                                        <button id="whatsapp-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('whatsapp', 'deactivate')" 
+                                                {% if subscriptions.whatsapp.status != 'active' %}style="display: none;"{% endif %}>
+                                            Deactivate
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <!-- Subscription Management -->
+                            <div class="profile-section">
+                                <h5><i class="bi bi-calendar-check"></i> Subscription</h5>
+                                <div class="row mb-2">
+                                    <div class="col-6">
+                                        <strong>Start Date:</strong><br>
+                                        <span id="whatsapp-start-date" class="text-muted">
+                                            {% if subscriptions.whatsapp.start_date %}
+                                                {{ subscriptions.whatsapp.start_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="col-6">
+                                        <strong>Expiry Date:</strong><br>
+                                        <span id="whatsapp-expiry-date" class="text-muted">
+                                            {% if subscriptions.whatsapp.expiry_date %}
+                                                {{ subscriptions.whatsapp.expiry_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <hr>
+                                
+                                <h6>Add Subscription Time:</h6>
+                                <div class="subscription-buttons">
+                                    <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 1)">1 Month</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 2)">2 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 3)">3 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 6)">6 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('whatsapp', 12)">12 Months</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Voice Call Bot Section -->
+                <div class="bot-section">
+                    <div class="bot-header">
+                        <div class="bot-icon">
+                            <i class="bi bi-telephone"></i>
+                        </div>
+                        <h3 class="mb-0">Voice Call Bot</h3>
+                        {% if phone_number != "Not purchased" %}
+                        <span class="number-badge">{{ phone_number }}</span>
+                        {% else %}
+                        <span class="badge bg-secondary">No Number</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <p>Automated voice responses based on your business knowledge base.</p>
+                            
+                            <!-- Current Status -->
+                            <div class="mt-4">
+                                <h6>Bot Status</h6>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span id="voice-status" class="{% if subscriptions.voice.status == 'active' %}status-active{% else %}status-inactive{% endif %}">
+                                        {{ subscriptions.voice.status.upper() if subscriptions.voice.status else 'INACTIVE' }}
+                                    </span>
+                                    <div class="btn-group">
+                                        <button id="voice-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('voice', 'activate')"
+                                                {% if subscriptions.voice.status == 'active' %}style="display: none;"{% endif %}>
+                                            Activate
+                                        </button>
+                                        <button id="voice-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('voice', 'deactivate')"
+                                                {% if subscriptions.voice.status != 'active' %}style="display: none;"{% endif %}>
+                                            Deactivate
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <!-- Subscription Management -->
+                            <div class="profile-section">
+                                <h5><i class="bi bi-calendar-check"></i> Subscription</h5>
+                                <div class="row mb-2">
+                                    <div class="col-6">
+                                        <strong>Start Date:</strong><br>
+                                        <span id="voice-start-date" class="text-muted">
+                                            {% if subscriptions.voice.start_date %}
+                                                {{ subscriptions.voice.start_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="col-6">
+                                        <strong>Expiry Date:</strong><br>
+                                        <span id="voice-expiry-date" class="text-muted">
+                                            {% if subscriptions.voice.expiry_date %}
+                                                {{ subscriptions.voice.expiry_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <hr>
+                                
+                                <h6>Add Subscription Time:</h6>
+                                <div class="subscription-buttons">
+                                    <button class="btn btn-outline-success" onclick="addMonths('voice', 1)">1 Month</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('voice', 2)">2 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('voice', 3)">3 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('voice', 6)">6 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('voice', 12)">12 Months</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Web Chat Bot Section -->
+                <div class="bot-section">
+                    <div class="bot-header">
+                        <div class="bot-icon">
+                            <i class="bi bi-chat-dots"></i>
+                        </div>
+                        <h3 class="mb-0">Web Chat Bot</h3>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <!-- Chatbot Links -->
+                            <div class="profile-section">
+                                <h5><i class="bi bi-link"></i> Integration</h5>
+                                
+                                <div class="mb-3">
+                                    <strong>Chatbot URL:</strong>
+                                    <div class="input-group mt-1">
+                                        <input type="text" class="form-control" id="chatbot-url" value="{{ chatbot_url }}" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('chatbot-url')">Copy</button>
+                                    </div>
+                                    <small class="text-muted">Share this link with your client</small>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <strong>Embed Code:</strong>
+                                    <div class="embed-code mt-1" id="embed-code">{{ embed_code }}</div>
+                                    <button class="btn btn-outline-primary mt-2" onclick="copyToClipboard('embed-code')">Copy Embed Code</button>
+                                    <small class="text-muted d-block mt-1">Add this code to your client's website</small>
+                                </div>
+                            </div>
+
+                            <!-- Current Status -->
+                            <div class="mt-4">
+                                <h6>Bot Status</h6>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span id="web-status" class="{% if subscriptions.web.status == 'active' %}status-active{% else %}status-inactive{% endif %}">
+                                        {{ subscriptions.web.status.upper() if subscriptions.web.status else 'INACTIVE' }}
+                                    </span>
+                                    <div class="btn-group">
+                                        <button id="web-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('web', 'activate')"
+                                                {% if subscriptions.web.status == 'active' %}style="display: none;"{% endif %}>
+                                            Activate
+                                        </button>
+                                        <button id="web-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('web', 'deactivate')"
+                                                {% if subscriptions.web.status != 'active' %}style="display: none;"{% endif %}>
+                                            Deactivate
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <!-- Subscription Management -->
+                            <div class="profile-section">
+                                <h5><i class="bi bi-calendar-check"></i> Subscription</h5>
+                                <div class="row mb-2">
+                                    <div class="col-6">
+                                        <strong>Start Date:</strong><br>
+                                        <span id="web-start-date" class="text-muted">
+                                            {% if subscriptions.web.start_date %}
+                                                {{ subscriptions.web.start_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="col-6">
+                                        <strong>Expiry Date:</strong><br>
+                                        <span id="web-expiry-date" class="text-muted">
+                                            {% if subscriptions.web.expiry_date %}
+                                                {{ subscriptions.web.expiry_date[:10] }}
+                                            {% else %}
+                                                --/--/----
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <hr>
+                                
+                                <h6>Add Subscription Time:</h6>
+                                <div class="subscription-buttons">
+                                    <button class="btn btn-outline-success" onclick="addMonths('web', 1)">1 Month</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('web', 2)">2 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('web', 3)">3 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('web', 6)">6 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addMonths('web', 12)">12 Months</button>
+                                </div>
+                            </div>
+
+                            <!-- Demo Instructions -->
+                            <div class="alert alert-info mt-3">
+                                <h6><i class="bi bi-rocket"></i> Ready to Test</h6>
+                                <small>
+                                    <strong>Web Chat Bot is ready to use!</strong><br>
+                                    • Copy the embed code to client's website<br>
+                                    • Or share the chatbot URL directly<br>
+                                    • Bot answers based on uploaded PDF knowledge
+                                </small>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
-            {% endfor %}
-        {% else %}
-            <div style="padding: 2rem; text-align: center; color: var(--gray-600);">
-                <i class="fas fa-file-pdf" style="font-size: 2rem; margin-bottom: 1rem; color: var(--gray-400);"></i>
-                <p>No documents uploaded yet.</p>
+
+            <!-- Data Tab -->
+            <div class="tab-pane fade {% if active_tab == 'data' %}show active{% endif %}" id="data" role="tabpanel">
+                <div class="row">
+                    <!-- Uploaded Documents -->
+                    <div class="col-lg-8">
+                        <div class="d-flex justify-content-between align-items-center mb-4">
+                            <h4><i class="bi bi-files"></i> Uploaded Documents</h4>
+                            <span class="badge bg-primary">{{ documents|length }} PDFs</span>
+                        </div>
+
+                        {% if documents %}
+                        <div class="document-list">
+                            {% for doc in documents %}
+                            <div class="document-item">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div class="flex-grow-1">
+                                        <h6 class="mb-1">
+                                            <i class="bi bi-file-pdf text-danger"></i> {{ doc.filename }}
+                                        </h6>
+                                        <small class="text-muted">
+                                            Uploaded: {{ doc.uploaded_at[:16] if doc.uploaded_at else 'Unknown' }}
+                                            {% if doc.file_size %}
+                                            • {{ (doc.file_size / 1024 / 1024)|round(2) }} MB
+                                            {% endif %}
+                                        </small>
+                                        <div class="mt-2">
+                                            {% if doc.processed %}
+                                            <span class="badge bg-success"><i class="bi bi-check-circle"></i> Processed</span>
+                                            {% else %}
+                                            <span class="badge bg-warning"><i class="bi bi-clock"></i> Processing</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="btn-group ms-3">
+                                        <button class="btn btn-outline-danger btn-sm" onclick="deleteDocument('{{ client.id }}', '{{ doc.id }}')">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="text-center py-5">
+                            <i class="bi bi-folder-x" style="font-size: 4rem; color: #dee2e6;"></i>
+                            <h5 class="mt-3">No Documents Uploaded</h5>
+                            <p class="text-muted">Upload PDF documents to train your AI knowledge base</p>
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Upload New PDFs -->
+                    <div class="col-lg-4">
+                        <div class="card">
+                            <div class="card-header bg-primary text-white">
+                                <h5 class="card-title mb-0"><i class="bi bi-cloud-upload"></i> Upload New PDF</h5>
+                            </div>
+                            <div class="card-body">
+                                <form action="/upload_documents" method="post" enctype="multipart/form-data" id="uploadForm">
+                                    <input type="hidden" name="client_id" value="{{ client.id }}">
+                                    
+                                    <div class="upload-area" id="uploadArea">
+                                        <i class="bi bi-cloud-arrow-up" style="font-size: 3rem; color: #6c757d;"></i>
+                                        <h5 class="mt-3">Drop PDF files here</h5>
+                                        <p class="text-muted">or click to browse</p>
+                                        <input type="file" class="d-none" id="fileInput" name="files" accept=".pdf" multiple required>
+                                        <button type="button" class="btn btn-outline-primary mt-2" onclick="document.getElementById('fileInput').click()">
+                                            Select PDF Files
+                                        </button>
+                                    </div>
+                                    
+                                    <div id="fileList" class="mt-3"></div>
+                                    
+                                    <button type="submit" class="btn btn-success w-100 mt-3" id="uploadBtn" disabled>
+                                        <i class="bi bi-upload"></i> Upload Documents
+                                    </button>
+                                </form>
+
+                                <hr>
+
+                                <!-- Knowledge Base Management -->
+                                <div class="knowledge-base-status">
+                                    <h6><i class="bi bi-brain"></i> Knowledge Base Status</h6>
+                                    {% set processed_docs = documents|selectattr('processed')|list %}
+                                    <div class="mb-2">
+                                        <strong>Processed Documents:</strong> {{ processed_docs|length }}/{{ documents|length }}
+                                    </div>
+                                    <div class="progress mb-2">
+                                        <div class="progress-bar" role="progressbar" 
+                                             style="width: {{ (processed_docs|length / documents|length * 100) if documents|length > 0 else 0 }}%">
+                                        </div>
+                                    </div>
+                                    <button class="btn btn-outline-warning w-100" onclick="reprocessKnowledgeBase('{{ client.id }}')"
+                                            {% if documents|length == 0 %}disabled{% endif %}>
+                                        <i class="bi bi-arrow-repeat"></i> Reprocess Knowledge Base
+                                    </button>
+                                    <small class="text-muted d-block mt-1">
+                                        Updates AI with all current documents
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Knowledge Base Info -->
+                        <div class="card mt-4">
+                            <div class="card-body">
+                                <h6><i class="bi bi-info-circle"></i> About Knowledge Base</h6>
+                                <ul class="small text-muted mt-2">
+                                    <li>Upload PDFs about your business</li>
+                                    <li>AI will learn from these documents</li>
+                                    <li>Bots answer questions based on this knowledge</li>
+                                    <li>Add/remove documents anytime</li>
+                                    <li>Reprocess to update AI with new content</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-        {% endif %}
+        </div>
     </div>
-    {% endif %}
 
-    <!-- Analytics Tab -->
-    {% if tab == 'analytics' %}
-    <div class="analytics-placeholder">
-        <i class="fas fa-chart-line"></i>
-        <h3>Analytics Coming Soon</h3>
-        <p>This section will show usage statistics and performance metrics for your bots.</p>
+    <!-- Edit Client Modal -->
+    <div class="modal fade" id="editClientModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Client</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editClientForm">
+                        <div class="mb-3">
+                            <label class="form-label">Business Name</label>
+                            <input type="text" class="form-control" name="business_name" value="{{ client.business_name }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Business Type</label>
+                            <select class="form-select" name="business_type" required>
+                                <option value="Restaurant" {% if client.business_type == 'Restaurant' %}selected{% endif %}>Restaurant</option>
+                                <option value="Gym" {% if client.business_type == 'Gym' %}selected{% endif %}>Gym</option>
+                                <option value="Clinic" {% if client.business_type == 'Clinic' %}selected{% endif %}>Clinic</option>
+                                <option value="Retail" {% if client.business_type == 'Retail' %}selected{% endif %}>Retail</option>
+                                <option value="Other" {% if client.business_type == 'Other' %}selected{% endif %}>Other</option>
+                            </select>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="updateClient()">Save Changes</button>
+                </div>
+            </div>
+        </div>
     </div>
-    {% endif %}
-</div>
 
-<!-- Hidden form for adding months -->
-<form id="addMonthsForm" method="post" style="display: none;">
-    <input type="hidden" name="months" id="monthsInput">
-</form>
-{% endblock %}
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // File upload handling
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileList = document.getElementById('fileList');
+        const uploadBtn = document.getElementById('uploadBtn');
 
-{% block extra_js %}
-<script>
-    function addMonths(botType, months) {
-        const form = document.getElementById('addMonthsForm');
-        form.action = `/clients/{{ client.id }}/subscriptions/${botType}/add-months`;
-        document.getElementById('monthsInput').value = months;
-        form.submit();
-    }
-    
-    function copyEmbedCode() {
-        const embedCode = `<script src="{{ url_for('static', path='js/chat-widget.js') }}" data-client-id="{{ client.id }}"><\/script>`;
+        fileInput.addEventListener('change', handleFileSelect);
         
-        navigator.clipboard.writeText(embedCode).then(() => {
-            showAlert('Embed code copied to clipboard!', 'success');
-        }).catch(err => {
-            showAlert('Failed to copy embed code', 'error');
+        // Drag and drop functionality
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, preventDefaults, false);
         });
-    }
-    
-    // Handle URL parameters for success/error messages
-    document.addEventListener('DOMContentLoaded', function() {
-        const urlParams = new URLSearchParams(window.location.search);
-        const success = urlParams.get('success');
-        const error = urlParams.get('error');
-        
-        if (success) {
-            showAlert(success, 'success');
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
         }
-        
-        if (error) {
-            showAlert(error, 'error');
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, () => uploadArea.classList.add('dragover'), false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, () => uploadArea.classList.remove('dragover'), false);
+        });
+
+        uploadArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+            handleFileSelect();
         }
-    });
-</script>
-{% endblock %}
+
+        function handleFileSelect() {
+            fileList.innerHTML = '';
+            const files = fileInput.files;
+            
+            if (files.length > 0) {
+                uploadBtn.disabled = false;
+                
+                for (let file of files) {
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'alert alert-info py-2 mt-2';
+                    fileItem.innerHTML = `
+                        <i class="bi bi-file-pdf"></i> ${file.name} 
+                        <small class="text-muted">(${(file.size / 1024 / 1024).toFixed(2)} MB)</small>
+                    `;
+                    fileList.appendChild(fileItem);
+                }
+            } else {
+                uploadBtn.disabled = true;
+            }
+        }
+
+        // Document management functions
+        async function deleteDocument(clientId, docId) {
+            if (confirm('Are you sure you want to delete this document?')) {
+                try {
+                    const response = await fetch(`/api/documents/${clientId}/${docId}`, {
+                        method: 'DELETE'
+                    });
+                    const result = await response.json();
+                    
+                    if (result.status === 'success') {
+                        alert('Document deleted successfully');
+                        location.reload();
+                    } else {
+                        alert('Error: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('Error deleting document:', error);
+                    alert('Error deleting document');
+                }
+            }
+        }
+
+        async function reprocessKnowledgeBase(clientId) {
+            if (confirm('Reprocess all documents for this client? This may take a few minutes.')) {
+                try {
+                    const response = await fetch(`/api/documents/${clientId}/reprocess`, {
+                        method: 'POST'
+                    });
+                    const result = await response.json();
+                    
+                    if (result.status === 'success') {
+                        alert('Knowledge base reprocessed successfully!');
+                    } else {
+                        alert('Error: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('Error reprocessing knowledge base:', error);
+                    alert('Error reprocessing knowledge base');
+                }
+            }
+        }
+
+        // Bot management functions (same as in clients_bots.html)
+        async function addMonths(botType, months) {
+            if (confirm(`Add ${months} month(s) to ${botType} bot subscription?`)) {
+                try {
+                    const response = await fetch('/api/bot/add_months', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({bot_type: botType, months: months})
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.status === 'success') {
+                        location.reload();
+                    } else {
+                        alert('Error: ' + result.message);
+                    }
+                } catch (error) {
+                    console.error('Error adding months:', error);
+                    alert('Error adding months');
+                }
+            }
+        }
+
+        async function toggleBot(botType, action) {
+            try {
+                const response = await fetch('/api/bot/toggle', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({bot_type: botType, action: action})
+                });
+                
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    location.reload();
+                } else {
+                    alert('Error: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Error toggling bot:', error);
+                alert('Error toggling bot');
+            }
+        }
+
+        // Utility functions
+        function copyToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const text = element.value || element.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Copied to clipboard!');
+            });
+        }
+
+        function editField(fieldId, fieldType) {
+            const field = document.getElementById(fieldId);
+            const newValue = prompt(`Edit ${fieldType}:`, field.textContent);
+            if (newValue !== null) {
+                // Call API to update field
+                console.log(`Updating ${fieldType} to:`, newValue);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Client detail page loaded');
+        });
+    </script>
+</body>
+</html>
