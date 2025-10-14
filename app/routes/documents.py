@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Request
+from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Request, Query
 from sqlalchemy.orm import Session
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -8,15 +8,35 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models import Client, Document  # Using your actual Document model
+from app.services.client_service import ClientService  # ADDED: Import ClientService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
-# Display upload documents page
+# FIXED: Display upload documents page with client context
 @router.get("/upload_documents")
-async def upload_documents_page(request: Request, db: Session = Depends(get_db)):
-    """Show the upload documents page"""
-    return templates.TemplateResponse("upload_documents.html", {"request": request})
+async def upload_documents_page(
+    request: Request, 
+    client_id: str = Query(..., description="Client ID"),  # ADDED: client_id parameter
+    db: Session = Depends(get_db)
+):
+    """Show the upload documents page for a specific client"""
+    try:
+        # Get client from database
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # FIXED: Pass client to template
+        return templates.TemplateResponse("upload_documents.html", {
+            "request": request,
+            "client": client  # ✅ NOW CLIENT IS AVAILABLE IN TEMPLATE
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading upload page: {str(e)}")
 
 # Handle document upload
 @router.post("/upload_documents")
@@ -29,11 +49,11 @@ async def upload_documents(
     """Handle PDF file upload for a client"""
     try:
         # Validate file type
-        if not file.filename.lower().endswith('.pdf'):
+        if not file.filename or not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are allowed")
         
         # Get client
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -69,8 +89,8 @@ async def upload_documents(
         db.add(document)
         db.commit()
         
-        # Redirect back to client page instead of clients list
-        return RedirectResponse(f"/client/{client_id}", status_code=303)
+        # Redirect to buy number page after successful upload
+        return RedirectResponse(f"/buy_number?client_id={client_id}", status_code=303)
         
     except HTTPException:
         raise
@@ -78,13 +98,35 @@ async def upload_documents(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-# Reprocess knowledge base for a client - THIS FIXES THE 404 ERROR
+# Skip documents upload
+@router.post("/skip_documents")
+async def skip_documents(
+    request: Request,
+    client_id: str = Form(...),  # ADDED: client_id parameter
+    db: Session = Depends(get_db)
+):
+    """Skip document upload and proceed to next step"""
+    try:
+        # Get client
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Redirect to buy number page
+        return RedirectResponse(f"/buy_number?client_id={client_id}", status_code=303)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error skipping documents: {str(e)}")
+
+# Reprocess knowledge base for a client
 @router.post("/api/documents/{client_id}/reprocess")
 async def reprocess_documents(client_id: str, db: Session = Depends(get_db)):
     """Reprocess knowledge base for a client"""
     try:
         # Get client
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = ClientService.get_client(db, client_id)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -169,3 +211,23 @@ async def delete_document(document_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+# Get document processing status
+@router.get("/api/documents/{client_id}/status")
+async def get_documents_status(client_id: str, db: Session = Depends(get_db)):
+    """Get document processing status for a client"""
+    try:
+        documents = db.query(Document).filter(Document.client_id == client_id).all()
+        
+        processed_count = sum(1 for doc in documents if doc.processed)
+        total_count = len(documents)
+        
+        return {
+            "status": "success",
+            "processed_count": processed_count,
+            "total_count": total_count,
+            "progress_percentage": (processed_count / total_count * 100) if total_count > 0 else 0
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get document status: {str(e)}")
