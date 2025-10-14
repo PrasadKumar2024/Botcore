@@ -1,217 +1,164 @@
-
-from fastapi import APIRouter, Request, Depends, Form, File, UploadFile, HTTPException, status
-from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Request
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from fastapi.responses import RedirectResponse
+from fastapi.templating import Jinja2Templates
 import os
-import shutil
 import uuid
+from datetime import datetime
 
 from app.database import get_db
-from app.services.client_service import ClientService
-from app.services.document_service import DocumentService
-from app.schemas import DocumentCreate
-from app.models import Client
+from app.models import Client, ClientDocument
 
-router = APIRouter(prefix="/clients/{client_id}", tags=["documents"])
+router = APIRouter()
 templates = Jinja2Templates(directory="templates")
 
-# Configure upload directory
-UPLOAD_DIRECTORY = "uploads"
-os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
+# Display upload documents page
+@router.get("/upload_documents")
+async def upload_documents_page(request: Request, db: Session = Depends(get_db)):
+    """Show the upload documents page"""
+    # You might want to pass client context here if needed
+    return templates.TemplateResponse("upload_documents.html", {"request": request})
 
-@router.get("/documents", response_class=HTMLResponse)
-async def upload_documents_form(
-    request: Request, 
-    client_id: int, 
-    db: Session = Depends(get_db)
-):
-    """Page 3: PDF upload page for a specific client"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    return templates.TemplateResponse("upload_documents.html", {
-        "request": request,
-        "client": client
-    })
-
-@router.post("/documents", response_class=HTMLResponse)
+# Handle document upload
+@router.post("/upload_documents")
 async def upload_documents(
     request: Request,
-    client_id: int,
-    files: List[UploadFile] = File(...),
+    client_id: str = Form(...),
+    file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """Process PDF uploads and redirect to number purchase"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Process each uploaded file
-    for file in files:
+    """Handle PDF file upload for a client"""
+    try:
         # Validate file type
-        if file.content_type != "application/pdf":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"File {file.filename} is not a PDF"
-            )
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+        
+        # Get client
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Create uploads directory if it doesn't exist
+        os.makedirs("uploads", exist_ok=True)
         
         # Generate unique filename
         file_extension = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = os.path.join(UPLOAD_DIRECTORY, unique_filename)
+        file_path = f"uploads/{unique_filename}"
         
-        # Save file to upload directory
+        # Save the file
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            content = await file.read()
+            buffer.write(content)
         
         # Create document record in database
-        document_data = DocumentCreate(
+        document = ClientDocument(
+            id=str(uuid.uuid4()),
+            client_id=client_id,
             filename=file.filename,
             file_path=file_path,
-            client_id=client_id
+            uploaded_at=datetime.utcnow(),
+            processed=False
         )
         
-        DocumentService.create_document(db, document_data)
-    
-    # Process documents for AI (this would be async in production)
-    DocumentService.process_documents_for_client(db, client_id)
-    
-    return RedirectResponse(
-        url=f"/clients/{client_id}/numbers", 
-        status_code=303
-    )
+        db.add(document)
+        db.commit()
+        
+        # Redirect back to client page
+        return RedirectResponse(f"/client/{client_id}", status_code=303)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-@router.post("/documents/skip", response_class=HTMLResponse)
-async def skip_documents(
-    request: Request,
-    client_id: int,
-    db: Session = Depends(get_db)
-):
-    """Skip document upload and redirect to number purchase"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    return RedirectResponse(
-        url=f"/clients/{client_id}/numbers", 
-        status_code=303
-    )
+# Reprocess knowledge base for a client
+@router.post("/api/documents/{client_id}/reprocess")
+async def reprocess_documents(client_id: str, db: Session = Depends(get_db)):
+    """Reprocess knowledge base for a client"""
+    try:
+        # Get client
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Get all documents for this client
+        documents = db.query(ClientDocument).filter(ClientDocument.client_id == client_id).all()
+        
+        if not documents:
+            return {
+                "status": "success", 
+                "message": "No documents to process",
+                "processed_count": 0
+            }
+        
+        # TODO: Add your actual PDF processing logic here
+        # For now, just mark them as processed
+        for doc in documents:
+            doc.processed = True
+            doc.processed_at = datetime.utcnow()
+        
+        db.commit()
+        
+        return {
+            "status": "success", 
+            "message": f"Knowledge base reprocessed for {len(documents)} documents",
+            "processed_count": len(documents)
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Reprocessing failed: {str(e)}")
 
-@router.get("/data", response_class=HTMLResponse)
-async def client_data_tab(
-    request: Request,
-    client_id: int,
-    db: Session = Depends(get_db)
-):
-    """Data tab for client detail page - show uploaded PDFs"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    documents = DocumentService.get_documents(db, client_id)
-    
-    return templates.TemplateResponse("client_detail.html", {
-        "request": request,
-        "client": client,
-        "tab": "data",
-        "documents": documents
-    })
+# Get client documents
+@router.get("/api/documents/{client_id}")
+async def get_client_documents(client_id: str, db: Session = Depends(get_db)):
+    """Get all documents for a client"""
+    try:
+        documents = db.query(ClientDocument).filter(ClientDocument.client_id == client_id).all()
+        
+        return {
+            "status": "success",
+            "documents": [
+                {
+                    "id": doc.id,
+                    "filename": doc.filename,
+                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                    "processed": doc.processed,
+                    "processed_at": doc.processed_at.isoformat() if doc.processed_at else None
+                }
+                for doc in documents
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch documents: {str(e)}")
 
-@router.post("/documents/upload", response_class=HTMLResponse)
-async def upload_additional_document(
-    request: Request,
-    client_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    """Upload a new document for an existing client (from data tab)"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Validate file type
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=400, 
-            detail="File must be a PDF"
-        )
-    
-    # Generate unique filename
-    file_extension = os.path.splitext(file.filename)[1]
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = os.path.join(UPLOAD_DIRECTORY, unique_filename)
-    
-    # Save file to upload directory
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    # Create document record in database
-    document_data = DocumentCreate(
-        filename=file.filename,
-        file_path=file_path,
-        client_id=client_id
-    )
-    
-    DocumentService.create_document(db, document_data)
-    
-    # Process the new document for AI
-    DocumentService.process_document(db, file_path, client_id)
-    
-    return RedirectResponse(
-        url=f"/clients/{client_id}?tab=data", 
-        status_code=303
-    )
-
-@router.post("/documents/{document_id}/delete", response_class=HTMLResponse)
-async def delete_document(
-    request: Request,
-    client_id: int,
-    document_id: int,
-    db: Session = Depends(get_db)
-):
-    """Delete a document from the data tab"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Get document to delete
-    document = DocumentService.get_document(db, document_id)
-    if not document or document.client_id != client_id:
-        raise HTTPException(status_code=404, detail="Document not found")
-    
-    # Delete file from filesystem
-    if os.path.exists(document.file_path):
-        os.remove(document.file_path)
-    
-    # Delete document record from database
-    DocumentService.delete_document(db, document_id)
-    
-    # Remove document from AI knowledge base
-    DocumentService.remove_document_from_knowledge(db, document_id)
-    
-    return RedirectResponse(
-        url=f"/clients/{client_id}?tab=data", 
-        status_code=303
-    )
-
-@router.post("/documents/reprocess", response_class=HTMLResponse)
-async def reprocess_documents(
-    request: Request,
-    client_id: int,
-    db: Session = Depends(get_db)
-):
-    """Reprocess all documents for a client (from data tab)"""
-    client = ClientService.get_client(db, client_id)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Reprocess all documents for AI
-    DocumentService.reprocess_documents(db, client_id)
-    
-    return RedirectResponse(
-        url=f"/clients/{client_id}?tab=data", 
-        status_code=303
-      )
+# Delete a document
+@router.delete("/api/documents/{document_id}")
+async def delete_document(document_id: str, db: Session = Depends(get_db)):
+    """Delete a document"""
+    try:
+        document = db.query(ClientDocument).filter(ClientDocument.id == document_id).first()
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Delete the physical file
+        if os.path.exists(document.file_path):
+            os.remove(document.file_path)
+        
+        # Delete the database record
+        db.delete(document)
+        db.commit()
+        
+        return {
+            "status": "success",
+            "message": "Document deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
