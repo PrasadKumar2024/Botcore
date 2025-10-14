@@ -42,7 +42,7 @@ async def upload_documents_page(
 @router.post("/upload_documents")
 async def upload_documents(
     request: Request,
-    client_id: str = Query(...),
+    client_id: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
