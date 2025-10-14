@@ -1,5 +1,6 @@
-from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum, Text
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum, Text, Index
 from sqlalchemy.dialects.sqlite import UUID
+from sqlalchemy.orm import relationship
 import uuid
 from datetime import datetime
 from app.database import Base
@@ -34,6 +35,9 @@ class Client(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # Bot activation status
+    bot_active = Column(Boolean, default=False)  # ADDED: Overall bot status
+    
     # Relationships
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan")
     phone_numbers = relationship("PhoneNumber", back_populates="client", cascade="all, delete-orphan")
@@ -52,6 +56,7 @@ class Document(Base):
     processed = Column(Boolean, default=False)  # Whether PDF text extracted
     processing_error = Column(Text, nullable=True)  # Error if processing failed
     uploaded_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)  # ADDED: When document was processed
     
     # Relationship
     client = relationship("Client", back_populates="documents")
@@ -81,6 +86,9 @@ class Subscription(Base):
     is_active = Column(Boolean, default=False)  # Inactive until months added
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # ADDED: Bot activation status for individual bot types
+    bot_activated = Column(Boolean, default=False)  # Whether this specific bot is activated
     
     # Relationship
     client = relationship("Client", back_populates="subscriptions")
@@ -112,4 +120,40 @@ class MessageLog(Base):
     # Index for faster querying
     __table_args__ = (
         Index('ix_message_logs_client_id_timestamp', 'client_id', 'timestamp'),
+    )
+
+# ADDED: Knowledge Base Chunks for AI Processing
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False)
+    chunk_text = Column(Text, nullable=False)  # Extracted text chunk
+    chunk_index = Column(Integer, nullable=False)  # Order of chunk in document
+    vector_id = Column(String(255), nullable=True)  # Pinecone vector ID
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    client = relationship("Client")
+    document = relationship("Document")
+
+# ADDED: Bot Settings and Configuration
+class BotSettings(Base):
+    __tablename__ = "bot_settings"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
+    bot_type = Column(Enum(BotType), nullable=False)
+    settings = Column(Text, nullable=True)  # JSON string for bot-specific settings
+    is_enabled = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship
+    client = relationship("Client")
+    
+    # Unique constraint: one settings per bot type per client
+    __table_args__ = (
+        Index('ix_bot_settings_client_bot_type', 'client_id', 'bot_type', unique=True),
     )
