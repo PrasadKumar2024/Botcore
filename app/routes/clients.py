@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
+import uuid
 
 from app.database import get_db
 from app.services.client_service import ClientService
@@ -69,9 +70,9 @@ async def create_client(
         # Create client
         client = ClientService.create_client(db, client_data)
         
-        # Redirect to document upload page
+        # FIXED: Redirect to document upload with client context
         return RedirectResponse(
-            url=f"/clients/{client.id}/documents",
+            url=f"/upload_documents?client_id={client.id}",
             status_code=303
         )
         
@@ -80,10 +81,35 @@ async def create_client(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating client: {str(e)}")
 
+# FIXED: Add this new endpoint to handle document upload with client context
+@router.get("/{client_id}/documents", response_class=HTMLResponse)
+async def client_documents_upload(
+    request: Request,
+    client_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Page 2a: Document upload page for a specific client
+    """
+    try:
+        client = ClientService.get_client(db, client_id)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        return templates.TemplateResponse("upload_documents.html", {
+            "request": request,
+            "client": client  # PASS CLIENT TO TEMPLATE
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading document upload: {str(e)}")
+
 @router.get("/{client_id}", response_class=HTMLResponse)
 async def client_detail(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     tab: str = "bots",
     db: Session = Depends(get_db)
 ):
@@ -101,7 +127,7 @@ async def client_detail(
         if not phone_number:
             # If client is incomplete, redirect to document upload to continue setup
             return RedirectResponse(
-                url=f"/clients/{client_id}/documents",
+                url=f"/upload_documents?client_id={client_id}",
                 status_code=303
             )
         
@@ -109,7 +135,8 @@ async def client_detail(
         context = {
             "request": request,
             "client": client,
-            "tab": tab
+            "active_tab": tab,  # FIXED: Changed from 'tab' to 'active_tab'
+            "phone_number": phone_number
         }
         
         if tab == "data":
@@ -122,10 +149,25 @@ async def client_detail(
             subscriptions = ClientService.get_client_subscriptions(db, client_id)
             whatsapp_profile = ClientService.get_whatsapp_profile(db, client_id)
             
-            context["subscriptions"] = subscriptions
-            context["phone_number"] = phone_number
+            # FIXED: Format subscriptions for template
+            subscription_data = {}
+            for sub in subscriptions:
+                subscription_data[sub.bot_type] = {
+                    "status": "active" if sub.is_active else "inactive",
+                    "start_date": sub.start_date,
+                    "expiry_date": sub.expiry_date
+                }
+            
+            context["subscriptions"] = subscription_data
             context["whatsapp_profile"] = whatsapp_profile
             context["chatbot_url"] = f"https://ownbot.chat/{client.business_name.lower().replace(' ', '-')}"
+            
+            # FIXED: Generate embed code
+            embed_code = f"""
+<script src="/static/js/chat-widget.js" data-client-id="{client_id}"></script>
+<link rel="stylesheet" href="/static/css/chat-widget.css">
+"""
+            context["embed_code"] = embed_code
         
         return templates.TemplateResponse("client_detail.html", context)
         
@@ -137,7 +179,7 @@ async def client_detail(
 @router.get("/{client_id}/bots", response_class=HTMLResponse)
 async def client_bots(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     db: Session = Depends(get_db)
 ):
     """
@@ -154,7 +196,7 @@ async def client_bots(
         if not phone_number:
             # If client is incomplete, redirect to document upload to continue setup
             return RedirectResponse(
-                url=f"/clients/{client_id}/documents",
+                url=f"/upload_documents?client_id={client_id}",
                 status_code=303
             )
         
@@ -167,25 +209,34 @@ async def client_bots(
         # Generate chatbot URL
         chatbot_url = f"https://ownbot.chat/{client.business_name.lower().replace(' ', '-')}"
         
+        # FIXED: Format subscriptions for template
+        subscription_data = {}
+        for sub in subscriptions:
+            subscription_data[sub.bot_type] = {
+                "status": "active" if sub.is_active else "inactive",
+                "start_date": sub.start_date,
+                "expiry_date": sub.expiry_date
+            }
+        
         # Prepare bot data for template
         bots_data = {
             "whatsapp": {
                 "name": "WhatsApp Bot",
                 "type": "whatsapp",
                 "phone_number": phone_number.number if phone_number else None,
-                "subscription": next((sub for sub in subscriptions if sub.bot_type == "whatsapp"), None),
+                "subscription": subscription_data.get("whatsapp", {}),
                 "profile": whatsapp_profile
             },
             "voice": {
                 "name": "Voice Call Bot", 
                 "type": "voice",
                 "phone_number": phone_number.number if phone_number else None,
-                "subscription": next((sub for sub in subscriptions if sub.bot_type == "voice"), None)
+                "subscription": subscription_data.get("voice", {})
             },
             "web": {
                 "name": "Web Chat Bot",
                 "type": "web", 
-                "subscription": next((sub for sub in subscriptions if sub.bot_type == "web"), None),
+                "subscription": subscription_data.get("web", {}),
                 "chatbot_url": chatbot_url
             }
         }
@@ -206,7 +257,7 @@ async def client_bots(
 @router.get("/{client_id}/edit", response_class=HTMLResponse)
 async def edit_client_form(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     db: Session = Depends(get_db)
 ):
     """
@@ -236,7 +287,7 @@ async def edit_client_form(
 @router.post("/{client_id}/edit", response_class=HTMLResponse)
 async def update_client(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     business_name: str = Form(...),
     business_type: str = Form(...),
     db: Session = Depends(get_db)
@@ -278,7 +329,7 @@ async def update_client(
 @router.post("/{client_id}/delete", response_class=HTMLResponse)
 async def delete_client(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     db: Session = Depends(get_db)
 ):
     """
@@ -306,7 +357,7 @@ async def delete_client(
 @router.get("/{client_id}/status", response_class=HTMLResponse)
 async def update_client_status(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     status: str,
     db: Session = Depends(get_db)
 ):
@@ -344,7 +395,7 @@ async def update_client_status(
 @router.post("/{client_id}/bots/{bot_type}/activate", response_class=HTMLResponse)
 async def activate_bot(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     bot_type: str,
     months: int = Form(...),
     db: Session = Depends(get_db)
@@ -388,7 +439,7 @@ async def activate_bot(
 @router.post("/{client_id}/bots/{bot_type}/deactivate", response_class=HTMLResponse)
 async def deactivate_bot(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     bot_type: str,
     db: Session = Depends(get_db)
 ):
@@ -426,7 +477,7 @@ async def deactivate_bot(
 @router.post("/{client_id}/whatsapp/profile", response_class=HTMLResponse)
 async def update_whatsapp_profile(
     request: Request,
-    client_id: int,
+    client_id: str,  # CHANGED: from int to str to match UUID
     business_name: str = Form(...),
     address: str = Form(...),
     db: Session = Depends(get_db)
