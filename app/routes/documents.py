@@ -98,27 +98,7 @@ async def upload_documents(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-# Skip documents upload
-@router.post("/skip_documents")
-async def skip_documents(
-    request: Request,
-    client_id: str = Form(...),  # ADDED: client_id parameter
-    db: Session = Depends(get_db)
-):
-    """Skip document upload and proceed to next step"""
-    try:
-        # Get client
-        client = ClientService.get_client(db, client_id)
-        if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
-        
-        # Redirect to buy number page
-        return RedirectResponse(f"/buy_number?client_id={client_id}", status_code=303)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error skipping documents: {str(e)}")
+
 
 # Reprocess knowledge base for a client
 @router.post("/api/documents/{client_id}/reprocess")
