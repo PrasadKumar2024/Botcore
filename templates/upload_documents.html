@@ -311,9 +311,13 @@
             <strong>💡 Tip:</strong> Upload relevant documents (PDFs) to train your client's AI bot. This helps create more accurate responses.
         </div>
 
+        <!-- FIXED: Added client_id hidden field and changed file input name -->
         <form method="post" action="/upload_documents" enctype="multipart/form-data" id="uploadForm">
+            <input type="hidden" name="client_id" value="{{ client.id }}">
+            
             <div class="file-upload" id="fileUpload" onclick="document.getElementById('fileInput').click()">
-                <input type="file" name="files" multiple accept=".pdf" style="display: none;" id="fileInput" onchange="handleFileSelect()">
+                <!-- CHANGED: name="file" instead of name="files" and removed multiple -->
+                <input type="file" name="file" accept=".pdf" style="display: none;" id="fileInput" onchange="handleFileSelect()">
                 <span class="file-upload-icon">📁</span>
                 <p style="font-size: 18px; margin-bottom: 8px; font-weight: 600;">Drag & drop PDF files here</p>
                 <p style="font-size: 14px; color: var(--gray); margin-bottom: 8px;">or click to browse</p>
@@ -367,8 +371,8 @@
                 return true;
             });
             
-            // ADD new files to existing selection (instead of replacing)
-            selectedFiles = [...selectedFiles, ...validNewFiles];
+            // REPLACE existing files with new selection (single file upload)
+            selectedFiles = validNewFiles;
             updateFileInput();
             updateFileList();
             updateSubmitButton();
@@ -514,8 +518,8 @@
                 return;
             }
             
-            // Add new files to existing selection
-            selectedFiles = [...selectedFiles, ...newFiles];
+            // REPLACE existing files with new selection (single file upload)
+            selectedFiles = newFiles;
             updateFileInput();
             updateFileList();
             updateSubmitButton();
