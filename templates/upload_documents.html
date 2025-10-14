@@ -337,92 +337,72 @@
             
             <div class="btn-group">
                 <button type="button" class="btn btn-secondary" onclick="window.location.href='/clients/add'" id="backBtn">← Back</button>
-                <button type="button" class="btn btn-secondary" onclick="skipDocuments()" id="skipBtn">Skip This Step</button>
                 <button type="submit" class="btn btn-primary" id="submitBtn" disabled>Next →</button>
             </div>
         </form>
     </div>
 
     <script>
-        let selectedFiles = [];
-        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
-        
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
         function handleFileSelect() {
             const fileInput = document.getElementById('fileInput');
-            const newFiles = Array.from(fileInput.files);
+            const file = fileInput.files[0];
             
-            // Filter out files that are too large and check for duplicates
-            const validNewFiles = newFiles.filter(newFile => {
-                if (newFile.size > MAX_FILE_SIZE) {
-                    alert(`File "${newFile.name}" is too large. Maximum size is 10MB.`);
-                    return false;
-                }
-                
-                // Check for duplicate files (by name and size)
-                const isDuplicate = selectedFiles.some(existingFile => 
-                    existingFile.name === newFile.name && existingFile.size === newFile.size
-                );
-                
-                if (isDuplicate) {
-                    alert(`File "${newFile.name}" is already selected.`);
-                    return false;
-                }
-                
-                return true;
-            });
-            
-            // REPLACE existing files with new selection (single file upload)
-            selectedFiles = validNewFiles;
-            updateFileInput();
-            updateFileList();
-            updateSubmitButton();
-        }
-        
-        function updateFileList() {
-            const fileList = document.getElementById('fileList');
-            const fileCount = document.getElementById('fileCount');
-            
-            fileList.innerHTML = '';
-            
-            if (selectedFiles.length === 0) {
-                fileCount.textContent = 'No files selected';
-                fileCount.style.color = 'var(--gray)';
+            if (!file) {
+                updateUI(null);
                 return;
             }
             
-            fileCount.textContent = `${selectedFiles.length} file(s) selected`;
-            fileCount.style.color = 'var(--primary)';
+            // Validate file
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                alert('Please select a PDF file');
+                fileInput.value = '';
+                updateUI(null);
+                return;
+            }
             
-            selectedFiles.forEach((file, index) => {
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-item';
-                fileItem.innerHTML = `
+            if (file.size > MAX_FILE_SIZE) {
+                alert('File is too large. Maximum size is 10MB.');
+                fileInput.value = '';
+                updateUI(null);
+                return;
+            }
+            
+            updateUI(file);
+        }
+        
+        function updateUI(file) {
+            const fileList = document.getElementById('fileList');
+            const fileCount = document.getElementById('fileCount');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            if (!file) {
+                fileList.innerHTML = '';
+                fileCount.textContent = 'No files selected';
+                fileCount.style.color = 'var(--gray)';
+                submitBtn.disabled = true;
+                return;
+            }
+            
+            fileCount.textContent = '1 file selected';
+            fileCount.style.color = 'var(--primary)';
+            submitBtn.disabled = false;
+            
+            fileList.innerHTML = `
+                <div class="file-item">
                     <div class="file-info">
                         <span class="file-name">📄 ${file.name}</span>
                         <span class="file-size">${formatFileSize(file.size)}</span>
                     </div>
-                    <button type="button" class="file-remove" onclick="removeFile(${index})">Remove</button>
-                `;
-                fileList.appendChild(fileItem);
-            });
+                    <button type="button" class="file-remove" onclick="clearFile()">Remove</button>
+                </div>
+            `;
         }
         
-        function updateFileInput() {
-            const dt = new DataTransfer();
-            selectedFiles.forEach(file => dt.items.add(file));
-            document.getElementById('fileInput').files = dt.files;
-        }
-        
-        function removeFile(index) {
-            selectedFiles.splice(index, 1);
-            updateFileInput();
-            updateFileList();
-            updateSubmitButton();
-        }
-        
-        function updateSubmitButton() {
-            const submitBtn = document.getElementById('submitBtn');
-            submitBtn.disabled = selectedFiles.length === 0;
+        function clearFile() {
+            document.getElementById('fileInput').value = '';
+            updateUI(null);
         }
         
         function formatFileSize(bytes) {
@@ -433,41 +413,16 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
         
-        function skipDocuments() {
-            if (confirm('Are you sure you want to skip uploading documents? You can add them later, but the AI bot may be less accurate without training data.')) {
-                disableButtons();
-                fetch('/skip_documents', { method: 'POST' })
-                    .then(response => {
-                        if (response.ok) {
-                            window.location.href = '/buy_number';
-                        } else {
-                            throw new Error('Server error');
-                        }
-                    })
-                    .catch(err => {
-                        console.error('Error skipping step:', err);
-                        alert('Error skipping step. Please try again.');
-                        enableButtons();
-                    });
-            }
-        }
-        
         function disableButtons() {
-            document.getElementById('skipBtn').disabled = true;
             document.getElementById('backBtn').disabled = true;
             document.getElementById('submitBtn').disabled = true;
         }
         
-        function enableButtons() {
-            document.getElementById('skipBtn').disabled = false;
-            document.getElementById('backBtn').disabled = false;
-            updateSubmitButton();
-        }
-        
         document.getElementById('uploadForm').addEventListener('submit', function(e) {
-            if (selectedFiles.length === 0) {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) {
                 e.preventDefault();
-                alert('Please select at least one file to upload, or click "Skip This Step" to continue without uploading.');
+                alert('Please select a file to upload');
                 return;
             }
             
@@ -491,42 +446,33 @@
             e.preventDefault();
             fileUploadDiv.classList.remove('drag-over');
             
-            const newFiles = Array.from(e.dataTransfer.files).filter(newFile => {
-                if (newFile.type !== 'application/pdf') {
-                    return false;
-                }
-                if (newFile.size > MAX_FILE_SIZE) {
-                    alert(`File "${newFile.name}" is too large. Maximum size is 10MB.`);
-                    return false;
-                }
-                
-                // Check for duplicate files
-                const isDuplicate = selectedFiles.some(existingFile => 
-                    existingFile.name === newFile.name && existingFile.size === newFile.size
-                );
-                
-                if (isDuplicate) {
-                    alert(`File "${newFile.name}" is already selected.`);
-                    return false;
-                }
-                
-                return true;
-            });
+            const file = e.dataTransfer.files[0];
             
-            if (newFiles.length === 0) {
-                alert('Please drop only PDF files (max 10MB each).');
+            if (!file) return;
+            
+            // Validate file type
+            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                alert('Only PDF files are allowed.');
                 return;
             }
             
-            // REPLACE existing files with new selection (single file upload)
-            selectedFiles = newFiles;
-            updateFileInput();
-            updateFileList();
-            updateSubmitButton();
+            // Validate file size
+            if (file.size > MAX_FILE_SIZE) {
+                alert('File is too large. Maximum size is 10MB.');
+                return;
+            }
+            
+            // Set the file to input
+            const fileInput = document.getElementById('fileInput');
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            fileInput.files = dt.files;
+            
+            updateUI(file);
         });
         
         // Initialize button state
-        updateSubmitButton();
+        document.getElementById('submitBtn').disabled = true;
     </script>
 </body>
 </html>
