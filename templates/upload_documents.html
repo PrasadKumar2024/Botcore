@@ -270,6 +270,30 @@
             margin-bottom: 16px;
             display: block;
         }
+
+        .file-preview {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .file-preview .file-info {
+            flex: 1;
+        }
+        
+        .file-preview .file-remove {
+            color: #dc3545;
+            cursor: pointer;
+            margin-left: 10px;
+            background: none;
+            border: none;
+            font-size: 16px;
+        }
         
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -311,13 +335,13 @@
             <strong>💡 Tip:</strong> Upload relevant documents (PDFs) to train your client's AI bot. This helps create more accurate responses.
         </div>
 
-        <!-- FIXED: Added client_id hidden field and changed file input name -->
+        <!-- FIXED: Multiple file upload with correct parameter name -->
         <form method="post" action="/upload_documents" enctype="multipart/form-data" id="uploadForm">
             <input type="hidden" name="client_id" value="{{ client.id }}">
             
             <div class="file-upload" id="fileUpload" onclick="document.getElementById('fileInput').click()">
-                <!-- CHANGED: name="file" instead of name="files" and removed multiple -->
-                <input type="file" name="file" accept=".pdf" style="display: none;" id="fileInput" onchange="handleFileSelect()">
+                <!-- FIXED: Changed to "files" and added multiple attribute -->
+                <input type="file" name="files" accept=".pdf" style="display: none;" id="fileInput" multiple>
                 <span class="file-upload-icon">📁</span>
                 <p style="font-size: 18px; margin-bottom: 8px; font-weight: 600;">Drag & drop PDF files here</p>
                 <p style="font-size: 14px; color: var(--gray); margin-bottom: 8px;">or click to browse</p>
@@ -328,7 +352,7 @@
                 No files selected
             </div>
             
-            <div class="file-list" id="fileList"></div>
+            <div id="fileList" class="mt-3"></div>
             
             <div class="loading" id="loadingIndicator">
                 <div class="spinner"></div>
@@ -344,67 +368,106 @@
 
     <script>
         const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        let selectedFiles = [];
+        
+        // File upload handling
+        const fileInput = document.getElementById('fileInput');
+        const uploadArea = document.getElementById('fileUpload');
+        const fileList = document.getElementById('fileList');
+        const fileCount = document.getElementById('fileCount');
+        const submitBtn = document.getElementById('submitBtn');
+        const uploadForm = document.getElementById('uploadForm');
 
-        function handleFileSelect() {
-            const fileInput = document.getElementById('fileInput');
-            const file = fileInput.files[0];
+        // Handle file selection
+        fileInput.addEventListener('change', function(e) {
+            handleFiles(Array.from(e.target.files));
+        });
+
+        // Drag and drop handling
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadArea.classList.add('drag-over');
+        });
+
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+        });
+
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            const files = Array.from(e.dataTransfer.files).filter(file => 
+                file.type === 'application/pdf'
+            );
+            handleFiles(files);
+        });
+
+        // Handle file validation and display
+        function handleFiles(newFiles) {
+            const validFiles = newFiles.filter(file => {
+                // Validate file type
+                if (!file.name.toLowerCase().endsWith('.pdf')) {
+                    alert(`File "${file.name}" is not a PDF. Only PDF files are allowed.`);
+                    return false;
+                }
+                
+                // Validate file size
+                if (file.size > MAX_FILE_SIZE) {
+                    alert(`File "${file.name}" is too large. Maximum size is 10MB.`);
+                    return false;
+                }
+                
+                // Check for duplicates
+                const isDuplicate = selectedFiles.some(existingFile => 
+                    existingFile.name === file.name && existingFile.size === file.size
+                );
+                
+                if (isDuplicate) {
+                    alert(`File "${file.name}" is already selected.`);
+                    return false;
+                }
+                
+                return true;
+            });
             
-            if (!file) {
-                updateUI(null);
-                return;
-            }
-            
-            // Validate file
-            if (!file.name.toLowerCase().endsWith('.pdf')) {
-                alert('Please select a PDF file');
-                fileInput.value = '';
-                updateUI(null);
-                return;
-            }
-            
-            if (file.size > MAX_FILE_SIZE) {
-                alert('File is too large. Maximum size is 10MB.');
-                fileInput.value = '';
-                updateUI(null);
-                return;
-            }
-            
-            updateUI(file);
+            // Add valid files to selection
+            selectedFiles = [...selectedFiles, ...validFiles];
+            updateFileList();
         }
-        
-        function updateUI(file) {
-            const fileList = document.getElementById('fileList');
-            const fileCount = document.getElementById('fileCount');
-            const submitBtn = document.getElementById('submitBtn');
+
+        // Update file list display
+        function updateFileList() {
+            fileList.innerHTML = '';
+            fileCount.textContent = selectedFiles.length === 0 ? 'No files selected' : `${selectedFiles.length} file(s) selected`;
+            fileCount.style.color = selectedFiles.length === 0 ? 'var(--gray)' : 'var(--primary)';
+            submitBtn.disabled = selectedFiles.length === 0;
             
-            if (!file) {
-                fileList.innerHTML = '';
-                fileCount.textContent = 'No files selected';
-                fileCount.style.color = 'var(--gray)';
-                submitBtn.disabled = true;
-                return;
-            }
-            
-            fileCount.textContent = '1 file selected';
-            fileCount.style.color = 'var(--primary)';
-            submitBtn.disabled = false;
-            
-            fileList.innerHTML = `
-                <div class="file-item">
+            if (selectedFiles.length === 0) return;
+
+            selectedFiles.forEach((file, index) => {
+                const filePreview = document.createElement('div');
+                filePreview.className = 'file-preview';
+                filePreview.innerHTML = `
                     <div class="file-info">
-                        <span class="file-name">📄 ${file.name}</span>
-                        <span class="file-size">${formatFileSize(file.size)}</span>
+                        <strong>${file.name}</strong>
+                        <small class="text-muted d-block">${formatFileSize(file.size)}</small>
                     </div>
-                    <button type="button" class="file-remove" onclick="clearFile()">Remove</button>
-                </div>
-            `;
+                    <button type="button" class="file-remove" onclick="removeFile(${index})">
+                        <i class="bi bi-x-circle">❌</i>
+                    </button>
+                `;
+                fileList.appendChild(filePreview);
+            });
         }
-        
-        function clearFile() {
-            document.getElementById('fileInput').value = '';
-            updateUI(null);
+
+        // Remove file from selection
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
         }
-        
+
+        // Format file size
         function formatFileSize(bytes) {
             if (bytes === 0) return '0 Bytes';
             const k = 1024;
@@ -412,67 +475,54 @@
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
-        
-        function disableButtons() {
-            document.getElementById('backBtn').disabled = true;
-            document.getElementById('submitBtn').disabled = true;
-        }
-        
-        document.getElementById('uploadForm').addEventListener('submit', function(e) {
-            const file = document.getElementById('fileInput').files[0];
-            if (!file) {
-                e.preventDefault();
-                alert('Please select a file to upload');
+
+        // Handle form submission
+        uploadForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            if (selectedFiles.length === 0) {
+                alert('Please select at least one PDF file');
                 return;
             }
-            
+
+            // Create FormData and add files
+            const formData = new FormData();
+            formData.append('client_id', '{{ client.id }}');
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+
+            // Show loading state
             document.getElementById('loadingIndicator').classList.add('active');
-            disableButtons();
-        });
-        
-        const fileUploadDiv = document.getElementById('fileUpload');
-        
-        fileUploadDiv.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUploadDiv.classList.add('drag-over');
-        });
-        
-        fileUploadDiv.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            fileUploadDiv.classList.remove('drag-over');
-        });
-        
-        fileUploadDiv.addEventListener('drop', (e) => {
-            e.preventDefault();
-            fileUploadDiv.classList.remove('drag-over');
-            
-            const file = e.dataTransfer.files[0];
-            
-            if (!file) return;
-            
-            // Validate file type
-            if (!file.name.toLowerCase().endsWith('.pdf')) {
-                alert('Only PDF files are allowed.');
-                return;
+            submitBtn.disabled = true;
+            document.getElementById('backBtn').disabled = true;
+            submitBtn.innerHTML = 'Uploading...';
+
+            try {
+                const response = await fetch('/upload_documents', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    // Success - redirect to next step
+                    window.location.href = '/buy_number';
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Upload failed');
+                }
+            } catch (error) {
+                alert('Upload failed: ' + error.message);
+                // Reset loading state
+                document.getElementById('loadingIndicator').classList.remove('active');
+                submitBtn.disabled = false;
+                document.getElementById('backBtn').disabled = false;
+                submitBtn.innerHTML = 'Next →';
             }
-            
-            // Validate file size
-            if (file.size > MAX_FILE_SIZE) {
-                alert('File is too large. Maximum size is 10MB.');
-                return;
-            }
-            
-            // Set the file to input
-            const fileInput = document.getElementById('fileInput');
-            const dt = new DataTransfer();
-            dt.items.add(file);
-            fileInput.files = dt.files;
-            
-            updateUI(file);
         });
-        
+
         // Initialize button state
-        document.getElementById('submitBtn').disabled = true;
+        submitBtn.disabled = true;
     </script>
 </body>
 </html>
