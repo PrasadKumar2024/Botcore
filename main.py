@@ -137,7 +137,6 @@ async def add_client_form(request: Request):
     """Show add client form"""
     return templates.TemplateResponse("add_client.html", {"request": request})
 
-# FIXED: Added this route to match the form action
 @app.post("/clients/add")
 async def clients_add(
     business_name: str = Form(...),
@@ -179,32 +178,43 @@ async def upload_documents_form(request: Request):
 @app.post("/upload_documents")
 async def upload_documents(
     request: Request,
-    files: List[UploadFile] = File(...)
+    client_id: str = Form(...),
+    file: UploadFile = File(...)
 ):
-    """Handle PDF uploads"""
+    """Handle PDF upload"""
     client = get_client_from_session(request)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    client_id = client["id"]
+    # Validate file type
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     if client_id not in documents:
         documents[client_id] = []
     
-    for file in files:
-        if file.filename and file.filename.endswith('.pdf'):
-            document_id = str(uuid.uuid4())
-            # Read file content to get size
-            content = await file.read()
-            documents[client_id].append({
-                "id": document_id,
-                "filename": file.filename,
-                "uploaded_at": datetime.now().isoformat(),
-                "file_size": len(content),
-                "processed": False
-            })
+    if file.filename and file.filename.endswith('.pdf'):
+        document_id = str(uuid.uuid4())
+        # Read file content to get size
+        content = await file.read()
+        documents[client_id].append({
+            "id": document_id,
+            "filename": file.filename,
+            "uploaded_at": datetime.now().isoformat(),
+            "file_size": len(content),
+            "processed": False
+        })
     
     save_data()
+    return RedirectResponse(url="/buy_number", status_code=303)
+
+@app.post("/skip_documents")
+async def skip_documents(request: Request):
+    """Skip document upload step"""
+    client = get_client_from_session(request)
+    if not client:
+        return RedirectResponse(url="/clients", status_code=303)
+    
     return RedirectResponse(url="/buy_number", status_code=303)
 
 @app.get("/buy_number", response_class=HTMLResponse)
