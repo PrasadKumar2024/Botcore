@@ -135,6 +135,27 @@
             padding: 15px;
             margin: 15px 0;
         }
+        
+        .file-preview {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 5px 0;
+            display: flex;
+            justify-content: between;
+            align-items: center;
+        }
+        
+        .file-preview .file-info {
+            flex: 1;
+        }
+        
+        .file-preview .file-remove {
+            color: #dc3545;
+            cursor: pointer;
+            margin-left: 10px;
+        }
     </style>
 </head>
 <body>
@@ -489,9 +510,9 @@
                         </div>
 
                         {% if documents %}
-                        <div class="document-list">
+                        <div class="document-list" id="documentList">
                             {% for doc in documents %}
-                            <div class="document-item">
+                            <div class="document-item" id="doc-{{ doc.id }}">
                                 <div class="d-flex justify-content-between align-items-start">
                                     <div class="flex-grow-1">
                                         <h6 class="mb-1">
@@ -512,7 +533,6 @@
                                         </div>
                                     </div>
                                     <div class="btn-group ms-3">
-                                        <!-- FIXED: Changed to use only document_id -->
                                         <button class="btn btn-outline-danger btn-sm" onclick="deleteDocument('{{ doc.id }}')">
                                             <i class="bi bi-trash"></i> Delete
                                         </button>
@@ -537,16 +557,13 @@
                                 <h5 class="card-title mb-0"><i class="bi bi-cloud-upload"></i> Upload New PDF</h5>
                             </div>
                             <div class="card-body">
-                                <!-- FIXED: Added client_id hidden field -->
-                                <form action="/upload_documents" method="post" enctype="multipart/form-data" id="uploadForm">
-                                    <input type="hidden" name="client_id" value="{{ client.id }}">
-                                    
-                                    <div class="upload-area" id="uploadArea">
+                                <form id="uploadForm" enctype="multipart/form-data">
+                                    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
                                         <i class="bi bi-cloud-arrow-up" style="font-size: 3rem; color: #6c757d;"></i>
                                         <h5 class="mt-3">Drop PDF files here</h5>
                                         <p class="text-muted">or click to browse</p>
-                                        <input type="file" class="d-none" id="fileInput" name="file" accept=".pdf" required>
-                                        <button type="button" class="btn btn-outline-primary mt-2" onclick="document.getElementById('fileInput').click()">
+                                        <input type="file" class="d-none" id="fileInput" name="files" accept=".pdf" multiple>
+                                        <button type="button" class="btn btn-outline-primary mt-2">
                                             Select PDF Files
                                         </button>
                                     </div>
@@ -565,16 +582,17 @@
                                     <h6><i class="bi bi-brain"></i> Knowledge Base Status</h6>
                                     {% set processed_docs = documents|selectattr('processed')|list %}
                                     <div class="mb-2">
-                                        <strong>Processed Documents:</strong> {{ processed_docs|length }}/{{ documents|length }}
+                                        <strong>Processed Documents:</strong> 
+                                        <span id="processed-count">{{ processed_docs|length }}</span>/<span id="total-count">{{ documents|length }}</span>
                                     </div>
                                     <div class="progress mb-2">
                                         <div class="progress-bar" role="progressbar" 
-                                             style="width: {{ (processed_docs|length / documents|length * 100) if documents|length > 0 else 0 }}%">
+                                             style="width: {{ (processed_docs|length / documents|length * 100) if documents|length > 0 else 0 }}%"
+                                             id="progress-bar">
                                         </div>
                                     </div>
-                                    <!-- FIXED: Correct reprocess button -->
                                     <button class="btn btn-outline-warning w-100" onclick="reprocessKnowledgeBase('{{ client.id }}')"
-                                            {% if documents|length == 0 %}disabled{% endif %}>
+                                            {% if documents|length == 0 %}disabled{% endif %} id="reprocessBtn">
                                         <i class="bi bi-arrow-repeat"></i> Reprocess Knowledge Base
                                     </button>
                                     <small class="text-muted d-block mt-1">
@@ -639,134 +657,222 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+        const CLIENT_ID = '{{ client.id }}';
+        let selectedFiles = [];
+        
         // File upload handling
         const fileInput = document.getElementById('fileInput');
         const uploadArea = document.getElementById('uploadArea');
         const fileList = document.getElementById('fileList');
         const uploadBtn = document.getElementById('uploadBtn');
+        const uploadForm = document.getElementById('uploadForm');
 
-        fileInput.addEventListener('change', handleFileSelect);
-        
-        // Drag and drop functionality
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            uploadArea.addEventListener(eventName, preventDefaults, false);
+        // Handle file selection
+        fileInput.addEventListener('change', function(e) {
+            selectedFiles = Array.from(e.target.files);
+            updateFileList();
         });
 
-        function preventDefaults(e) {
+        // Drag and drop handling
+        uploadArea.addEventListener('dragover', function(e) {
             e.preventDefault();
-            e.stopPropagation();
-        }
-
-        ['dragenter', 'dragover'].forEach(eventName => {
-            uploadArea.addEventListener(eventName, () => uploadArea.classList.add('dragover'), false);
+            uploadArea.classList.add('dragover');
         });
 
-        ['dragleave', 'drop'].forEach(eventName => {
-            uploadArea.addEventListener(eventName, () => uploadArea.classList.remove('dragover'), false);
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
         });
 
-        uploadArea.addEventListener('drop', handleDrop, false);
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            selectedFiles = Array.from(e.dataTransfer.files).filter(file => 
+                file.type === 'application/pdf'
+            );
+            updateFileList();
+        });
 
-        function handleDrop(e) {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            fileInput.files = files;
-            handleFileSelect();
-        }
-
-        function handleFileSelect() {
+        // Update file list display
+        function updateFileList() {
             fileList.innerHTML = '';
-            const files = fileInput.files;
             
-            if (files.length > 0) {
-                uploadBtn.disabled = false;
-                
-                for (let file of files) {
-                    const fileItem = document.createElement('div');
-                    fileItem.className = 'alert alert-info py-2 mt-2';
-                    fileItem.innerHTML = `
-                        <i class="bi bi-file-pdf"></i> ${file.name} 
-                        <small class="text-muted">(${(file.size / 1024 / 1024).toFixed(2)} MB)</small>
-                    `;
-                    fileList.appendChild(fileItem);
-                }
-            } else {
+            if (selectedFiles.length === 0) {
                 uploadBtn.disabled = true;
+                return;
             }
+
+            selectedFiles.forEach((file, index) => {
+                const filePreview = document.createElement('div');
+                filePreview.className = 'file-preview';
+                filePreview.innerHTML = `
+                    <div class="file-info">
+                        <strong>${file.name}</strong>
+                        <small class="text-muted d-block">${formatFileSize(file.size)}</small>
+                    </div>
+                    <span class="file-remove" onclick="removeFile(${index})">
+                        <i class="bi bi-x-circle"></i>
+                    </span>
+                `;
+                fileList.appendChild(filePreview);
+            });
+
+            uploadBtn.disabled = false;
         }
 
-        // ============ CRITICAL FIXES ============
-
-        // FIXED: Delete document function - uses correct endpoint
-        async function deleteDocument(documentId) {
-            if (confirm('Are you sure you want to delete this document?')) {
-                try {
-                    const response = await fetch(`/api/documents/${documentId}`, {
-                        method: 'DELETE'
-                    });
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        alert('Document deleted successfully!');
-                        location.reload();
-                    } else {
-                        throw new Error('Delete failed');
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    alert('Failed to delete document: ' + error.message);
-                }
-            }
+        // Remove file from selection
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            updateFileList();
         }
 
-        // FIXED: Reprocess knowledge base function - uses correct endpoint
-        async function reprocessKnowledgeBase(clientId) {
-            console.log('Reprocessing knowledge base for client:', clientId);
+        // Format file size
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        // Handle form submission
+        uploadForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
             
+            if (selectedFiles.length === 0) {
+                alert('Please select at least one PDF file');
+                return;
+            }
+
+            const formData = new FormData();
+            selectedFiles.forEach(file => {
+                formData.append('files', file);
+            });
+
+            uploadBtn.disabled = true;
+            uploadBtn.innerHTML = '<i class="bi bi-arrow-repeat spinner-border spinner-border-sm"></i> Uploading...';
+
             try {
-                const response = await fetch(`/api/documents/${clientId}/reprocess`, {
+                const response = await fetch(`/client/${CLIENT_ID}/upload`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
+                    body: formData
                 });
+
+                const result = await response.json();
                 
                 if (response.ok) {
-                    const data = await response.json();
-                    alert('Knowledge base updated successfully! ' + data.message);
+                    alert(`Successfully uploaded ${result.uploaded_count} document(s)`);
+                    // Clear selection and refresh page
+                    selectedFiles = [];
+                    fileInput.value = '';
+                    updateFileList();
                     location.reload();
                 } else {
-                    throw new Error('Network response was not ok');
+                    throw new Error(result.message || 'Upload failed');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                alert('Failed to update knowledge base: ' + error.message);
+                alert('Upload failed: ' + error.message);
+            } finally {
+                uploadBtn.disabled = false;
+                uploadBtn.innerHTML = '<i class="bi bi-upload"></i> Upload Documents';
+            }
+        });
+
+        // Delete document
+        async function deleteDocument(documentId) {
+            if (!confirm('Are you sure you want to delete this document?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/documents/${documentId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Remove document from UI
+                    const docElement = document.getElementById(`doc-${documentId}`);
+                    if (docElement) {
+                        docElement.remove();
+                    }
+                    // Update counts
+                    updateDocumentCounts();
+                    alert('Document deleted successfully');
+                } else {
+                    throw new Error(result.message || 'Delete failed');
+                }
+            } catch (error) {
+                alert('Delete failed: ' + error.message);
             }
         }
 
-        // ============ EXISTING FUNCTIONS ============
+        // Reprocess knowledge base
+        async function reprocessKnowledgeBase(clientId) {
+            const reprocessBtn = document.getElementById('reprocessBtn');
+            const originalText = reprocessBtn.innerHTML;
+            
+            reprocessBtn.disabled = true;
+            reprocessBtn.innerHTML = '<i class="bi bi-arrow-repeat spinner-border spinner-border-sm"></i> Processing...';
+
+            try {
+                const response = await fetch(`/api/documents/${clientId}/reprocess`, {
+                    method: 'POST'
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(`Successfully reprocessed ${result.processed_count} document(s)`);
+                    location.reload();
+                } else {
+                    throw new Error(result.message || 'Reprocessing failed');
+                }
+            } catch (error) {
+                alert('Reprocessing failed: ' + error.message);
+            } finally {
+                reprocessBtn.disabled = false;
+                reprocessBtn.innerHTML = originalText;
+            }
+        }
+
+        // Update document counts
+        function updateDocumentCounts() {
+            const documentItems = document.querySelectorAll('.document-item');
+            const processedItems = document.querySelectorAll('.badge.bg-success');
+            
+            document.getElementById('total-count').textContent = documentItems.length;
+            document.getElementById('processed-count').textContent = processedItems.length;
+            
+            const progress = documentItems.length > 0 ? (processedItems.length / documentItems.length * 100) : 0;
+            document.getElementById('progress-bar').style.width = `${progress}%`;
+        }
 
         // Bot management functions
         async function addMonths(botType, months) {
-            if (confirm(`Add ${months} month(s) to ${botType} bot subscription?`)) {
-                try {
-                    const response = await fetch('/api/bot/add_months', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({bot_type: botType, months: months})
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.status === 'success') {
-                        location.reload();
-                    } else {
-                        alert('Error: ' + result.message);
-                    }
-                } catch (error) {
-                    console.error('Error adding months:', error);
-                    alert('Error adding months');
+            try {
+                const response = await fetch('/api/bot/add_months', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        bot_type: botType,
+                        months: months
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(result.message);
+                    location.reload();
+                } else {
+                    throw new Error(result.message);
                 }
+            } catch (error) {
+                alert('Error: ' + error.message);
             }
         }
 
@@ -774,45 +880,73 @@
             try {
                 const response = await fetch('/api/bot/toggle', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({bot_type: botType, action: action})
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        bot_type: botType,
+                        action: action
+                    })
                 });
-                
+
                 const result = await response.json();
                 
-                if (result.status === 'success') {
+                if (response.ok) {
+                    alert(result.message);
                     location.reload();
                 } else {
-                    alert('Error: ' + result.message);
+                    throw new Error(result.message);
                 }
             } catch (error) {
-                console.error('Error toggling bot:', error);
-                alert('Error toggling bot');
+                alert('Error: ' + error.message);
             }
         }
 
         // Utility functions
         function copyToClipboard(elementId) {
             const element = document.getElementById(elementId);
-            const text = element.value || element.textContent;
+            const text = element.tagName === 'INPUT' ? element.value : element.textContent;
+            
             navigator.clipboard.writeText(text).then(() => {
                 alert('Copied to clipboard!');
             });
         }
 
-        function editField(fieldId, fieldType) {
-            const field = document.getElementById(fieldId);
-            const newValue = prompt(`Edit ${fieldType}:`, field.textContent);
-            if (newValue !== null) {
-                // Call API to update field
-                console.log(`Updating ${fieldType} to:`, newValue);
+        async function deleteClient(clientId) {
+            if (!confirm('Are you sure you want to delete this client? This action cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/clients/${clientId}`, {
+                    method: 'DELETE'
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert('Client deleted successfully');
+                    window.location.href = '/clients';
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                alert('Delete failed: ' + error.message);
             }
         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Client detail page loaded');
-        });
+        // Placeholder functions for future implementation
+        function editField(elementId, fieldName) {
+            alert('Edit functionality will be implemented soon');
+        }
+
+        function uploadLogo() {
+            alert('Logo upload functionality will be implemented soon');
+        }
+
+        function updateClient() {
+            alert('Client update functionality will be implemented soon');
+        }
     </script>
 </body>
 </html>
