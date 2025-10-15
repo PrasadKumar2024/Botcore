@@ -179,31 +179,27 @@ async def upload_documents_form(request: Request):
 async def upload_documents(
     request: Request,
     client_id: str = Form(...),
-    file: UploadFile = File(...)
+    files: List[UploadFile] = File(...)
 ):
-    """Handle PDF upload"""
+    """Handle PDF upload during client creation"""
     client = get_client_from_session(request)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    # Validate file type
-    if not file.filename or not file.filename.lower().endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-    
     if client_id not in documents:
         documents[client_id] = []
     
-    if file.filename and file.filename.endswith('.pdf'):
-        document_id = str(uuid.uuid4())
-        # Read file content to get size
-        content = await file.read()
-        documents[client_id].append({
-            "id": document_id,
-            "filename": file.filename,
-            "uploaded_at": datetime.now().isoformat(),
-            "file_size": len(content),
-            "processed": False
-        })
+    for file in files:
+        if file.filename and file.filename.lower().endswith('.pdf'):
+            document_id = str(uuid.uuid4())
+            content = await file.read()
+            documents[client_id].append({
+                "id": document_id,
+                "filename": file.filename,
+                "uploaded_at": datetime.now().isoformat(),
+                "file_size": len(content),
+                "processed": False
+            })
     
     save_data()
     return RedirectResponse(url="/buy_number", status_code=303)
@@ -363,6 +359,88 @@ async def client_data(request: Request, client_id: str):
         "client": client,
         "documents": client_documents,
         "active_tab": "data"
+    })
+
+@app.post("/client/{client_id}/upload")
+async def client_upload_documents(
+    client_id: str,
+    files: List[UploadFile] = File(...)
+):
+    """Upload additional PDFs from Data tab"""
+    if client_id not in clients:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    if client_id not in documents:
+        documents[client_id] = []
+    
+    uploaded_count = 0
+    for file in files:
+        if file.filename and file.filename.lower().endswith('.pdf'):
+            document_id = str(uuid.uuid4())
+            content = await file.read()
+            documents[client_id].append({
+                "id": document_id,
+                "filename": file.filename,
+                "uploaded_at": datetime.now().isoformat(),
+                "file_size": len(content),
+                "processed": False
+            })
+            uploaded_count += 1
+    
+    save_data()
+    
+    return JSONResponse({
+        "status": "success",
+        "message": f"Successfully uploaded {uploaded_count} document(s)",
+        "uploaded_count": uploaded_count
+    })
+
+@app.delete("/api/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a specific document"""
+    try:
+        # Find and delete document
+        for client_id, docs in documents.items():
+            for i, doc in enumerate(docs):
+                if doc["id"] == document_id:
+                    del documents[client_id][i]
+                    save_data()
+                    return JSONResponse({
+                        "status": "success",
+                        "message": "Document deleted successfully"
+                    })
+        
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+@app.post("/api/documents/{client_id}/reprocess")
+async def reprocess_documents(client_id: str):
+    """Reprocess knowledge base for a client"""
+    if client_id not in clients:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    if client_id not in documents or len(documents[client_id]) == 0:
+        return JSONResponse({
+            "status": "success",
+            "message": "No documents to process",
+            "processed_count": 0
+        })
+    
+    # Mark all documents as processed
+    for doc in documents[client_id]:
+        doc["processed"] = True
+        doc["processed_at"] = datetime.now().isoformat()
+    
+    save_data()
+    
+    return JSONResponse({
+        "status": "success",
+        "message": f"Successfully reprocessed {len(documents[client_id])} document(s)",
+        "processed_count": len(documents[client_id])
     })
 
 # API Routes for bot management
