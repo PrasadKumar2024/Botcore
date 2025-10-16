@@ -5,216 +5,302 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class DateUtils:
+    """Utility class for date operations and subscription calculations."""
+    
+    @staticmethod
+    def add_months_to_date(start_date: Optional[datetime], months: int) -> datetime:
+        """
+        Add months to a given date. If no start_date provided, uses current date.
+        
+        Args:
+            start_date: The starting date (None for current date)
+            months: Number of months to add (1, 2, 3, 6, 12)
+        
+        Returns:
+            New date after adding months
+        """
+        if start_date is None:
+            start_date = datetime.utcnow()
+        
+        try:
+            new_date = start_date + relativedelta(months=months)
+            return new_date
+        except Exception as e:
+            logger.error(f"Error adding months to date: {str(e)}")
+            # Fallback: approximate 30 days per month
+            return start_date + timedelta(days=30 * months)
+
+    @staticmethod
+    def calculate_expiry_date(start_date: Optional[datetime], months: int, current_expiry: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Calculate expiry date based on subscription logic:
+        - First payment: Start Date = Today, Expiry Date = Today + months
+        - Renewal: Start Date remains, Expiry Date = Current Expiry + months
+        
+        Args:
+            start_date: Current start date (None for new subscription)
+            months: Number of months to add
+            current_expiry: Current expiry date (for renewals)
+        
+        Returns:
+            Dictionary with new_start_date and new_expiry_date
+        """
+        now = datetime.utcnow()
+        
+        # First payment logic
+        if start_date is None or current_expiry is None:
+            new_start_date = now
+            new_expiry_date = DateUtils.add_months_to_date(now, months)
+            logger.info(f"First payment: Start={new_start_date.date()}, Expiry={new_expiry_date.date()}")
+        
+        # Renewal logic
+        else:
+            new_start_date = start_date  # Start date remains unchanged
+            new_expiry_date = DateUtils.add_months_to_date(current_expiry, months)
+            logger.info(f"Renewal: Start remains {new_start_date.date()}, New Expiry={new_expiry_date.date()}")
+        
+        return {
+            "start_date": new_start_date,
+            "expiry_date": new_expiry_date,
+            "months_added": months
+        }
+
+    @staticmethod
+    def check_subscription_active(expiry_date: datetime) -> bool:
+        """
+        Check if subscription is active by comparing expiry date with current date.
+        
+        Args:
+            expiry_date: The subscription expiry date
+        
+        Returns:
+            True if active, False if expired
+        """
+        now = datetime.utcnow()
+        is_active = expiry_date > now
+        
+        if not is_active:
+            logger.info(f"Subscription expired on {expiry_date.date()}")
+        
+        return is_active
+
+    @staticmethod
+    def get_subscription_status(start_date: Optional[datetime], expiry_date: Optional[datetime]) -> Dict[str, Any]:
+        """
+        Get comprehensive subscription status.
+        
+        Args:
+            start_date: Subscription start date
+            expiry_date: Subscription expiry date
+        
+        Returns:
+            Dictionary with status details
+        """
+        now = datetime.utcnow()
+        
+        if start_date is None or expiry_date is None:
+            return {
+                "status": "INACTIVE",
+                "active": False,
+                "start_date": None,
+                "expiry_date": None,
+                "days_remaining": 0,
+                "expired": True
+            }
+        
+        is_active = DateUtils.check_subscription_active(expiry_date)
+        days_remaining = (expiry_date - now).days if expiry_date > now else 0
+        
+        status = "ACTIVE" if is_active else "EXPIRED"
+        
+        return {
+            "status": status,
+            "active": is_active,
+            "start_date": start_date,
+            "expiry_date": expiry_date,
+            "days_remaining": max(0, days_remaining),
+            "expired": not is_active
+        }
+
+    @staticmethod
+    def format_date_display(date: Optional[datetime]) -> str:
+        """
+        Format date for display in UI.
+        
+        Args:
+            date: Date to format
+        
+        Returns:
+            Formatted date string or "--/--/----" if None
+        """
+        if date is None:
+            return "--/--/----"
+        
+        return date.strftime("%d/%m/%Y")
+
+    @staticmethod
+    def get_days_until_expiry(expiry_date: datetime) -> int:
+        """
+        Calculate days until expiry.
+        
+        Args:
+            expiry_date: Expiry date
+        
+        Returns:
+            Number of days until expiry (negative if expired)
+        """
+        now = datetime.utcnow()
+        return (expiry_date - now).days
+
+    @staticmethod
+    def should_send_expiry_reminder(expiry_date: datetime, days_before: int = 7) -> bool:
+        """
+        Check if expiry reminder should be sent.
+        
+        Args:
+            expiry_date: Expiry date
+            days_before: Days before expiry to send reminder
+        
+        Returns:
+            True if reminder should be sent
+        """
+        days_until = DateUtils.get_days_until_expiry(expiry_date)
+        return 0 < days_until <= days_before
+
+    @staticmethod
+    def validate_month_selection(months: int) -> bool:
+        """
+        Validate if month selection is valid.
+        
+        Args:
+            months: Number of months selected
+        
+        Returns:
+            True if valid
+        """
+        valid_months = [1, 2, 3, 6, 12]
+        return months in valid_months
+
+    @staticmethod
+    def get_subscription_duration_months(start_date: datetime, expiry_date: datetime) -> int:
+        """
+        Calculate total subscription duration in months.
+        
+        Args:
+            start_date: Start date
+            expiry_date: Expiry date
+        
+        Returns:
+            Duration in months (rounded)
+        """
+        if start_date is None or expiry_date is None:
+            return 0
+        
+        duration = relativedelta(expiry_date, start_date)
+        total_months = duration.years * 12 + duration.months
+        
+        # Add partial month if needed
+        if duration.days > 0:
+            total_months += 1
+        
+        return total_months
+
+    @staticmethod
+    def is_date_in_future(date: datetime) -> bool:
+        """Check if date is in the future."""
+        return date > datetime.utcnow()
+
+    @staticmethod
+    def is_date_in_past(date: datetime) -> bool:
+        """Check if date is in the past."""
+        return date < datetime.utcnow()
+
+    @staticmethod
+    def get_current_datetime() -> datetime:
+        """Get current UTC datetime."""
+        return datetime.utcnow()
+
+    @staticmethod
+    def format_datetime_for_db(date: datetime) -> str:
+        """Format datetime for database storage."""
+        return date.isoformat()
+
+    @staticmethod
+    def parse_datetime_from_db(date_str: str) -> datetime:
+        """Parse datetime from database string."""
+        try:
+            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            logger.error(f"Failed to parse datetime: {date_str}, error: {str(e)}")
+            return datetime.utcnow()
+
+    @staticmethod
+    def add_months(start_date: datetime, months: int) -> datetime:
+        """
+        Alias for add_months_to_date for compatibility with existing code.
+        
+        Args:
+            start_date: The starting date
+            months: Number of months to add
+        
+        Returns:
+            New date after adding months
+        """
+        return DateUtils.add_months_to_date(start_date, months)
+
+    @staticmethod
+    def get_expiry_date(months: int) -> datetime:
+        """
+        Get expiry date from current date by adding months.
+        
+        Args:
+            months: Number of months to add
+        
+        Returns:
+            Expiry date
+        """
+        return DateUtils.add_months_to_date(datetime.utcnow(), months)
+
+# Keep original functions for backward compatibility
 def add_months_to_date(start_date: Optional[datetime], months: int) -> datetime:
-    """
-    Add months to a given date. If no start_date provided, uses current date.
-    
-    Args:
-        start_date: The starting date (None for current date)
-        months: Number of months to add (1, 2, 3, 6, 12)
-    
-    Returns:
-        New date after adding months
-    """
-    if start_date is None:
-        start_date = datetime.utcnow()
-    
-    try:
-        new_date = start_date + relativedelta(months=months)
-        return new_date
-    except Exception as e:
-        logger.error(f"Error adding months to date: {str(e)}")
-        # Fallback: approximate 30 days per month
-        return start_date + timedelta(days=30 * months)
+    return DateUtils.add_months_to_date(start_date, months)
 
 def calculate_expiry_date(start_date: Optional[datetime], months: int, current_expiry: Optional[datetime] = None) -> Dict[str, Any]:
-    """
-    Calculate expiry date based on subscription logic:
-    - First payment: Start Date = Today, Expiry Date = Today + months
-    - Renewal: Start Date remains, Expiry Date = Current Expiry + months
-    
-    Args:
-        start_date: Current start date (None for new subscription)
-        months: Number of months to add
-        current_expiry: Current expiry date (for renewals)
-    
-    Returns:
-        Dictionary with new_start_date and new_expiry_date
-    """
-    now = datetime.utcnow()
-    
-    # First payment logic
-    if start_date is None or current_expiry is None:
-        new_start_date = now
-        new_expiry_date = add_months_to_date(now, months)
-        logger.info(f"First payment: Start={new_start_date.date()}, Expiry={new_expiry_date.date()}")
-    
-    # Renewal logic
-    else:
-        new_start_date = start_date  # Start date remains unchanged
-        new_expiry_date = add_months_to_date(current_expiry, months)
-        logger.info(f"Renewal: Start remains {new_start_date.date()}, New Expiry={new_expiry_date.date()}")
-    
-    return {
-        "start_date": new_start_date,
-        "expiry_date": new_expiry_date,
-        "months_added": months
-    }
+    return DateUtils.calculate_expiry_date(start_date, months, current_expiry)
 
 def check_subscription_active(expiry_date: datetime) -> bool:
-    """
-    Check if subscription is active by comparing expiry date with current date.
-    
-    Args:
-        expiry_date: The subscription expiry date
-    
-    Returns:
-        True if active, False if expired
-    """
-    now = datetime.utcnow()
-    is_active = expiry_date > now
-    
-    if not is_active:
-        logger.info(f"Subscription expired on {expiry_date.date()}")
-    
-    return is_active
+    return DateUtils.check_subscription_active(expiry_date)
 
 def get_subscription_status(start_date: Optional[datetime], expiry_date: Optional[datetime]) -> Dict[str, Any]:
-    """
-    Get comprehensive subscription status.
-    
-    Args:
-        start_date: Subscription start date
-        expiry_date: Subscription expiry date
-    
-    Returns:
-        Dictionary with status details
-    """
-    now = datetime.utcnow()
-    
-    if start_date is None or expiry_date is None:
-        return {
-            "status": "INACTIVE",
-            "active": False,
-            "start_date": None,
-            "expiry_date": None,
-            "days_remaining": 0,
-            "expired": True
-        }
-    
-    is_active = check_subscription_active(expiry_date)
-    days_remaining = (expiry_date - now).days if expiry_date > now else 0
-    
-    status = "ACTIVE" if is_active else "EXPIRED"
-    
-    return {
-        "status": status,
-        "active": is_active,
-        "start_date": start_date,
-        "expiry_date": expiry_date,
-        "days_remaining": max(0, days_remaining),
-        "expired": not is_active
-    }
+    return DateUtils.get_subscription_status(start_date, expiry_date)
 
 def format_date_display(date: Optional[datetime]) -> str:
-    """
-    Format date for display in UI.
-    
-    Args:
-        date: Date to format
-    
-    Returns:
-        Formatted date string or "--/--/----" if None
-    """
-    if date is None:
-        return "--/--/----"
-    
-    return date.strftime("%d/%m/%Y")
+    return DateUtils.format_date_display(date)
 
 def get_days_until_expiry(expiry_date: datetime) -> int:
-    """
-    Calculate days until expiry.
-    
-    Args:
-        expiry_date: Expiry date
-    
-    Returns:
-        Number of days until expiry (negative if expired)
-    """
-    now = datetime.utcnow()
-    return (expiry_date - now).days
+    return DateUtils.get_days_until_expiry(expiry_date)
 
 def should_send_expiry_reminder(expiry_date: datetime, days_before: int = 7) -> bool:
-    """
-    Check if expiry reminder should be sent.
-    
-    Args:
-        expiry_date: Expiry date
-        days_before: Days before expiry to send reminder
-    
-    Returns:
-        True if reminder should be sent
-    """
-    days_until = get_days_until_expiry(expiry_date)
-    return 0 < days_until <= days_before
+    return DateUtils.should_send_expiry_reminder(expiry_date, days_before)
 
 def validate_month_selection(months: int) -> bool:
-    """
-    Validate if month selection is valid.
-    
-    Args:
-        months: Number of months selected
-    
-    Returns:
-        True if valid
-    """
-    valid_months = [1, 2, 3, 6, 12]
-    return months in valid_months
+    return DateUtils.validate_month_selection(months)
 
 def get_subscription_duration_months(start_date: datetime, expiry_date: datetime) -> int:
-    """
-    Calculate total subscription duration in months.
-    
-    Args:
-        start_date: Start date
-        expiry_date: Expiry date
-    
-    Returns:
-        Duration in months (rounded)
-    """
-    if start_date is None or expiry_date is None:
-        return 0
-    
-    duration = relativedelta(expiry_date, start_date)
-    total_months = duration.years * 12 + duration.months
-    
-    # Add partial month if needed
-    if duration.days > 0:
-        total_months += 1
-    
-    return total_months
+    return DateUtils.get_subscription_duration_months(start_date, expiry_date)
 
-# Utility functions for date comparisons
 def is_date_in_future(date: datetime) -> bool:
-    """Check if date is in the future."""
-    return date > datetime.utcnow()
+    return DateUtils.is_date_in_future(date)
 
 def is_date_in_past(date: datetime) -> bool:
-    """Check if date is in the past."""
-    return date < datetime.utcnow()
+    return DateUtils.is_date_in_past(date)
 
 def get_current_datetime() -> datetime:
-    """Get current UTC datetime."""
-    return datetime.utcnow()
+    return DateUtils.get_current_datetime()
 
 def format_datetime_for_db(date: datetime) -> str:
-    """Format datetime for database storage."""
-    return date.isoformat()
+    return DateUtils.format_datetime_for_db(date)
 
 def parse_datetime_from_db(date_str: str) -> datetime:
-    """Parse datetime from database string."""
-    try:
-        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-    except (ValueError, AttributeError):
-        logger.error(f"Failed to parse datetime: {date_str}")
-        return datetime.utcnow() 
+    return DateUtils.parse_datetime_from_db(date_str)
