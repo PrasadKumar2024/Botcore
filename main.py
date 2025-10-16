@@ -10,11 +10,19 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 import random
 
-# Import database and models
-# import database and media:
+Import database and models
+import database and media:
+# import database and models:
 from app.database import get_db, engine, Base
-from app import nmdbis, schema
+from app import models, schema
 from sqlalchemy import text
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Ownbot",
+    description="Multi-tenant Bot Management System",
+    version="1.0.0"
+)
 
 # Add debug database code
 @app.on_event("startup")
@@ -47,9 +55,6 @@ async def debug_db():
     except Exception as e:
         return {"error": str(e)}
 # End debug code
-
-# Initialize FastAPI app
-app = FastAPI(
 # Initialize FastAPI app
 app = FastAPI(
     title="OwnBot",
