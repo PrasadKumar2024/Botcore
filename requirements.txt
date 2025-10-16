@@ -4,7 +4,7 @@ uvicorn==0.24.0
 pydantic-settings==2.0.3
 
 # Database
-sqlalchemy==2.0.25
+sqlalchemy==2.0.28
 psycopg2-binary==2.9.9
 alembic==1.13.1
 
