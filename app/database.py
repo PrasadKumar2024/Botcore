@@ -1,19 +1,15 @@
-
-# app/database.py - SQLite database connection and setup
+# app/database.py - PostgreSQL database connection and setup
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Database URL - using SQLite for development
-SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
+# Database URL - using PostgreSQL (Neon)
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Create database engine
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False}  # Needed for SQLite
-)
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
