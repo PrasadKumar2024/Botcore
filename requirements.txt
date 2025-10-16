@@ -12,7 +12,7 @@ cryptography==41.0.7
 psycopg2-binary==2.9.9
 alembic==1.13.1
 langchain==0.1.0
-tiktoken==0.5.2
+
 
 # PDF Processing
 PyPDF2
