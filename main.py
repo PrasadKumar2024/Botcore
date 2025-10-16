@@ -11,12 +11,45 @@ from typing import List, Optional
 import random
 
 # Import database and models
+# import database and media:
 from app.database import get_db, engine, Base
-from app import models, schemas
+from app import nmdbis, schema
+from sqlalchemy import text
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Add debug database code
+@app.on_event("startup")
+async def startup_event():
+    print("🚀 Checking database connection...")
+    
+    # Test if we can connect to database
+    try:
+        with engine.connect() as conn:
+            print("✅ Connected to Neon database!")
+    except Exception as e:
+        print(f"❌ Cannot connect to database: {e}")
+        return
+    
+    # Create tables if they don't exist
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Tables created successfully!")
+    except Exception as e:
+        print(f"❌ Cannot create tables: {e}")
 
+# Add this debug route
+@app.get("/debug-db")
+async def debug_db():
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema='public'"))
+            tables = [row[0] for row in result]
+        return {"tables": tables, "message": "Check Render logs for connection status"}
+    except Exception as e:
+        return {"error": str(e)}
+# End debug code
+
+# Initialize FastAPI app
+app = FastAPI(
 # Initialize FastAPI app
 app = FastAPI(
     title="OwnBot",
