@@ -1,16 +1,37 @@
-from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 import uuid
-import json
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import List, Optional
 import random
 
+# Import database and models
+from app.database import get_db, engine, Base
+from app import models, schemas
+
+# Create database tables
+Base.metadata.create_all(bind=engine)
+
 # Initialize FastAPI app
-app = FastAPI(title="OwnBot", version="1.0.0")
+app = FastAPI(
+    title="OwnBot",
+    description="Multi-tenant Bot Management System", 
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -18,90 +39,16 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 # Setup templates
 templates = Jinja2Templates(directory="templates")
 
-# Data storage files
-DATA_DIR = "data"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-CLIENTS_FILE = os.path.join(DATA_DIR, "clients.json")
-DOCUMENTS_FILE = os.path.join(DATA_DIR, "documents.json") 
-PHONE_NUMBERS_FILE = os.path.join(DATA_DIR, "phone_numbers.json")
-SUBSCRIPTIONS_FILE = os.path.join(DATA_DIR, "subscriptions.json")
-WHATSAPP_PROFILES_FILE = os.path.join(DATA_DIR, "whatsapp_profiles.json")
-SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")
-
-# In-memory storage (will persist to JSON files)
-clients = {}
-documents = {}
-phone_numbers = {}
-subscriptions = {}
-whatsapp_profiles = {}
+# In-memory session storage (will be replaced with database sessions)
 sessions = {}
 
-# Load existing data
-def load_data():
-    global clients, documents, phone_numbers, subscriptions, whatsapp_profiles, sessions
-    
-    try:
-        with open(CLIENTS_FILE, 'r') as f:
-            clients = json.load(f)
-    except FileNotFoundError:
-        clients = {}
-    
-    try:
-        with open(DOCUMENTS_FILE, 'r') as f:
-            documents = json.load(f)
-    except FileNotFoundError:
-        documents = {}
-    
-    try:
-        with open(PHONE_NUMBERS_FILE, 'r') as f:
-            phone_numbers = json.load(f)
-    except FileNotFoundError:
-        phone_numbers = {}
-    
-    try:
-        with open(SUBSCRIPTIONS_FILE, 'r') as f:
-            subscriptions = json.load(f)
-    except FileNotFoundError:
-        subscriptions = {}
-    
-    try:
-        with open(WHATSAPP_PROFILES_FILE, 'r') as f:
-            whatsapp_profiles = json.load(f)
-    except FileNotFoundError:
-        whatsapp_profiles = {}
-    
-    try:
-        with open(SESSIONS_FILE, 'r') as f:
-            sessions = json.load(f)
-    except FileNotFoundError:
-        sessions = {}
-
-# Save data to JSON files
-def save_data():
-    with open(CLIENTS_FILE, 'w') as f:
-        json.dump(clients, f, indent=2)
-    with open(DOCUMENTS_FILE, 'w') as f:
-        json.dump(documents, f, indent=2)
-    with open(PHONE_NUMBERS_FILE, 'w') as f:
-        json.dump(phone_numbers, f, indent=2)
-    with open(SUBSCRIPTIONS_FILE, 'w') as f:
-        json.dump(subscriptions, f, indent=2)
-    with open(WHATSAPP_PROFILES_FILE, 'w') as f:
-        json.dump(whatsapp_profiles, f, indent=2)
-    with open(SESSIONS_FILE, 'w') as f:
-        json.dump(sessions, f, indent=2)
-
-# Load data on startup
-load_data()
-
 # Helper functions
-def get_client_from_session(request: Request):
+def get_client_from_session(request: Request, db: Session):
     session_id = request.cookies.get("session_id")
     if not session_id or session_id not in sessions:
         return None
     client_id = sessions[session_id]
-    return clients.get(client_id)
+    return db.query(models.Client).filter(models.Client.id == client_id).first()
 
 def generate_phone_number(country_code="+91"):
     """Generate simulated phone number"""
@@ -109,27 +56,31 @@ def generate_phone_number(country_code="+91"):
 
 # Routes
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    """Main dashboard showing all completed clients"""
-    completed_clients = {k: v for k, v in clients.items() if v.get("status") == "completed"}
+async def dashboard(request: Request, db: Session = Depends(get_db)):
+    """Main dashboard showing all active clients"""
+    clients = db.query(models.Client).filter(models.Client.status == models.ClientStatus.ACTIVE).all()
     return templates.TemplateResponse("base.html", {
         "request": request,
-        "clients": list(completed_clients.values()),
-        "documents": documents,
-        "phone_numbers": phone_numbers,
-        "subscriptions": subscriptions
+        "clients": clients
     })
 
+@app.get("/health")
+async def health_check(db: Session = Depends(get_db)):
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        db.execute("SELECT 1")
+        return {"status": "healthy", "database": "connected", "service": "BotCore API"}
+    except Exception as e:
+        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+
 @app.get("/clients", response_class=HTMLResponse)
-async def clients_list(request: Request):
+async def clients_list(request: Request, db: Session = Depends(get_db)):
     """Client list page"""
-    completed_clients = {k: v for k, v in clients.items() if v.get("status") == "completed"}
+    clients = db.query(models.Client).all()
     return templates.TemplateResponse("clients.html", {
         "request": request,
-        "clients": list(completed_clients.values()),
-        "documents": documents,
-        "phone_numbers": phone_numbers,
-        "subscriptions": subscriptions
+        "clients": clients
     })
 
 @app.get("/add_client", response_class=HTMLResponse)
@@ -140,33 +91,33 @@ async def add_client_form(request: Request):
 @app.post("/clients/add")
 async def clients_add(
     business_name: str = Form(...),
-    business_type: str = Form(...)
+    business_type: str = Form(...),
+    db: Session = Depends(get_db)
 ):
     """Create new client and start setup session"""
-    client_id = str(uuid.uuid4())
-    
-    clients[client_id] = {
-        "id": client_id,
-        "business_name": business_name,
-        "business_type": business_type,
-        "created_at": datetime.now().isoformat(),
-        "status": "setup_in_progress"
-    }
+    # Create client in database
+    client = models.Client(
+        name=business_name,  # Using business_name as name for now
+        business_name=business_name,
+        business_type=models.BusinessType(business_type),
+        status=models.ClientStatus.ACTIVE
+    )
+    db.add(client)
+    db.commit()
+    db.refresh(client)
     
     # Create session
     session_id = str(uuid.uuid4())
-    sessions[session_id] = client_id
-    
-    save_data()
+    sessions[session_id] = client.id
     
     response = RedirectResponse(url="/upload_documents", status_code=303)
     response.set_cookie(key="session_id", value=session_id)
     return response
 
 @app.get("/upload_documents", response_class=HTMLResponse)
-async def upload_documents_form(request: Request):
+async def upload_documents_form(request: Request, db: Session = Depends(get_db)):
     """Show PDF upload form"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
@@ -179,44 +130,42 @@ async def upload_documents_form(request: Request):
 async def upload_documents(
     request: Request,
     client_id: str = Form(...),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
 ):
     """Handle PDF upload during client creation"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    if client_id not in documents:
-        documents[client_id] = []
-    
     for file in files:
         if file.filename and file.filename.lower().endswith('.pdf'):
-            document_id = str(uuid.uuid4())
-            content = await file.read()
-            documents[client_id].append({
-                "id": document_id,
-                "filename": file.filename,
-                "uploaded_at": datetime.now().isoformat(),
-                "file_size": len(content),
-                "processed": False
-            })
+            document = models.Document(
+                client_id=client.id,
+                filename=file.filename,
+                stored_filename=f"{uuid.uuid4()}_{file.filename}",
+                file_path=f"/uploads/{uuid.uuid4()}_{file.filename}",
+                file_size=0,  # Would need actual file handling
+                processed=False
+            )
+            db.add(document)
     
-    save_data()
+    db.commit()
     return RedirectResponse(url="/buy_number", status_code=303)
 
 @app.post("/skip_documents")
-async def skip_documents(request: Request):
+async def skip_documents(request: Request, db: Session = Depends(get_db)):
     """Skip document upload step"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
     return RedirectResponse(url="/buy_number", status_code=303)
 
 @app.get("/buy_number", response_class=HTMLResponse)
-async def buy_number_form(request: Request):
+async def buy_number_form(request: Request, db: Session = Depends(get_db)):
     """Show phone number purchase form"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
@@ -226,119 +175,155 @@ async def buy_number_form(request: Request):
     })
 
 @app.post("/buy_number")
-async def buy_number(request: Request, country: str = Form(...)):
+async def buy_number(
+    request: Request, 
+    country: str = Form(...),
+    db: Session = Depends(get_db)
+):
     """Buy phone number (simulated)"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
-    
-    client_id = client["id"]
     
     # Generate simulated phone number
     phone_number = generate_phone_number()
     
-    phone_numbers[client_id] = {
-        "number": phone_number,
-        "country": country,
-        "purchased_at": datetime.now().isoformat(),
-        "status": "active",
-        "is_simulated": True
-    }
+    # Create phone number in database
+    phone = models.PhoneNumber(
+        client_id=client.id,
+        number=phone_number,
+        country=country,
+        twilio_sid=f"SIM_{uuid.uuid4()}",  # Simulated Twilio SID
+        is_active=True
+    )
+    db.add(phone)
+    db.commit()
     
-    save_data()
     return RedirectResponse(url="/clients_bots", status_code=303)
 
 @app.post("/skip_number")
-async def skip_number(request: Request):
+async def skip_number(request: Request, db: Session = Depends(get_db)):
     """Skip phone number purchase"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
     return RedirectResponse(url="/clients_bots", status_code=303)
 
 @app.get("/clients_bots", response_class=HTMLResponse)
-async def clients_bots(request: Request):
+async def clients_bots(request: Request, db: Session = Depends(get_db)):
     """Bot configuration page"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    client_id = client["id"]
-    phone_info = phone_numbers.get(client_id, {})
-    doc_info = documents.get(client_id, [])
+    # Get client data
+    phone_number = db.query(models.PhoneNumber).filter(
+        models.PhoneNumber.client_id == client.id
+    ).first()
     
-    # Initialize bots if not exists
-    if client_id not in subscriptions:
-        subscriptions[client_id] = {
-            "whatsapp": {"status": "inactive", "start_date": None, "expiry_date": None},
-            "voice": {"status": "inactive", "start_date": None, "expiry_date": None},
-            "web": {"status": "inactive", "start_date": None, "expiry_date": None}
-        }
+    documents = db.query(models.Document).filter(
+        models.Document.client_id == client.id
+    ).all()
     
-    # Initialize WhatsApp profile if not exists
-    if client_id not in whatsapp_profiles:
-        whatsapp_profiles[client_id] = {
-            "business_name": client["business_name"],
-            "address": "",
-            "logo": "",
-            "updated_at": datetime.now().isoformat()
-        }
+    subscriptions = db.query(models.Subscription).filter(
+        models.Subscription.client_id == client.id
+    ).all()
     
-    save_data()
+    whatsapp_profile = db.query(models.WhatsAppProfile).filter(
+        models.WhatsAppProfile.client_id == client.id
+    ).first()
+    
+    # Create default subscriptions if not exist
+    if not subscriptions:
+        for bot_type in [models.BotType.WHATSAPP, models.BotType.VOICE, models.BotType.WEB]:
+            subscription = models.Subscription(
+                client_id=client.id,
+                bot_type=bot_type,
+                is_active=False
+            )
+            db.add(subscription)
+        db.commit()
+        # Refresh subscriptions
+        subscriptions = db.query(models.Subscription).filter(
+            models.Subscription.client_id == client.id
+        ).all()
+    
+    # Create WhatsApp profile if not exists
+    if not whatsapp_profile:
+        whatsapp_profile = models.WhatsAppProfile(
+            client_id=client.id,
+            business_name=client.business_name
+        )
+        db.add(whatsapp_profile)
+        db.commit()
+        db.refresh(whatsapp_profile)
     
     return templates.TemplateResponse("client_bots.html", {
         "request": request,
         "client": client,
-        "phone_number": phone_info.get("number", "Not purchased"),
-        "has_phone": client_id in phone_numbers,
-        "document_count": len(doc_info),
-        "chatbot_url": f"https://ownbot.chat/{client_id}",
-        "embed_code": f'<script src="https://yourdomain.com/static/js/chat-widget.js" data-client-id="{client_id}"></script>',
-        "subscriptions": subscriptions[client_id],
-        "whatsapp_profile": whatsapp_profiles[client_id]
+        "phone_number": phone_number.number if phone_number else "Not purchased",
+        "has_phone": phone_number is not None,
+        "document_count": len(documents),
+        "chatbot_url": f"https://ownbot.chat/{client.id}",
+        "embed_code": f'<script src="https://yourdomain.com/static/js/chat-widget.js" data-client-id="{client.id}"></script>',
+        "subscriptions": {sub.bot_type.value: {
+            "status": "active" if sub.is_active else "inactive",
+            "start_date": sub.start_date,
+            "expiry_date": sub.expiry_date
+        } for sub in subscriptions},
+        "whatsapp_profile": whatsapp_profile
     })
 
 @app.post("/complete_setup")
-async def complete_setup(request: Request):
+async def complete_setup(request: Request, db: Session = Depends(get_db)):
     """Mark client setup as completed"""
-    client = get_client_from_session(request)
+    client = get_client_from_session(request, db)
     if not client:
         return RedirectResponse(url="/clients", status_code=303)
-    
-    client_id = client["id"]
-    clients[client_id]["status"] = "completed"
-    clients[client_id]["completed_at"] = datetime.now().isoformat()
     
     # Clear session
     session_id = request.cookies.get("session_id")
     if session_id in sessions:
         del sessions[session_id]
     
-    save_data()
-    
     response = RedirectResponse(url="/clients", status_code=303)
     response.delete_cookie("session_id")
     return response
 
 @app.get("/client/{client_id}", response_class=HTMLResponse)
-async def client_detail(request: Request, client_id: str):
+async def client_detail(request: Request, client_id: str, db: Session = Depends(get_db)):
     """Client detail page with bots and data tabs"""
-    if client_id not in clients:
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    client = clients[client_id]
-    client_documents = documents.get(client_id, [])
-    phone_info = phone_numbers.get(client_id, {})
-    client_subscriptions = subscriptions.get(client_id, {})
-    whatsapp_profile = whatsapp_profiles.get(client_id, {})
+    documents = db.query(models.Document).filter(
+        models.Document.client_id == client_id
+    ).all()
+    
+    phone_number = db.query(models.PhoneNumber).filter(
+        models.PhoneNumber.client_id == client_id
+    ).first()
+    
+    subscriptions = db.query(models.Subscription).filter(
+        models.Subscription.client_id == client_id
+    ).all()
+    
+    whatsapp_profile = db.query(models.WhatsAppProfile).filter(
+        models.WhatsAppProfile.client_id == client_id
+    ).first()
     
     return templates.TemplateResponse("client_detail.html", {
         "request": request,
         "client": client,
-        "documents": client_documents,
-        "phone_number": phone_info.get("number", "Not purchased"),
-        "subscriptions": client_subscriptions,
+        "documents": documents,
+        "phone_number": phone_number.number if phone_number else "Not purchased",
+        "subscriptions": {sub.bot_type.value: {
+            "status": "active" if sub.is_active else "inactive",
+            "start_date": sub.start_date,
+            "expiry_date": sub.expiry_date
+        } for sub in subscriptions},
         "whatsapp_profile": whatsapp_profile,
         "active_tab": "bots",
         "chatbot_url": f"https://ownbot.chat/{client_id}",
@@ -346,48 +331,49 @@ async def client_detail(request: Request, client_id: str):
     })
 
 @app.get("/client/{client_id}/data", response_class=HTMLResponse)
-async def client_data(request: Request, client_id: str):
+async def client_data(request: Request, client_id: str, db: Session = Depends(get_db)):
     """Client data tab for PDF management"""
-    if client_id not in clients:
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
         return RedirectResponse(url="/clients", status_code=303)
     
-    client = clients[client_id]
-    client_documents = documents.get(client_id, [])
+    documents = db.query(models.Document).filter(
+        models.Document.client_id == client_id
+    ).all()
     
     return templates.TemplateResponse("client_detail.html", {
         "request": request,
         "client": client,
-        "documents": client_documents,
+        "documents": documents,
         "active_tab": "data"
     })
 
 @app.post("/client/{client_id}/upload")
 async def client_upload_documents(
     client_id: str,
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
 ):
     """Upload additional PDFs from Data tab"""
-    if client_id not in clients:
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    
-    if client_id not in documents:
-        documents[client_id] = []
     
     uploaded_count = 0
     for file in files:
         if file.filename and file.filename.lower().endswith('.pdf'):
-            document_id = str(uuid.uuid4())
-            content = await file.read()
-            documents[client_id].append({
-                "id": document_id,
-                "filename": file.filename,
-                "uploaded_at": datetime.now().isoformat(),
-                "file_size": len(content),
-                "processed": False
-            })
+            document = models.Document(
+                client_id=client_id,
+                filename=file.filename,
+                stored_filename=f"{uuid.uuid4()}_{file.filename}",
+                file_path=f"/uploads/{uuid.uuid4()}_{file.filename}",
+                file_size=0,  # Would need actual file handling
+                processed=False
+            )
+            db.add(document)
             uploaded_count += 1
     
-    save_data()
+    db.commit()
     
     return JSONResponse({
         "status": "success",
@@ -396,21 +382,20 @@ async def client_upload_documents(
     })
 
 @app.delete("/api/documents/{document_id}")
-async def delete_document(document_id: str):
+async def delete_document(document_id: str, db: Session = Depends(get_db)):
     """Delete a specific document"""
     try:
-        # Find and delete document
-        for client_id, docs in documents.items():
-            for i, doc in enumerate(docs):
-                if doc["id"] == document_id:
-                    del documents[client_id][i]
-                    save_data()
-                    return JSONResponse({
-                        "status": "success",
-                        "message": "Document deleted successfully"
-                    })
+        document = db.query(models.Document).filter(models.Document.id == document_id).first()
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
         
-        raise HTTPException(status_code=404, detail="Document not found")
+        db.delete(document)
+        db.commit()
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Document deleted successfully"
+        })
         
     except HTTPException:
         raise
@@ -418,12 +403,17 @@ async def delete_document(document_id: str):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 @app.post("/api/documents/{client_id}/reprocess")
-async def reprocess_documents(client_id: str):
+async def reprocess_documents(client_id: str, db: Session = Depends(get_db)):
     """Reprocess knowledge base for a client"""
-    if client_id not in clients:
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     
-    if client_id not in documents or len(documents[client_id]) == 0:
+    documents = db.query(models.Document).filter(
+        models.Document.client_id == client_id
+    ).all()
+    
+    if not documents:
         return JSONResponse({
             "status": "success",
             "message": "No documents to process",
@@ -431,144 +421,157 @@ async def reprocess_documents(client_id: str):
         })
     
     # Mark all documents as processed
-    for doc in documents[client_id]:
-        doc["processed"] = True
-        doc["processed_at"] = datetime.now().isoformat()
+    for document in documents:
+        document.processed = True
+        document.processed_at = datetime.utcnow()
     
-    save_data()
+    db.commit()
     
     return JSONResponse({
         "status": "success",
-        "message": f"Successfully reprocessed {len(documents[client_id])} document(s)",
-        "processed_count": len(documents[client_id])
+        "message": f"Successfully reprocessed {len(documents)} document(s)",
+        "processed_count": len(documents)
     })
 
 # API Routes for bot management
 @app.post("/api/bot/add_months")
-async def add_months(request: Request):
+async def add_months(request: Request, db: Session = Depends(get_db)):
     """Add months to bot subscription"""
-    client = get_client_from_session(request)
-    if not client:
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in sessions:
         return JSONResponse({"status": "error", "message": "No active session"})
+    
+    client_id = sessions[session_id]
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
+        return JSONResponse({"status": "error", "message": "Client not found"})
     
     try:
         data = await request.json()
-        bot_type = data.get("bot_type")
+        bot_type = models.BotType(data.get("bot_type"))
         months = int(data.get("months", 1))
-        client_id = client["id"]
         
-        if client_id not in subscriptions:
-            subscriptions[client_id] = {}
+        subscription = db.query(models.Subscription).filter(
+            models.Subscription.client_id == client_id,
+            models.Subscription.bot_type == bot_type
+        ).first()
         
-        if bot_type not in subscriptions[client_id] or not subscriptions[client_id][bot_type].get("start_date"):
-            # First time subscription
-            start_date = datetime.now()
-            expiry_date = start_date + timedelta(days=30 * months)
-            subscriptions[client_id][bot_type] = {
-                "start_date": start_date.isoformat(),
-                "expiry_date": expiry_date.isoformat(),
-                "status": "active"
-            }
-        else:
-            # Extend existing subscription
-            current_expiry_str = subscriptions[client_id][bot_type]["expiry_date"]
-            if current_expiry_str:
-                current_expiry = datetime.fromisoformat(current_expiry_str)
-                if current_expiry < datetime.now():
-                    # Subscription expired, start from today
-                    start_date = datetime.now()
-                    expiry_date = start_date + timedelta(days=30 * months)
-                    subscriptions[client_id][bot_type]["start_date"] = start_date.isoformat()
-                else:
-                    # Extend from current expiry
-                    expiry_date = current_expiry + timedelta(days=30 * months)
+        if not subscription:
+            subscription = models.Subscription(
+                client_id=client_id,
+                bot_type=bot_type,
+                is_active=True
+            )
+            db.add(subscription)
+        
+        # Calculate dates
+        start_date = datetime.utcnow()
+        if subscription.start_date and subscription.expiry_date:
+            if subscription.expiry_date > datetime.utcnow():
+                # Extend from current expiry
+                start_date = subscription.start_date
+                expiry_date = subscription.expiry_date + timedelta(days=30 * months)
             else:
-                # No expiry date set, start from today
-                start_date = datetime.now()
+                # Subscription expired, start fresh
                 expiry_date = start_date + timedelta(days=30 * months)
-                subscriptions[client_id][bot_type]["start_date"] = start_date.isoformat()
-            
-            subscriptions[client_id][bot_type]["expiry_date"] = expiry_date.isoformat()
-            subscriptions[client_id][bot_type]["status"] = "active"
+        else:
+            # First time subscription
+            expiry_date = start_date + timedelta(days=30 * months)
         
-        save_data()
+        subscription.start_date = start_date
+        subscription.expiry_date = expiry_date
+        subscription.is_active = True
+        subscription.bot_activated = True
+        
+        db.commit()
         
         return JSONResponse({
             "status": "success", 
-            "message": f"Added {months} months to {bot_type} bot",
-            "start_date": subscriptions[client_id][bot_type]["start_date"],
-            "expiry_date": subscriptions[client_id][bot_type]["expiry_date"]
+            "message": f"Added {months} months to {bot_type.value} bot",
+            "start_date": subscription.start_date.isoformat(),
+            "expiry_date": subscription.expiry_date.isoformat()
         })
         
     except Exception as e:
+        db.rollback()
         return JSONResponse({"status": "error", "message": str(e)})
 
 @app.post("/api/bot/toggle")
-async def toggle_bot(request: Request):
+async def toggle_bot(request: Request, db: Session = Depends(get_db)):
     """Activate/deactivate bot"""
-    client = get_client_from_session(request)
-    if not client:
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in sessions:
         return JSONResponse({"status": "error", "message": "No active session"})
+    
+    client_id = sessions[session_id]
     
     try:
         data = await request.json()
-        bot_type = data.get("bot_type")
+        bot_type = models.BotType(data.get("bot_type"))
         action = data.get("action")
-        client_id = client["id"]
         
-        if client_id not in subscriptions or bot_type not in subscriptions[client_id]:
+        subscription = db.query(models.Subscription).filter(
+            models.Subscription.client_id == client_id,
+            models.Subscription.bot_type == bot_type
+        ).first()
+        
+        if not subscription:
             return JSONResponse({"status": "error", "message": "No subscription found"})
         
         if action == "activate":
             # Check if subscription is valid
-            expiry_date_str = subscriptions[client_id][bot_type].get("expiry_date")
-            if not expiry_date_str:
-                return JSONResponse({"status": "error", "message": "No expiry date set"})
+            if not subscription.expiry_date or subscription.expiry_date < datetime.utcnow():
+                return JSONResponse({"status": "error", "message": "Subscription expired or no expiry date set"})
             
-            expiry_date = datetime.fromisoformat(expiry_date_str)
-            if expiry_date < datetime.now():
-                return JSONResponse({"status": "error", "message": "Subscription expired"})
-            
-            subscriptions[client_id][bot_type]["status"] = "active"
+            subscription.is_active = True
+            subscription.bot_activated = True
         else:
-            subscriptions[client_id][bot_type]["status"] = "inactive"
+            subscription.is_active = False
         
-        save_data()
+        db.commit()
         
         return JSONResponse({
             "status": "success", 
-            "message": f"{bot_type} bot {action}d",
-            "current_status": subscriptions[client_id][bot_type]["status"]
+            "message": f"{bot_type.value} bot {action}d",
+            "current_status": "active" if subscription.is_active else "inactive"
         })
         
     except Exception as e:
+        db.rollback()
         return JSONResponse({"status": "error", "message": str(e)})
 
 @app.post("/api/whatsapp/update_profile")
-async def update_whatsapp_profile(request: Request):
+async def update_whatsapp_profile(request: Request, db: Session = Depends(get_db)):
     """Update WhatsApp business profile"""
-    client = get_client_from_session(request)
-    if not client:
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in sessions:
         return JSONResponse({"status": "error", "message": "No active session"})
+    
+    client_id = sessions[session_id]
     
     try:
         data = await request.json()
         business_name = data.get("business_name")
         address = data.get("address")
-        client_id = client["id"]
         
-        if client_id not in whatsapp_profiles:
-            whatsapp_profiles[client_id] = {}
+        whatsapp_profile = db.query(models.WhatsAppProfile).filter(
+            models.WhatsAppProfile.client_id == client_id
+        ).first()
         
-        update_data = {"updated_at": datetime.now().isoformat()}
-        if business_name is not None:
-            update_data["business_name"] = business_name
-        if address is not None:
-            update_data["address"] = address
-            
-        whatsapp_profiles[client_id].update(update_data)
+        if not whatsapp_profile:
+            whatsapp_profile = models.WhatsAppProfile(
+                client_id=client_id,
+                business_name=business_name or "",
+                address=address or ""
+            )
+            db.add(whatsapp_profile)
+        else:
+            if business_name is not None:
+                whatsapp_profile.business_name = business_name
+            if address is not None:
+                whatsapp_profile.address = address
         
-        save_data()
+        db.commit()
         
         return JSONResponse({
             "status": "success", 
@@ -576,56 +579,76 @@ async def update_whatsapp_profile(request: Request):
         })
         
     except Exception as e:
+        db.rollback()
         return JSONResponse({"status": "error", "message": str(e)})
 
 # Chat API endpoint (for web chat bot)
 @app.post("/api/chat/{client_id}")
-async def chat_endpoint(client_id: str, request: Request):
+async def chat_endpoint(client_id: str, request: Request, db: Session = Depends(get_db)):
     """Web chat bot endpoint"""
-    if client_id not in clients:
+    client = db.query(models.Client).filter(models.Client.id == client_id).first()
+    if not client:
         return JSONResponse({"status": "error", "message": "Client not found"})
     
     try:
         data = await request.json()
         message = data.get("message", "")
+        session_id = data.get("session_id", str(uuid.uuid4()))
+        
+        # Log the message
+        message_log = models.MessageLog(
+            client_id=client_id,
+            channel="web",
+            message_text=message,
+            response_text="",  # Will be filled after AI response
+            timestamp=datetime.utcnow()
+        )
+        db.add(message_log)
+        db.commit()
         
         # Simulated AI response (will be replaced with actual Gemini integration)
-        response = f"I received your message: '{message}'. This is a simulated response from {clients[client_id]['business_name']}."
+        response = f"I received your message: '{message}'. This is a simulated response from {client.business_name}."
+        
+        # Update message log with response
+        message_log.response_text = response
+        db.commit()
         
         return JSONResponse({
             "status": "success",
             "response": response,
+            "session_id": session_id,
             "client_id": client_id
         })
     except Exception as e:
+        db.rollback()
         return JSONResponse({"status": "error", "message": str(e)})
 
 # Delete client API
 @app.delete("/api/clients/{client_id}")
-async def delete_client(client_id: str):
+async def delete_client(client_id: str, db: Session = Depends(get_db)):
     """Delete client and all associated data"""
     try:
-        if client_id in clients:
-            del clients[client_id]
+        client = db.query(models.Client).filter(models.Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
         
-        if client_id in documents:
-            del documents[client_id]
-            
-        if client_id in phone_numbers:
-            del phone_numbers[client_id]
-            
-        if client_id in subscriptions:
-            del subscriptions[client_id]
-            
-        if client_id in whatsapp_profiles:
-            del whatsapp_profiles[client_id]
+        # Delete related records (cascade should handle most, but being explicit)
+        db.query(models.Document).filter(models.Document.client_id == client_id).delete()
+        db.query(models.PhoneNumber).filter(models.PhoneNumber.client_id == client_id).delete()
+        db.query(models.Subscription).filter(models.Subscription.client_id == client_id).delete()
+        db.query(models.WhatsAppProfile).filter(models.WhatsAppProfile.client_id == client_id).delete()
+        db.query(models.MessageLog).filter(models.MessageLog.client_id == client_id).delete()
+        db.query(models.KnowledgeChunk).filter(models.KnowledgeChunk.client_id == client_id).delete()
+        db.query(models.BotSettings).filter(models.BotSettings.client_id == client_id).delete()
+        
+        # Delete client
+        db.delete(client)
+        db.commit()
         
         # Remove from sessions
         sessions_to_remove = [sid for sid, cid in sessions.items() if cid == client_id]
         for session_id in sessions_to_remove:
             del sessions[session_id]
-        
-        save_data()
         
         return JSONResponse({
             "status": "success",
@@ -633,7 +656,14 @@ async def delete_client(client_id: str):
         })
         
     except Exception as e:
+        db.rollback()
         return JSONResponse({"status": "error", "message": str(e)})
+
+# API Documentation endpoint
+@app.get("/docs")
+async def get_docs():
+    """API documentation"""
+    return RedirectResponse(url="/docs")
 
 if __name__ == "__main__":
     import uvicorn
