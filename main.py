@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 import random
 
-Import database and models
-import database and media:
+#Import database and models
+#import database and media:
 # import database and models:
 from app.database import get_db, engine, Base
 from app import models, schema
