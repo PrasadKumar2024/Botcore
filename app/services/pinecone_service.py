@@ -315,4 +315,4 @@ class PineconeService:
             }
 
 # Global instance
-pinecone_service = PineconeService()
+#pinecone_service = PineconeService()
