@@ -8,7 +8,7 @@ import uuid
 
 from app.models import Client, Subscription, PhoneNumber, Document
 from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate
-from app.services.twilio_service import release_phone_number
+#from app.services.twilio_service import release_phone_number
 
 # Set up logging
 logger = logging.getLogger(__name__)
