@@ -7,7 +7,11 @@ from datetime import datetime
 from typing import List, Optional, Tuple, Dict, Any
 from fastapi import UploadFile, HTTPException
 import PyPDF2
-import magic
+try:
+    import magic
+except ImportError:
+    # Fallback for file type detection
+    magic = None
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
