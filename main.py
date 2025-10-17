@@ -54,13 +54,7 @@ async def debug_db():
         return {"tables": tables, "message": "Check Render logs for connection status"}
     except Exception as e:
         return {"error": str(e)}
-# End debug code
-# Initialize FastAPI app
-app = FastAPI(
-    title="OwnBot",
-    description="Multi-tenant Bot Management System", 
-    version="1.0.0"
-)
+
 
 # CORS middleware
 app.add_middleware(
