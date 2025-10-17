@@ -14,7 +14,7 @@ import random
 #import database and media:
 # import database and models:
 from app.database import get_db, engine, Base
-from app import models, schema
+from app import models
 from sqlalchemy import text
 
 # Initialize FastAPI app
