@@ -1,6 +1,7 @@
 # app/services/__init__.py
 
-from .client_service import ClientService
+
+'''  from .client_service import ClientService
 from .document_service import DocumentService
 from .subscription_service import SubscriptionService
 from .twilio_service import TwilioService
@@ -52,4 +53,4 @@ def get_speech_service():
 
 def get_multilingual_service():
     """Factory function for MultilingualService"""
-    return MultilingualService()
+    return MultilingualService() '''
