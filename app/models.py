@@ -1,3 +1,4 @@
+
 from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum, Text, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -36,13 +37,16 @@ class Client(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Bot activation status
-    bot_active = Column(Boolean, default=False)  # ADDED: Overall bot status
+    bot_active = Column(Boolean, default=False)  # Overall bot status
     
     # Relationships
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan")
     phone_numbers = relationship("PhoneNumber", back_populates="client", cascade="all, delete-orphan")
     subscriptions = relationship("Subscription", back_populates="client", cascade="all, delete-orphan")
     whatsapp_profile = relationship("WhatsAppProfile", back_populates="client", uselist=False, cascade="all, delete-orphan")
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="client", cascade="all, delete-orphan")  # ADDED
+    message_logs = relationship("MessageLog", back_populates="client", cascade="all, delete-orphan")  # ADDED
+    bot_settings = relationship("BotSettings", back_populates="client", cascade="all, delete-orphan")  # ADDED
 
 class Document(Base):
     __tablename__ = "documents"
@@ -56,10 +60,11 @@ class Document(Base):
     processed = Column(Boolean, default=False)  # Whether PDF text extracted
     processing_error = Column(Text, nullable=True)  # Error if processing failed
     uploaded_at = Column(DateTime, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)  # ADDED: When document was processed
+    processed_at = Column(DateTime, nullable=True)  # When document was processed
     
-    # Relationship
+    # Relationships
     client = relationship("Client", back_populates="documents")
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")  # ADDED
 
 class PhoneNumber(Base):
     __tablename__ = "phone_numbers"
@@ -87,7 +92,7 @@ class Subscription(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # ADDED: Bot activation status for individual bot types
+    # Bot activation status for individual bot types
     bot_activated = Column(Boolean, default=False)  # Whether this specific bot is activated
     
     # Relationship
@@ -117,12 +122,15 @@ class MessageLog(Base):
     response_text = Column(Text, nullable=True)  # AI's response
     timestamp = Column(DateTime, default=datetime.utcnow)
     
+    # Relationship
+    client = relationship("Client", back_populates="message_logs")  # ADDED
+    
     # Index for faster querying
     __table_args__ = (
         Index('ix_message_logs_client_id_timestamp', 'client_id', 'timestamp'),
     )
 
-# ADDED: Knowledge Base Chunks for AI Processing
+# Knowledge Base Chunks for AI Processing
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunks"
     
@@ -132,13 +140,20 @@ class KnowledgeChunk(Base):
     chunk_text = Column(Text, nullable=False)  # Extracted text chunk
     chunk_index = Column(Integer, nullable=False)  # Order of chunk in document
     vector_id = Column(String(255), nullable=True)  # Pinecone vector ID
+    metadata = Column(Text, nullable=True)  # ADDED: JSON string for chunk metadata (filename, page, etc.)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships
-    client = relationship("Client")
-    document = relationship("Document")
+    # Relationships - UPDATED
+    client = relationship("Client", back_populates="knowledge_chunks")
+    document = relationship("Document", back_populates="knowledge_chunks")
+    
+    # Index for faster querying
+    __table_args__ = (
+        Index('ix_knowledge_chunks_client_id', 'client_id'),
+        Index('ix_knowledge_chunks_document_id', 'document_id'),
+    )
 
-# ADDED: Bot Settings and Configuration
+# Bot Settings and Configuration
 class BotSettings(Base):
     __tablename__ = "bot_settings"
     
@@ -151,7 +166,7 @@ class BotSettings(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationship
-    client = relationship("Client")
+    client = relationship("Client", back_populates="bot_settings")  # UPDATED
     
     # Unique constraint: one settings per bot type per client
     __table_args__ = (
