@@ -342,20 +342,56 @@ async def client_detail(request: Request, client_id: str, db: Session = Depends(
         models.Subscription.client_id == client_id
     ).all()
     
+    # CREATE DEFAULT SUBSCRIPTIONS IF MISSING
+    if not subscriptions:
+        for bot_type in [models.BotType.WHATSAPP, models.BotType.VOICE, models.BotType.WEB]:
+            subscription = models.Subscription(
+                client_id=client_id,
+                bot_type=bot_type,
+                is_active=False
+            )
+            db.add(subscription)
+        db.commit()
+        # Refresh subscriptions
+        subscriptions = db.query(models.Subscription).filter(
+            models.Subscription.client_id == client_id
+        ).all()
+    
     whatsapp_profile = db.query(models.WhatsAppProfile).filter(
         models.WhatsAppProfile.client_id == client_id
     ).first()
+    
+    # CREATE WHATSAPP PROFILE IF MISSING
+    if not whatsapp_profile:
+        whatsapp_profile = models.WhatsAppProfile(
+            client_id=client_id,
+            business_name=client.business_name
+        )
+        db.add(whatsapp_profile)
+        db.commit()
+        db.refresh(whatsapp_profile)
+    
+    # BUILD SUBSCRIPTIONS DICT WITH GUARANTEED ALL THREE KEYS
+    subscription_dict = {
+        "whatsapp": {"status": "inactive", "start_date": None, "expiry_date": None},
+        "voice": {"status": "inactive", "start_date": None, "expiry_date": None},
+        "web": {"status": "inactive", "start_date": None, "expiry_date": None}
+    }
+    
+    # Update with actual subscription data
+    for sub in subscriptions:
+        subscription_dict[sub.bot_type.value] = {
+            "status": "active" if sub.is_active else "inactive",
+            "start_date": sub.start_date,
+            "expiry_date": sub.expiry_date
+        }
     
     return templates.TemplateResponse("client_detail.html", {
         "request": request,
         "client": client,
         "documents": documents,
         "phone_number": phone_number.number if phone_number else "Not purchased",
-        "subscriptions": {sub.bot_type.value: {
-            "status": "active" if sub.is_active else "inactive",
-            "start_date": sub.start_date,
-            "expiry_date": sub.expiry_date
-        } for sub in subscriptions},
+        "subscriptions": subscription_dict,
         "whatsapp_profile": whatsapp_profile,
         "active_tab": "bots",
         "chatbot_url": f"https://ownbot.chat/{client_id}",
