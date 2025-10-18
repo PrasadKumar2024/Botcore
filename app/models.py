@@ -140,7 +140,7 @@ class KnowledgeChunk(Base):
     chunk_text = Column(Text, nullable=False)  # Extracted text chunk
     chunk_index = Column(Integer, nullable=False)  # Order of chunk in document
     vector_id = Column(String(255), nullable=True)  # Pinecone vector ID
-    metadata = Column(Text, nullable=True)  # ADDED: JSON string for chunk metadata (filename, page, etc.)
+    chunk_metadata = Column(Text, nullable=True)  # ADDED: JSON string for chunk metadata (filename, page, etc.)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships - UPDATED
