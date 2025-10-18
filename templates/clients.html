@@ -178,7 +178,7 @@
                 <div class="client-card">
                     <div class="client-header">
                         <div class="d-flex align-items-center">
-                            <div class="client-type-icon {{ client.business_type.lower() if client.business_type else 'other' }}">
+                            <div class="client-type-icon {{ client.business_type.value if client.business_type else 'other' }}">
                                 <i class="bi bi-{% if client.business_type == 'Restaurant' %}cup-hot{% elif client.business_type == 'Gym' %}activity{% elif client.business_type == 'Clinic' %}heart-pulse{% elif client.business_type == 'Retail' %}shop{% else %}building{% endif %}"></i>
                             </div>
                             <div>
