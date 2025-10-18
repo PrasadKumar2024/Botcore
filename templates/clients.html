@@ -239,7 +239,7 @@
                     <!-- Client Info -->
                     <div class="client-info">
                         <div class="d-flex justify-content-between text-muted small mb-2">
-                            <span>Created: {{ client.created_at[:10] if client.created_at else 'N/A' }}</span>
+                            <span>Created: {{ client.created_at.strftime('%Y-%m-%d') if client.created_at else 'N/A' }}</span>
                             {% if client.completed_at %}
                             <span>Completed: {{ client.completed_at[:10] }}</span>
                             {% endif %}
