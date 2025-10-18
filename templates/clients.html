@@ -174,7 +174,7 @@
         {% if clients %}
         <div class="row" id="clientsGrid">
             {% for client in clients %}
-            <div class="col-xl-4 col-lg-6 col-md-6 mb-4 client-item" data-status="{{ client.status }}" data-name="{{ client.business_name.lower() }}">
+            <div class="col-xl-4 col-lg-6 col-md-6 mb-4 client-item" data-status="{{ client.status.value }}" data-name="{{ client.business_name.lower() }}">
                 <div class="client-card">
                     <div class="client-header">
                         <div class="d-flex align-items-center">
@@ -188,7 +188,7 @@
                         </div>
                         <div class="client-actions">
                             <span class="status-badge {% if client.status == 'completed' %}status-completed{% else %}status-in-progress{% endif %}">
-                                {{ client.status.replace('_', ' ').title() }}
+                                {{ client.status.value.replace('_', ' ').title() }}
                             </span>
                             <div class="dropdown">
                                 <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
@@ -286,13 +286,13 @@
                             </div>
                             <div class="col-md-3">
                                 <h3 class="text-success">
-                                    {{ clients | selectattr("status", "equalto", "completed") | list | length }}
+                                    {{ clients | selectattr("status.value", "equalto", "completed") | list | length }}
                                 </h3>
                                 <small class="text-muted">Completed Setup</small>
                             </div>
                             <div class="col-md-3">
                                 <h3 class="text-warning">
-                                    {{ clients | selectattr("status", "equalto", "setup_in_progress") | list | length }}
+                                    {{ clients | selectattr("status.value", "equalto", "setup_in_progress") | list | length }}
                                 </h3>
                                 <small class="text-muted">In Progress</small>
                             </div>
