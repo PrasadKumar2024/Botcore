@@ -278,7 +278,7 @@
                                         <strong>Start Date:</strong><br>
                                         <span id="whatsapp-start-date" class="text-muted">
                                             {% if subscriptions.whatsapp.start_date %}
-                                                {{ subscriptions.whatsapp.start_date[:10] }}
+                                                {{ subscriptions.whatsapp.start_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
@@ -288,7 +288,7 @@
                                         <strong>Expiry Date:</strong><br>
                                         <span id="whatsapp-expiry-date" class="text-muted">
                                             {% if subscriptions.whatsapp.expiry_date %}
-                                                {{ subscriptions.whatsapp.expiry_date[:10] }}
+                                                {{ subscriptions.whatsapp.expiry_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
@@ -359,7 +359,7 @@
                                         <strong>Start Date:</strong><br>
                                         <span id="voice-start-date" class="text-muted">
                                             {% if subscriptions.voice.start_date %}
-                                                {{ subscriptions.voice.start_date[:10] }}
+                                                {{ subscriptions.voice.start_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
@@ -369,7 +369,7 @@
                                         <strong>Expiry Date:</strong><br>
                                         <span id="voice-expiry-date" class="text-muted">
                                             {% if subscriptions.voice.expiry_date %}
-                                                {{ subscriptions.voice.expiry_date[:10] }}
+                                               {{ subscriptions.voice.expiry_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
@@ -454,7 +454,7 @@
                                         <strong>Start Date:</strong><br>
                                         <span id="web-start-date" class="text-muted">
                                             {% if subscriptions.web.start_date %}
-                                                {{ subscriptions.web.start_date[:10] }}
+                                             {{ subscriptions.web.start_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
@@ -464,7 +464,7 @@
                                         <strong>Expiry Date:</strong><br>
                                         <span id="web-expiry-date" class="text-muted">
                                             {% if subscriptions.web.expiry_date %}
-                                                {{ subscriptions.web.expiry_date[:10] }}
+                                                {{ subscriptions.web.expiry_date.strftime('%Y-%m-%d') }}
                                             {% else %}
                                                 --/--/----
                                             {% endif %}
