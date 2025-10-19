@@ -1,262 +1,290 @@
 import os
-import re
 import logging
-import asyncio
-from typing import List, Dict, Optional, Tuple
-import aiohttp
-import PyPDF2
-import io
-from datetime import datetime
+from typing import Optional, List, Dict
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 class GeminiService:
+    """
+    Service for interacting with Google Gemini AI for generating intelligent responses
+    Handles AI conversation, context-aware responses, and error handling
+    """
+    
     def __init__(self):
+        """Initialize Gemini AI with API key from environment"""
         self.api_key = os.getenv("GEMINI_API_KEY")
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self.max_retries = 3
-        self.retry_delay = 2
+        self.model = None
+        self.is_available = False
         
-    async def extract_text_from_pdf(self, pdf_content: bytes) -> str:
-        """
-        Extract text content from PDF bytes
-        """
-        try:
-            text = ""
-            pdf_file = io.BytesIO(pdf_content)
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                text += page.extract_text() + "\n"
-                
-            return text
-        except Exception as e:
-            logger.error(f"Error extracting text from PDF: {str(e)}")
-            raise Exception(f"PDF text extraction failed: {str(e)}")
-    
-    async def chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
-        """
-        Split text into chunks with overlap for context preservation
-        """
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            end = start + chunk_size
-            # Try to break at sentence end if possible
-            if end < len(text):
-                sentence_enders = re.finditer(r'[.!?]\s+', text[start:end])
-                positions = [m.end() + start for m in sentence_enders]
-                if positions:
-                    end = positions[-1]  # Break at last sentence end in chunk
-            
-            chunks.append(text[start:end].strip())
-            
-            # Move start position, accounting for overlap
-            start = end - overlap
-            
-            if start >= len(text):
-                break
-                
-        return chunks
-    
-    async def generate_embeddings(self, text_chunks: List[str]) -> List[List[float]]:
-        """
-        Generate embeddings for text chunks using Gemini API
-        """
-        embeddings = []
-        
-        async with aiohttp.ClientSession() as session:
-            for chunk in text_chunks:
-                for attempt in range(self.max_retries):
-                    try:
-                        url = f"{self.base_url}/models/embedding-001:embedContent?key={self.api_key}"
-                        payload = {
-                            "model": "models/embedding-001",
-                            "content": {
-                                "parts": [{"text": chunk}]
-                            }
-                        }
-                        
-                        async with session.post(url, json=payload) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                embeddings.append(data["embedding"]["values"])
-                                break
-                            elif response.status == 429:
-                                logger.warning(f"Rate limited, retrying in {self.retry_delay} seconds...")
-                                await asyncio.sleep(self.retry_delay * (attempt + 1))
-                            else:
-                                error_text = await response.text()
-                                logger.error(f"Embedding generation failed: {error_text}")
-                                if attempt == self.max_retries - 1:
-                                    raise Exception(f"Embedding generation failed after {self.max_retries} attempts")
-                    except Exception as e:
-                        logger.error(f"Error generating embedding: {str(e)}")
-                        if attempt == self.max_retries - 1:
-                            raise
-                        await asyncio.sleep(self.retry_delay * (attempt + 1))
-        
-        return embeddings
-    
-    async def process_pdf_document(self, pdf_content: bytes, client_id: str, document_id: str) -> Dict:
-        """
-        Process a PDF document: extract text, chunk it, and generate embeddings
-        Returns the processed chunks and embeddings for storage in Pinecone
-        """
-        try:
-            # Extract text from PDF
-            text = await self.extract_text_from_pdf(pdf_content)
-            
-            if not text.strip():
-                raise Exception("No text could be extracted from the PDF")
-            
-            # Chunk the text
-            chunks = await self.chunk_text(text)
-            
-            # Generate embeddings for each chunk
-            embeddings = await self.generate_embeddings(chunks)
-            
-            # Prepare data for Pinecone storage
-            vectors = []
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                vector_id = f"{client_id}_{document_id}_{i}"
-                vectors.append({
-                    "id": vector_id,
-                    "values": embedding,
-                    "metadata": {
-                        "client_id": client_id,
-                        "document_id": document_id,
-                        "chunk_index": i,
-                        "text": chunk,
-                        "processed_at": datetime.utcnow().isoformat()
-                    }
-                })
-            
-            return {
-                "success": True,
-                "vectors": vectors,
-                "chunk_count": len(chunks),
-                "total_text_length": len(text)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error processing PDF: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def generate_response(self, query: str, context: List[str], conversation_history: List[Dict] = None) -> Dict:
-        """
-        Generate a response using Gemini API based on query and context
-        """
-        # Prepare the context for the prompt
-        context_text = "\n\n".join(context) if context else "No relevant context found."
-        
-        # Prepare conversation history if provided
-        history_text = ""
-        if conversation_history:
-            for msg in conversation_history[-6:]:  # Last 6 messages for context
-                role = "User" if msg["role"] == "user" else "Assistant"
-                history_text += f"{role}: {msg['content']}\n"
-        
-        # Create the prompt with context and instructions
-        prompt = f"""
-        You are a helpful assistant for a business. Use the following context information to answer the user's question.
-        If the answer cannot be found in the context, politely say so. Don't make up information.
-        
-        Context information:
-        {context_text}
-        
-        Conversation history:
-        {history_text}
-        
-        User question: {query}
-        
-        Assistant:
-        """
-        
-        for attempt in range(self.max_retries):
+        if not self.api_key:
+            logger.warning("⚠️ GEMINI_API_KEY not found in environment variables")
+            logger.warning("AI responses will not be available until API key is configured")
+        else:
             try:
-                async with aiohttp.ClientSession() as session:
-                    url = f"{self.base_url}/models/gemini-pro:generateContent?key={self.api_key}"
-                    payload = {
-                        "contents": [{
-                            "parts": [{"text": prompt}]
-                        }],
-                        "generationConfig": {
-                            "temperature": 0.2,
-                            "topK": 40,
-                            "topP": 0.8,
-                            "maxOutputTokens": 1024
-                        }
-                    }
-                    
-                    async with session.post(url, json=payload) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            response_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                            
-                            return {
-                                "success": True,
-                                "response": response_text,
-                                "prompt_length": len(prompt),
-                                "response_length": len(response_text)
-                            }
-                        elif response.status == 429:
-                            logger.warning(f"Rate limited, retrying in {self.retry_delay} seconds...")
-                            await asyncio.sleep(self.retry_delay * (attempt + 1))
-                        else:
-                            error_text = await response.text()
-                            logger.error(f"Response generation failed: {error_text}")
-                            if attempt == self.max_retries - 1:
-                                return {
-                                    "success": False,
-                                    "error": f"API error: {error_text}"
-                                }
+                genai.configure(api_key=self.api_key)
+                self.model = genai.GenerativeModel('gemini-pro')
+                self.is_available = True
+                logger.info("✅ Gemini AI initialized successfully")
             except Exception as e:
-                logger.error(f"Error generating response: {str(e)}")
-                if attempt == self.max_retries - 1:
-                    return {
-                        "success": False,
-                        "error": str(e)
-                    }
-                await asyncio.sleep(self.retry_delay * (attempt + 1))
+                logger.error(f"❌ Failed to initialize Gemini AI: {e}")
+                self.is_available = False
     
-    async def validate_api_key(self) -> bool:
+    def check_availability(self) -> bool:
         """
-        Validate the Gemini API key
+        Check if Gemini service is available and configured
+        
+        Returns:
+            True if service is available, False otherwise
         """
+        return self.is_available and self.model is not None
+    
+    def generate_response(self, prompt: str, max_retries: int = 3) -> str:
+        """
+        Generate AI response using Gemini with retry logic
+        
+        Args:
+            prompt: The prompt to send to Gemini
+            max_retries: Number of retry attempts on failure
+            
+        Returns:
+            Generated response text
+        """
+        if not self.check_availability():
+            logger.error("Gemini service not available")
+            return "I apologize, but the AI service is currently unavailable. Please try again later or contact support."
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Generating Gemini response (attempt {attempt + 1}/{max_retries})")
+                
+                # Configure generation parameters for better responses
+                generation_config = genai.types.GenerationConfig(
+                    temperature=0.7,  # Balance between creativity and consistency
+                    top_p=0.8,
+                    top_k=40,
+                    max_output_tokens=1024,
+                )
+                
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config=generation_config
+                )
+                
+                if response and response.text:
+                    logger.info(f"✅ Successfully generated response ({len(response.text)} chars)")
+                    return response.text.strip()
+                else:
+                    logger.warning("Empty response from Gemini")
+                    if attempt == max_retries - 1:
+                        return "I apologize, but I couldn't generate a response. Please try rephrasing your question."
+                
+            except Exception as e:
+                logger.error(f"Error generating Gemini response (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt == max_retries - 1:
+                    return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
+                
+                # Wait before retry (exponential backoff)
+                import time
+                time.sleep(2 ** attempt)
+        
+        return "Service temporarily unavailable. Please try again."
+    
+    def create_rag_prompt(self, context: str, query: str, business_name: str) -> str:
+        """
+        Create a RAG (Retrieval Augmented Generation) prompt for answering questions
+        
+        Args:
+            context: Retrieved context from knowledge base
+            query: User's question
+            business_name: Name of the business
+            
+        Returns:
+            Formatted prompt optimized for Gemini
+        """
+        prompt = f"""You are a knowledgeable AI assistant representing {business_name}. Your role is to help customers by answering their questions accurately based on the business's official documents and information.
+
+IMPORTANT INSTRUCTIONS:
+1. Answer ONLY using information from the context provided below
+2. Be friendly, professional, and helpful in your tone
+3. If the context doesn't contain enough information to answer the question, politely acknowledge this and suggest contacting {business_name} directly
+4. Keep your response concise and focused (2-4 sentences is ideal)
+5. Use the business name naturally when appropriate
+6. Do NOT make up information or use external knowledge
+7. If you're uncertain, it's better to say you don't know than to guess
+
+CONTEXT FROM {business_name.upper()}'S DOCUMENTS:
+{context}
+
+CUSTOMER'S QUESTION:
+{query}
+
+YOUR RESPONSE (as {business_name}'s AI assistant):"""
+        
+        return prompt
+    
+    def generate_contextual_response(
+        self, 
+        context: str, 
+        query: str, 
+        business_name: str,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> str:
+        """
+        Generate a contextual response using RAG approach
+        
+        Args:
+            context: Retrieved context from knowledge base
+            query: User's question
+            business_name: Name of the business
+            conversation_history: Optional list of previous messages for context
+            
+        Returns:
+            AI-generated response
+        """
+        # Handle case where no context is available
+        if not context or not context.strip():
+            logger.warning(f"No context available for query: {query}")
+            return f"I'm the AI assistant for {business_name}. I don't have enough information in my knowledge base to answer that question accurately. Please make sure relevant documents have been uploaded and processed, or contact {business_name} directly for assistance."
+        
+        # Build the prompt with context
+        prompt = self.create_rag_prompt(context, query, business_name)
+        
+        # Add conversation history if provided
+        if conversation_history and len(conversation_history) > 0:
+            history_text = "\n\nRECENT CONVERSATION HISTORY:\n"
+            for msg in conversation_history[-4:]:  # Last 4 messages for context
+                role = "Customer" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")
+                history_text += f"{role}: {content}\n"
+            
+            prompt = history_text + "\n" + prompt
+        
+        # Generate and return response
+        return self.generate_response(prompt)
+    
+    def generate_simple_response(self, query: str, business_name: str) -> str:
+        """
+        Generate a simple response without RAG (for general queries)
+        
+        Args:
+            query: User's question
+            business_name: Name of the business
+            
+        Returns:
+            AI-generated response
+        """
+        prompt = f"""You are a helpful AI assistant for {business_name}. 
+        
+The customer has asked: {query}
+
+Provide a brief, helpful response. If this requires specific information about {business_name}'s services or policies, politely suggest they contact {business_name} directly.
+
+Your response:"""
+        
+        return self.generate_response(prompt)
+    
+    def validate_api_key(self) -> bool:
+        """
+        Validate that the Gemini API key is working
+        
+        Returns:
+            True if API key is valid and working, False otherwise
+        """
+        if not self.api_key:
+            logger.error("No API key configured")
+            return False
+        
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.base_url}/models?key={self.api_key}"
-                async with session.get(url) as response:
-                    return response.status == 200
+            # Try to list models as a validation check
+            test_prompt = "Test"
+            response = self.model.generate_content(test_prompt)
+            
+            if response:
+                logger.info("✅ Gemini API key validated successfully")
+                return True
+            else:
+                logger.error("❌ Gemini API key validation failed")
+                return False
+                
         except Exception as e:
-            logger.error(f"API key validation failed: {str(e)}")
+            logger.error(f"❌ API key validation error: {e}")
             return False
     
-    async def get_available_models(self) -> List[str]:
+    def summarize_text(self, text: str, max_length: int = 500) -> str:
         """
-        Get list of available Gemini models
+        Generate a summary of the provided text
+        
+        Args:
+            text: Text to summarize
+            max_length: Maximum length of summary
+            
+        Returns:
+            Summarized text
         """
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self.base_url}/models?key={self.api_key}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return [model["name"] for model in data["models"]]
-                    else:
-                        logger.error(f"Failed to fetch models: {response.status}")
-                        return []
-        except Exception as e:
-            logger.error(f"Error fetching models: {str(e)}")
-            return []
+        if not self.check_availability():
+            return text[:max_length] + "..." if len(text) > max_length else text
+        
+        prompt = f"""Please provide a concise summary of the following text in approximately {max_length} characters:
 
-# Global instance
+{text}
+
+Summary:"""
+        
+        return self.generate_response(prompt)
+    
+    def extract_key_points(self, text: str) -> List[str]:
+        """
+        Extract key points from text
+        
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            List of key points
+        """
+        if not self.check_availability():
+            return ["AI service unavailable"]
+        
+        prompt = f"""Extract 3-5 key points from the following text. Format each point as a brief sentence.
+
+Text:
+{text}
+
+Key Points (one per line, numbered):"""
+        
+        response = self.generate_response(prompt)
+        
+        # Parse numbered list
+        points = []
+        for line in response.split('\n'):
+            line = line.strip()
+            if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
+                # Remove numbering/bullets
+                point = line.lstrip('0123456789.-•) ').strip()
+                if point:
+                    points.append(point)
+        
+        return points if points else [response]
+    
+    def get_model_info(self) -> Dict:
+        """
+        Get information about the current Gemini model
+        
+        Returns:
+            Dictionary with model information
+        """
+        return {
+            "model_name": "gemini-pro",
+            "is_available": self.is_available,
+            "has_api_key": bool(self.api_key),
+            "provider": "Google Generative AI"
+        }
+
+# Singleton instance
 gemini_service = GeminiService()
+
