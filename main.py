@@ -152,10 +152,10 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print(f"✅ Document processed: {len(chunks)} chunks created")
         
     except Exception as e:
-    print(f"❌ Error processing document: {e}")
-    db.rollback()  # ROLLBACK FIRST!
+        print(f"❌ Error processing document: {e}")
+        db.rollback()  # ROLLBACK FIRST!
     # Update document status to indicate processing failure
-    if document:
+        if document:
         try:
             document.processed = False
             document.processing_error = str(e)
