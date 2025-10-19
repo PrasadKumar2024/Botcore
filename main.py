@@ -111,9 +111,14 @@ def get_file_size(file_path: Path) -> int:
     """Get file size in bytes"""
     return file_path.stat().st_size if file_path.exists() else 0
 
+def create_db_session():
+    """Create a new database session for background tasks"""
+    from app.database import SessionLocal
+    return SessionLocal()
+
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
-    db = next(get_db())
+    db = create_db_session()
     document = None
     try:
         # Get document from database
@@ -156,7 +161,11 @@ async def process_document_background(document_id: str, file_path: str, client_i
                 db.commit()
         except Exception as update_error:
             print(f"❌ Failed to update document status: {update_error}")
-        db.rollback()
+            # If commit fails, try rollback
+            try:
+                db.rollback()
+            except:
+                pass
     finally:
         db.close()
 
