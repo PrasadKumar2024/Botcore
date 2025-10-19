@@ -152,20 +152,17 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print(f"✅ Document processed: {len(chunks)} chunks created")
         
     except Exception as e:
-        print(f"❌ Error processing document: {e}")
-        # Update document status to indicate processing failure
+    print(f"❌ Error processing document: {e}")
+    db.rollback()  # ROLLBACK FIRST!
+    # Update document status to indicate processing failure
+    if document:
         try:
-            if document:
-                document.processed = False
-                document.processing_error = str(e)
-                db.commit()
+            document.processed = False
+            document.processing_error = str(e)
+            db.commit()
         except Exception as update_error:
             print(f"❌ Failed to update document status: {update_error}")
-            # If commit fails, try rollback
-            try:
-                db.rollback()
-            except:
-                pass
+            db.rollback()
     finally:
         db.close()
 
