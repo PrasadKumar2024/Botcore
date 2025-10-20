@@ -156,13 +156,13 @@ async def process_document_background(document_id: str, file_path: str, client_i
         db.rollback()  # ROLLBACK FIRST!
     # Update document status to indicate processing failure
         if document:
-        try:
-            document.processed = False
-            document.processing_error = str(e)
-            db.commit()
-        except Exception as update_error:
-            print(f"❌ Failed to update document status: {update_error}")
-            db.rollback()
+            try:
+                document.processed = False
+                document.processing_error = str(e)
+                db.commit()
+            except Exception as update_error:
+                print(f"❌ Failed to update document status: {update_error}")
+                db.rollback()
     finally:
         db.close()
 
