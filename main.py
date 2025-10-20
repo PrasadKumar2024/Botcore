@@ -342,9 +342,9 @@ async def upload_documents(
             # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                document_id=document.id,           # Fixed: explicit parameter names
-                file_path=str(file_path),
-                client_id=client.id
+                str(document.id),        # ✅ Positional argument
+                str(file_path),            
+                str(client.id)           # ✅ Positional argument
             )
             
             uploaded_files.append({
@@ -656,9 +656,9 @@ async def client_upload_documents(
             # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                document_id=document.id,           # Fixed: explicit parameter names
-                file_path=str(file_path),
-                client_id=client_id
+                str(document.id),        # ✅ Positional argument
+                str(file_path),          # ✅ Positional argument
+                str(client_id)           # ✅ Positional argument
             )
             
             uploaded_count += 1
@@ -747,9 +747,9 @@ async def reprocess_documents(
         document.processing_error = None
         background_tasks.add_task(
             process_document_background,
-            document_id=document.id,           # Fixed: explicit parameter names
-            file_path=document.file_path,
-            client_id=client_id
+            str(document.id),           # ✅ Positional argument
+            str(document.file_path),    # ✅ Positional argument
+            str(client_id)              # ✅ Positional argument
         )
         processed_count += 1
     
