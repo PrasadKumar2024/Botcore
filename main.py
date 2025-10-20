@@ -114,7 +114,8 @@ def get_file_size(file_path: Path) -> int:
 def create_db_session():
     """Create a new database session for background tasks"""
     from app.database import SessionLocal
-    return SessionLocal()
+    db = SessionLocal()
+    return db
 
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
