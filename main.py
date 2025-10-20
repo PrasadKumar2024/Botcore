@@ -122,6 +122,11 @@ async def process_document_background(document_id: str, file_path: str, client_i
     db = create_db_session()
     document = None
     try:
+        # Safety check - ensure db is a session, not UUID
+        if not hasattr(db, 'rollback'):
+            print(f"❌ ERROR: 'db' parameter is not a database session. Type: {type(db)}")
+            return
+
         # Get document from database
         document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if not document:
@@ -154,8 +159,13 @@ async def process_document_background(document_id: str, file_path: str, client_i
         
     except Exception as e:
         print(f"❌ Error processing document: {e}")
-        db.rollback()  # ROLLBACK FIRST!
-    # Update document status to indicate processing failure
+        # ROLLBACK FIRST!
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            print(f"❌ Rollback failed: {rollback_error}")
+        
+        # Update document status to indicate processing failure
         if document:
             try:
                 document.processed = False
@@ -163,7 +173,10 @@ async def process_document_background(document_id: str, file_path: str, client_i
                 db.commit()
             except Exception as update_error:
                 print(f"❌ Failed to update document status: {update_error}")
-                db.rollback()
+                try:
+                    db.rollback()
+                except:
+                    pass
     finally:
         db.close()
 
@@ -326,12 +339,12 @@ async def upload_documents(
             db.commit()
             db.refresh(document)
             
-            # Schedule background processing
+            # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                document.id,
-                str(file_path),
-                client.id
+                document_id=document.id,           # Fixed: explicit parameter names
+                file_path=str(file_path),
+                client_id=client.id
             )
             
             uploaded_files.append({
@@ -640,12 +653,12 @@ async def client_upload_documents(
             db.commit()
             db.refresh(document)
             
-            # Schedule background processing
+            # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                document.id,
-                str(file_path),
-                client_id
+                document_id=document.id,           # Fixed: explicit parameter names
+                file_path=str(file_path),
+                client_id=client_id
             )
             
             uploaded_count += 1
@@ -727,16 +740,16 @@ async def reprocess_documents(
     ).delete()
     db.commit()
     
-    # Reprocess all documents
+    # Reprocess all documents - FIXED: Correct parameter order
     processed_count = 0
     for document in documents:
         document.processed = False
         document.processing_error = None
         background_tasks.add_task(
             process_document_background,
-            document.id,
-            document.file_path,
-            client_id
+            document_id=document.id,           # Fixed: explicit parameter names
+            file_path=document.file_path,
+            client_id=client_id
         )
         processed_count += 1
     
