@@ -346,8 +346,7 @@ async def upload_documents(
             background_tasks.add_task(
                 process_document_background,
                 str(document.id),        # ✅ Positional argument
-                str(file_path),            
-                str(client.id)           # ✅ Positional argument
+                       # ✅ Positional argument
             )
             
             uploaded_files.append({
@@ -660,8 +659,7 @@ async def client_upload_documents(
             background_tasks.add_task(
                 process_document_background,
                 str(document.id),        # ✅ Positional argument
-                str(file_path),          # ✅ Positional argument
-                str(client_id)           # ✅ Positional argument
+                           # ✅ Positional argument
             )
             
             uploaded_count += 1
@@ -753,8 +751,7 @@ async def reprocess_documents(
         background_tasks.add_task(
             process_document_background,
             str(document.id),           # ✅ Positional argument
-            str(document.file_path),    # ✅ Positional argument
-            str(client_id)              # ✅ Positional argument
+                        # ✅ Positional argument
         )
         processed_count += 1
     
