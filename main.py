@@ -117,20 +117,27 @@ def create_db_session():
     db = SessionLocal()
     return db '''
 
+
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
-    db = create_db_session()
+    print(f"🔧 Starting background processing for document: {document_id}")
+    
+    # Create database session directly
+    try:
+        from app.database import SessionLocal
+        db = SessionLocal()
+        print(f"✅ Database session created successfully")
+    except Exception as e:
+        print(f"❌ Failed to create database session: {e}")
+        return
+    
     document = None
     try:
-        # Safety check - ensure db is a session, not UUID
-        if not hasattr(db, 'rollback'):
-            print(f"❌ ERROR: 'db' parameter is not a database session. Type: {type(db)}")
-            return
-
         # Get document from database
         document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if not document:
             print(f"❌ Document {document_id} not found")
+            db.close()
             return
         
         print(f"🔄 Processing document: {document.filename}")
@@ -155,11 +162,11 @@ async def process_document_background(document_id: str, file_path: str, client_i
         document.processing_error = None
         db.commit()
         
-        print(f"✅ Document processed: {len(chunks)} chunks created")
+        print(f"✅ Document processed successfully: {len(chunks)} chunks created")
         
     except Exception as e:
         print(f"❌ Error processing document: {e}")
-        # ROLLBACK FIRST!
+        # Rollback on error
         try:
             db.rollback()
         except Exception as rollback_error:
@@ -173,13 +180,9 @@ async def process_document_background(document_id: str, file_path: str, client_i
                 db.commit()
             except Exception as update_error:
                 print(f"❌ Failed to update document status: {update_error}")
-                try:
-                    db.rollback()
-                except:
-                    pass
     finally:
         db.close()
-
+        
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
     """Retrieve relevant context from knowledge base for AI response"""
     try:
@@ -711,6 +714,8 @@ async def delete_document(document_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+        
+        
 
 @app.post("/api/documents/{client_id}/reprocess")
 async def reprocess_documents(
@@ -1043,6 +1048,95 @@ async def get_knowledge_status(client_id: str, db: Session = Depends(get_db)):
             for doc in documents
         ]
     })
+
+# Client deletion endpoint - ADD THIS BEFORE THE FINAL IF STATEMENT
+@app.delete("/api/clients/{client_id}")
+async def delete_client(client_id: str, db: Session = Depends(get_db)):
+    """Delete a client and all associated data"""
+    try:
+        print(f"🗑️ Attempting to delete client: {client_id}")
+        
+        # Find the client
+        client = db.query(models.Client).filter(models.Client.id == client_id).first()
+        if not client:
+            print(f"❌ Client {client_id} not found")
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        print(f"🗑️ Starting deletion of client: {client.business_name} ({client_id})")
+        
+        # Delete knowledge chunks first
+        knowledge_chunks_count = db.query(models.KnowledgeChunk).filter(
+            models.KnowledgeChunk.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {knowledge_chunks_count} knowledge chunks")
+        
+        # Delete documents and their files
+        documents = db.query(models.Document).filter(
+            models.Document.client_id == client_id
+        ).all()
+        
+        documents_count = 0
+        for document in documents:
+            # Delete physical file
+            file_path = Path(document.file_path)
+            if file_path.exists():
+                file_path.unlink()
+                print(f"🗑️ Deleted file: {file_path}")
+            documents_count += 1
+        
+        # Delete document records
+        db.query(models.Document).filter(
+            models.Document.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {documents_count} document records")
+        
+        # Delete phone numbers
+        phone_numbers_count = db.query(models.PhoneNumber).filter(
+            models.PhoneNumber.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {phone_numbers_count} phone numbers")
+        
+        # Delete subscriptions
+        subscriptions_count = db.query(models.Subscription).filter(
+            models.Subscription.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {subscriptions_count} subscriptions")
+        
+        # Delete WhatsApp profiles
+        whatsapp_profiles_count = db.query(models.WhatsAppProfile).filter(
+            models.WhatsAppProfile.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {whatsapp_profiles_count} WhatsApp profiles")
+        
+        # Delete message logs
+        message_logs_count = db.query(models.MessageLog).filter(
+            models.MessageLog.client_id == client_id
+        ).delete()
+        print(f"🗑️ Deleted {message_logs_count} message logs")
+        
+        # Finally delete the client
+        db.delete(client)
+        db.commit()
+        
+        print(f"✅ Client deleted successfully: {client.business_name}")
+        
+        return JSONResponse({
+            "status": "success",
+            "message": f"Client '{client.business_name}' and all associated data deleted successfully"
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error deleting client {client_id}: {e}")
+        return JSONResponse({
+            "status": "error", 
+            "message": f"Failed to delete client: {str(e)}"
+        }, status_code=500)
+
+# THIS SHOULD BE THE LAST LINE BEFORE THE FINAL IF STATEMENT
+
 
 if __name__ == "__main__":
     import uvicorn
