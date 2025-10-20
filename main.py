@@ -118,7 +118,7 @@ def create_db_session():
     return db '''
 
 
-def process_document_background(document_id: str, file_path: str, client_id: str):
+def process_document_background(document_id: str):
     """Background task to process PDF and create knowledge chunks"""
     print(f"🔧 Starting background processing for document: {document_id}")
     
