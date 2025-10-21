@@ -143,7 +143,8 @@ def process_document_background(document_id: str, file_path: str, client_id: str
         print(f"🔄 Processing document: {document.filename}")
         
         # Process document with DocumentService
-        chunks = document_service.process_document(file_path, client_id)
+        import asyncio
+        chunks = asyncio.run(document_service.process_document(file_path, client_id))
         
         # Save chunks to database
         for chunk_text, metadata in chunks:
