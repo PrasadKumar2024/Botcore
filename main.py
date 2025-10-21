@@ -148,7 +148,7 @@ async def process_document_background(document_id: str, file_path: str, client_i
         
         # Process document with DocumentService
         print("📄 Starting document processing...")
-        chunks = await document_service.process_document(file_path, client_id)
+        chunks = await document_service.process_document_async(file_path, client_id)
         print(f"📄 Document processed, got {len(chunks)} chunks")
         
         # Save chunks to database
