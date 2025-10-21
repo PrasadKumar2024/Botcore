@@ -118,7 +118,7 @@ def create_db_session():
     return db '''
 
 
-def process_document_background(document_id: str):
+def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
     print(f"🔧 Starting background processing for document: {document_id}")
     
@@ -345,8 +345,9 @@ async def upload_documents(
             # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                str(document.id),        # ✅ Positional argument
-                       # ✅ Positional argument
+                str(document.id),
+                str(file_path), 
+                str(client.id)
             )
             
             uploaded_files.append({
@@ -658,7 +659,9 @@ async def client_upload_documents(
             # Schedule background processing - FIXED: Correct parameter order
             background_tasks.add_task(
                 process_document_background,
-                str(document.id),        # ✅ Positional argument
+                str(document.id),
+                str(file_path), 
+                str(client.id)      # ✅ Positional argument
                            # ✅ Positional argument
             )
             
@@ -750,7 +753,9 @@ async def reprocess_documents(
         document.processing_error = None
         background_tasks.add_task(
             process_document_background,
-            str(document.id),           # ✅ Positional argument
+            str(document.id),
+            str(file_path), 
+            str(client.id)           # ✅ Positional argument
                         # ✅ Positional argument
         )
         processed_count += 1
