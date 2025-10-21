@@ -1,4 +1,3 @@
-
 import os
 import uuid
 import logging
@@ -110,15 +109,19 @@ class DocumentService:
         return chunks
 
     @staticmethod
-    async def process_document(file_path: str, client_id: str) -> list:
+    async def process_document_async(file_path: str, client_id: str) -> list:
         """
         Process a PDF document and extract text chunks for knowledge base
         Returns list of (chunk_text, metadata) tuples
         """
+        print(f"📄 Starting PDF processing for: {file_path}")
+        print(f"👤 Client ID: {client_id}")
+        
         try:
             chunks = []
             
             # Read PDF file
+            print(f"📖 Opening PDF file: {file_path}")
             with open(file_path, 'rb') as file:
                 pdf_reader = PyPDF2.PdfReader(file)
                 
@@ -129,7 +132,7 @@ class DocumentService:
                     if text:
                         full_text += text + "\n"
                 
-                logger.info(f"Extracted {len(full_text)} characters from {file_path}")
+                print(f"📄 Extracted {len(full_text)} characters from {file_path}")
                 
                 # Split text into chunks (1000 characters each with 200 char overlap)
                 chunk_size = 1000
@@ -146,15 +149,16 @@ class DocumentService:
                         }
                         chunks.append((chunk_text, metadata))
             
-            logger.info(f"✅ Extracted {len(chunks)} chunks from document")
+            print(f"✅ Extracted {len(chunks)} chunks from document")
             return chunks
             
         except Exception as e:
-            logger.error(f"❌ Error processing document: {str(e)}")
-            raise Exception(f"Failed to process document: {str(e)}") 
+            print(f"❌ Error in document_service.process_document: {str(e)}")
+            print(f"🔍 Error type: {type(e)}")
+            raise Exception(f"Failed to process document: {str(e)}")
     
     @staticmethod
-    def process_document(document_id: str, db: Session) -> bool:
+    def process_document_sync(document_id: str, db: Session) -> bool:
         """
         Process a document: extract text, chunk it, and store in knowledge base
         
@@ -370,7 +374,7 @@ class DocumentService:
             # Process each document
             for document in documents:
                 logger.info(f"Reprocessing document: {document.filename}")
-                if DocumentService.process_document(str(document.id), db):
+                if DocumentService.process_document_sync(str(document.id), db):
                     processed_count += 1
             
             logger.info(f"✅ Reprocessed {processed_count}/{len(documents)} documents for client {client_id}")
