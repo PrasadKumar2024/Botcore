@@ -110,13 +110,6 @@ async def save_upload_file(upload_file: UploadFile, destination: Path):
 def get_file_size(file_path: Path) -> int:
     """Get file size in bytes"""
     return file_path.stat().st_size if file_path.exists() else 0
-'''
-def create_db_session():
-    """Create a new database session for background tasks"""
-    from app.database import SessionLocal
-    db = SessionLocal()
-    return db '''
-
 
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
@@ -185,32 +178,6 @@ async def process_document_background(document_id: str, file_path: str, client_i
         db.close()
 
 
-def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
-    """Retrieve relevant context from knowledge base for AI response"""
-    try:
-        # Simple keyword-based matching (can be enhanced with vector search)
-        knowledge_chunks = db.query(models.KnowledgeChunk).filter(
-            models.KnowledgeChunk.client_id == client_id
-        ).all()
-        
-        # Filter chunks by query relevance (simple keyword matching)
-        relevant_chunks = []
-        for chunk in knowledge_chunks:
-            if query.lower() in chunk.chunk_text.lower():
-                relevant_chunks.append(chunk)
-        
-        # Limit to max_chunks
-        relevant_chunks = relevant_chunks[:max_chunks]
-        
-        # Combine chunk texts into context
-        context = "\n\n".join([chunk.chunk_text for chunk in relevant_chunks])
-        
-        return context
-        
-    except Exception as e:
-        print(f"❌ Error retrieving context: {e}")
-        return ""
-        
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
     """Retrieve relevant context from knowledge base for AI response"""
     try:
@@ -689,8 +656,7 @@ async def client_upload_documents(
                 process_document_background,
                 str(document.id),
                 str(file_path), 
-                str(client.id)      # ✅ Positional argument
-                           # ✅ Positional argument
+                str(client.id)
             )
             
             uploaded_count += 1
@@ -743,8 +709,6 @@ async def delete_document(document_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-        
-        
 
 @app.post("/api/documents/{client_id}/reprocess")
 async def reprocess_documents(
@@ -774,7 +738,7 @@ async def reprocess_documents(
     ).delete()
     db.commit()
     
-    # Reprocess all documents - FIXED: Correct parameter order
+    # Reprocess all documents - FIXED: Use document.file_path instead of undefined file_path
     processed_count = 0
     for document in documents:
         document.processed = False
@@ -782,9 +746,8 @@ async def reprocess_documents(
         background_tasks.add_task(
             process_document_background,
             str(document.id),
-            str(file_path), 
-            str(client.id)           # ✅ Positional argument
-                        # ✅ Positional argument
+            document.file_path,  # ✅ FIXED: Use document.file_path which exists
+            str(client.id)
         )
         processed_count += 1
     
@@ -1079,7 +1042,7 @@ async def get_knowledge_status(client_id: str, db: Session = Depends(get_db)):
         ]
     })
 
-# Client deletion endpoint - ADD THIS BEFORE THE FINAL IF STATEMENT
+# Client deletion endpoint
 @app.delete("/api/clients/{client_id}")
 async def delete_client(client_id: str, db: Session = Depends(get_db)):
     """Delete a client and all associated data"""
@@ -1164,9 +1127,6 @@ async def delete_client(client_id: str, db: Session = Depends(get_db)):
             "status": "error", 
             "message": f"Failed to delete client: {str(e)}"
         }, status_code=500)
-
-# THIS SHOULD BE THE LAST LINE BEFORE THE FINAL IF STATEMENT
-
 
 if __name__ == "__main__":
     import uvicorn
