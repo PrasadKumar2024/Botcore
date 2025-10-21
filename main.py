@@ -118,7 +118,7 @@ def create_db_session():
     return db '''
 
 
-def process_document_background(document_id: str, file_path: str, client_id: str):
+async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
     print(f"🔧 Starting background processing for document: {document_id}")
     
@@ -143,8 +143,7 @@ def process_document_background(document_id: str, file_path: str, client_id: str
         print(f"🔄 Processing document: {document.filename}")
         
         # Process document with DocumentService
-        import asyncio
-        chunks = asyncio.run(document_service.process_document(file_path, client_id))
+        chunks = await document_service.process_document(file_path, client_id)
         
         # Save chunks to database
         for chunk_text, metadata in chunks:
@@ -181,8 +180,36 @@ def process_document_background(document_id: str, file_path: str, client_id: str
                 db.commit()
             except Exception as update_error:
                 print(f"❌ Failed to update document status: {update_error}")
+    
     finally:
         db.close()
+
+
+def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
+    """Retrieve relevant context from knowledge base for AI response"""
+    try:
+        # Simple keyword-based matching (can be enhanced with vector search)
+        knowledge_chunks = db.query(models.KnowledgeChunk).filter(
+            models.KnowledgeChunk.client_id == client_id
+        ).all()
+        
+        # Filter chunks by query relevance (simple keyword matching)
+        relevant_chunks = []
+        for chunk in knowledge_chunks:
+            if query.lower() in chunk.chunk_text.lower():
+                relevant_chunks.append(chunk)
+        
+        # Limit to max_chunks
+        relevant_chunks = relevant_chunks[:max_chunks]
+        
+        # Combine chunk texts into context
+        context = "\n\n".join([chunk.chunk_text for chunk in relevant_chunks])
+        
+        return context
+        
+    except Exception as e:
+        print(f"❌ Error retrieving context: {e}")
+        return ""
         
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
     """Retrieve relevant context from knowledge base for AI response"""
