@@ -108,6 +108,50 @@ class DocumentService:
         
         logger.info(f"Created {len(chunks)} chunks from text")
         return chunks
+
+    @staticmethod
+    async def process_document(file_path: str, client_id: str) -> list:
+        """
+        Process a PDF document and extract text chunks for knowledge base
+        Returns list of (chunk_text, metadata) tuples
+        """
+        try:
+            chunks = []
+            
+            # Read PDF file
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                
+                # Extract text from each page
+                full_text = ""
+                for page_num, page in enumerate(pdf_reader.pages):
+                    text = page.extract_text()
+                    if text:
+                        full_text += text + "\n"
+                
+                logger.info(f"Extracted {len(full_text)} characters from {file_path}")
+                
+                # Split text into chunks (1000 characters each with 200 char overlap)
+                chunk_size = 1000
+                overlap = 200
+                
+                for i in range(0, len(full_text), chunk_size - overlap):
+                    chunk_text = full_text[i:i + chunk_size]
+                    
+                    if chunk_text.strip():  # Only add non-empty chunks
+                        metadata = {
+                            'source': file_path,
+                            'client_id': client_id,
+                            'chunk_index': len(chunks)
+                        }
+                        chunks.append((chunk_text, metadata))
+            
+            logger.info(f"✅ Extracted {len(chunks)} chunks from document")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing document: {str(e)}")
+            raise Exception(f"Failed to process document: {str(e)}") 
     
     @staticmethod
     def process_document(document_id: str, db: Session) -> bool:
