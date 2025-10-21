@@ -13,8 +13,8 @@ import shutil
 from pathlib import Path
 import json
 
-# Import database and models
-from app.database import get_db, engine, Base
+# Import database and models FIRST to avoid circular imports
+from app.database import get_db, engine, Base, SessionLocal
 from app import models
 from sqlalchemy import text
 
@@ -111,17 +111,28 @@ def get_file_size(file_path: Path) -> int:
     """Get file size in bytes"""
     return file_path.stat().st_size if file_path.exists() else 0
 
+# FIXED: Create database session WITHOUT circular imports
+def create_background_db_session():
+    """Create database session for background tasks without circular imports"""
+    try:
+        # Use the already imported SessionLocal
+        db = SessionLocal()
+        print(f"✅ Background DB session created, type: {type(db)}")
+        return db
+    except Exception as e:
+        print(f"❌ Failed to create background DB session: {e}")
+        return None
+
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
     print(f"🔧 Starting background processing for document: {document_id}")
+    print(f"📁 File path: {file_path}")
+    print(f"👤 Client ID: {client_id}")
     
-    # Create database session directly
-    try:
-        from app.database import SessionLocal
-        db = SessionLocal()
-        print(f"✅ Database session created successfully")
-    except Exception as e:
-        print(f"❌ Failed to create database session: {e}")
+    # Create database session using the fixed function
+    db = create_background_db_session()
+    if not db:
+        print("❌ Cannot proceed without database session")
         return
     
     document = None
@@ -136,7 +147,9 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print(f"🔄 Processing document: {document.filename}")
         
         # Process document with DocumentService
+        print("📄 Starting document processing...")
         chunks = await document_service.process_document(file_path, client_id)
+        print(f"📄 Document processed, got {len(chunks)} chunks")
         
         # Save chunks to database
         for chunk_text, metadata in chunks:
@@ -159,23 +172,37 @@ async def process_document_background(document_id: str, file_path: str, client_i
         
     except Exception as e:
         print(f"❌ Error processing document: {e}")
-        # Rollback on error
-        try:
-            db.rollback()
-        except Exception as rollback_error:
-            print(f"❌ Rollback failed: {rollback_error}")
+        print(f"🔍 Error type: {type(e)}")
+        
+        # SAFE rollback with type checking
+        if hasattr(db, 'rollback') and callable(getattr(db, 'rollback')):
+            try:
+                db.rollback()
+                print("✅ Rollback successful")
+            except Exception as rollback_error:
+                print(f"❌ Rollback failed: {rollback_error}")
+        else:
+            print(f"❌ Cannot rollback - db is not a valid session: {type(db)}")
         
         # Update document status to indicate processing failure
-        if document:
+        if document and hasattr(db, 'commit') and callable(getattr(db, 'commit')):
             try:
                 document.processed = False
                 document.processing_error = str(e)
                 db.commit()
+                print("✅ Updated document status to failed")
             except Exception as update_error:
                 print(f"❌ Failed to update document status: {update_error}")
+        else:
+            print(f"❌ Cannot update document - invalid db session or no document")
     
     finally:
-        db.close()
+        # SAFE close with type checking
+        if hasattr(db, 'close') and callable(getattr(db, 'close')):
+            db.close()
+            print("✅ Database session closed")
+        else:
+            print(f"❌ Cannot close - db is not a valid session: {type(db)}")
 
 
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
@@ -337,7 +364,7 @@ async def upload_documents(
             db.commit()
             db.refresh(document)
             
-            # Schedule background processing - FIXED: Correct parameter order
+            # Schedule background processing
             background_tasks.add_task(
                 process_document_background,
                 str(document.id),
@@ -651,7 +678,7 @@ async def client_upload_documents(
             db.commit()
             db.refresh(document)
             
-            # Schedule background processing - FIXED: Correct parameter order
+            # Schedule background processing
             background_tasks.add_task(
                 process_document_background,
                 str(document.id),
@@ -738,7 +765,7 @@ async def reprocess_documents(
     ).delete()
     db.commit()
     
-    # Reprocess all documents - FIXED: Use document.file_path instead of undefined file_path
+    # Reprocess all documents
     processed_count = 0
     for document in documents:
         document.processed = False
@@ -746,7 +773,7 @@ async def reprocess_documents(
         background_tasks.add_task(
             process_document_background,
             str(document.id),
-            document.file_path,  # ✅ FIXED: Use document.file_path which exists
+            document.file_path,  # Use document's file_path
             str(client.id)
         )
         processed_count += 1
