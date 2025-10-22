@@ -44,7 +44,7 @@ class GeminiService:
             genai.configure(api_key=self.api_key)
             
             # Initialize the main model
-            self.model = genai.GenerativeModel('self.model_name')
+            self.model = genai.GenerativeModel(self.model_name)
             
             # Test the configuration with a simple API call
             self._test_connection()
