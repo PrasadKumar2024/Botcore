@@ -1,5 +1,4 @@
-
-from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum, Text, Index
+from sqlalchemy import Column, String, DateTime, Boolean, Integer, ForeignKey, Enum, Text, Index, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -39,14 +38,22 @@ class Client(Base):
     # Bot activation status
     bot_active = Column(Boolean, default=False)  # Overall bot status
     
+    # ✨ NEW: Webchat specific fields
+    webchat_enabled = Column(Boolean, default=False)  # Enable/disable webchat
+    webchat_embed_code = Column(Text, nullable=True)  # Generated embed code
+    webchat_theme = Column(String(20), default="light")  # light or dark theme
+    webchat_position = Column(String(20), default="bottom-right")  # Widget position
+    webchat_primary_color = Column(String(7), default="#007bff")  # Theme color (hex)
+    webchat_welcome_message = Column(Text, default="Hello! How can I help you today?")  # Welcome message
+    
     # Relationships
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan")
     phone_numbers = relationship("PhoneNumber", back_populates="client", cascade="all, delete-orphan")
     subscriptions = relationship("Subscription", back_populates="client", cascade="all, delete-orphan")
     whatsapp_profile = relationship("WhatsAppProfile", back_populates="client", uselist=False, cascade="all, delete-orphan")
-    knowledge_chunks = relationship("KnowledgeChunk", back_populates="client", cascade="all, delete-orphan")  # ADDED
-    message_logs = relationship("MessageLog", back_populates="client", cascade="all, delete-orphan")  # ADDED
-    bot_settings = relationship("BotSettings", back_populates="client", cascade="all, delete-orphan")  # ADDED
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="client", cascade="all, delete-orphan")
+    message_logs = relationship("MessageLog", back_populates="client", cascade="all, delete-orphan")
+    bot_settings = relationship("BotSettings", back_populates="client", cascade="all, delete-orphan")
 
 class Document(Base):
     __tablename__ = "documents"
@@ -64,7 +71,7 @@ class Document(Base):
     
     # Relationships
     client = relationship("Client", back_populates="documents")
-    knowledge_chunks = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")  # ADDED
+    knowledge_chunks = relationship("KnowledgeChunk", back_populates="document", cascade="all, delete-orphan")
 
 class PhoneNumber(Base):
     __tablename__ = "phone_numbers"
@@ -122,12 +129,18 @@ class MessageLog(Base):
     response_text = Column(Text, nullable=True)  # AI's response
     timestamp = Column(DateTime, default=datetime.utcnow)
     
+    # ✨ NEW: Session tracking for webchat
+    session_id = Column(String(100), nullable=True)  # Track webchat sessions
+    user_ip = Column(String(50), nullable=True)  # User IP address
+    user_agent = Column(Text, nullable=True)  # Browser user agent
+    
     # Relationship
-    client = relationship("Client", back_populates="message_logs")  # ADDED
+    client = relationship("Client", back_populates="message_logs")
     
     # Index for faster querying
     __table_args__ = (
         Index('ix_message_logs_client_id_timestamp', 'client_id', 'timestamp'),
+        Index('ix_message_logs_session_id', 'session_id'),
     )
 
 # Knowledge Base Chunks for AI Processing
@@ -139,11 +152,17 @@ class KnowledgeChunk(Base):
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False)
     chunk_text = Column(Text, nullable=False)  # Extracted text chunk
     chunk_index = Column(Integer, nullable=False)  # Order of chunk in document
-    vector_id = Column(String(255), nullable=True)  # Pinecone vector ID
-    chunk_metadata = Column(Text, nullable=True)  # ADDED: JSON string for chunk metadata (filename, page, etc.)
-    created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships - UPDATED
+    # ✨ NEW: Pinecone integration
+    vector_id = Column(String(255), nullable=True)  # Pinecone vector ID for semantic search
+    embedding_model = Column(String(50), default="gemini")  # Which model created the embedding
+    
+    # Metadata stored as JSON
+    chunk_metadata = Column(JSON, nullable=True)  # JSON for chunk metadata (filename, page, etc.)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True, onupdate=datetime.utcnow)
+    
+    # Relationships
     client = relationship("Client", back_populates="knowledge_chunks")
     document = relationship("Document", back_populates="knowledge_chunks")
     
@@ -151,6 +170,7 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         Index('ix_knowledge_chunks_client_id', 'client_id'),
         Index('ix_knowledge_chunks_document_id', 'document_id'),
+        Index('ix_knowledge_chunks_vector_id', 'vector_id'),
     )
 
 # Bot Settings and Configuration
@@ -160,15 +180,44 @@ class BotSettings(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
     bot_type = Column(Enum(BotType), nullable=False)
-    settings = Column(Text, nullable=True)  # JSON string for bot-specific settings
+    
+    # Settings stored as JSON for flexibility
+    settings = Column(JSON, nullable=True)  # JSON for bot-specific settings
+    
+    # ✨ NEW: Webchat specific settings
+    max_messages_per_session = Column(Integer, default=50)  # Rate limiting
+    response_timeout = Column(Integer, default=30)  # Seconds to wait for response
+    enable_conversation_history = Column(Boolean, default=True)  # Remember previous messages
+    
     is_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationship
-    client = relationship("Client", back_populates="bot_settings")  # UPDATED
+    client = relationship("Client", back_populates="bot_settings")
     
     # Unique constraint: one settings per bot type per client
     __table_args__ = (
         Index('ix_bot_settings_client_bot_type', 'client_id', 'bot_type', unique=True),
+    )
+
+# ✨ NEW: Webchat Sessions for tracking conversations
+class WebchatSession(Base):
+    __tablename__ = "webchat_sessions"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id = Column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False)
+    session_id = Column(String(100), nullable=False, unique=True)  # Unique session identifier
+    user_ip = Column(String(50), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    last_activity = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+    message_count = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    
+    # Index for faster querying
+    __table_args__ = (
+        Index('ix_webchat_sessions_client_id', 'client_id'),
+        Index('ix_webchat_sessions_session_id', 'session_id'),
     )
