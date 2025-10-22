@@ -90,42 +90,49 @@ class PineconeService:
         """Check if Pinecone is properly configured"""
         return self.pc is not None and self.index is not None and self.api_key is not None
     
-    def generate_simple_embedding(self, text: str) -> List[float]:
-        """
-        Generate a simple embedding for text (placeholder for actual embedding service)
-        In production, use a proper embedding model like Gemini Embeddings or OpenAI
+    def generate_embedding(self, text: str) -> List[float]:
+    """
+    Generate embedding using Gemini's embedding model
+    This provides MUCH better semantic search than simple embeddings
+    
+    Args:
+        text: Text to generate embedding for
         
-        Args:
-            text: Text to generate embedding for
-            
-        Returns:
-            List of floats representing the embedding vector
-        """
-        # This is a placeholder - replace with actual embedding generation
-        # For now, we'll use a simple hash-based approach
-        try:
-            # Normalize text
-            text_lower = text.lower().strip()
-            
-            # Create a simple deterministic embedding based on text
-            # In production, replace this with actual embedding API call
-            embedding = [0.0] * self.dimension
-            
-            # Simple character-based feature generation
-            for i, char in enumerate(text_lower[:self.dimension]):
-                embedding[i % self.dimension] += ord(char) / 1000.0
-            
-            # Normalize the vector
-            magnitude = sum(x**2 for x in embedding) ** 0.5
-            if magnitude > 0:
-                embedding = [x / magnitude for x in embedding]
-            
+    Returns:
+        List of floats representing the embedding vector
+    """
+    try:
+        # Import Gemini service for embeddings
+        from app.services.gemini_service import gemini_service
+        
+        # Use Gemini to generate actual embeddings
+        embedding = gemini_service.generate_embedding(text)
+        
+        if embedding and len(embedding) > 0:
             return embedding
+        else:
+            logger.warning("❌ Gemini embedding failed, using fallback")
+            return self._generate_fallback_embedding(text)
             
-        except Exception as e:
-            logger.error(f"❌ Error generating embedding: {str(e)}")
-            # Return zero vector as fallback
-            return [0.0] * self.dimension
+    except Exception as e:
+        logger.error(f"❌ Error generating Gemini embedding: {str(e)}")
+        # Fallback to simple embedding
+        return self._generate_fallback_embedding(text)
+
+def _generate_fallback_embedding(self, text: str) -> List[float]:
+    """Fallback embedding if Gemini fails"""
+    # Your existing simple embedding logic here
+    embedding = [0.0] * self.dimension
+    text_lower = text.lower().strip()
+    
+    for i, char in enumerate(text_lower[:self.dimension]):
+        embedding[i % self.dimension] += ord(char) / 1000.0
+    
+    magnitude = sum(x**2 for x in embedding) ** 0.5
+    if magnitude > 0:
+        embedding = [x / magnitude for x in embedding]
+    
+    return embedding
     
     async def store_knowledge_chunk(
         self,
