@@ -21,8 +21,8 @@ class GeminiService:
     def __init__(self):
         """Initialize Gemini AI with comprehensive configuration"""
         self.api_key = os.getenv("GEMINI_API_KEY")
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-pro")
-        self.embedding_model = "models/embedding-001"  # Gemini embedding model
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.embedding_model = "models/embedding-004"  # Gemini embedding model
         self.max_retries = 3
         self.request_timeout = 30
         self.is_available = False
@@ -44,7 +44,7 @@ class GeminiService:
             genai.configure(api_key=self.api_key)
             
             # Initialize the main model
-            self.model = genai.GenerativeModel(self.model_name)
+            self.model = genai.GenerativeModel('models/gemini-1.5-flash')
             
             # Test the configuration with a simple API call
             self._test_connection()
