@@ -61,11 +61,11 @@ class GeminiService:
         try:
             # Simple test to verify API key and connectivity
             test_response = self.model.generate_content("Test connection", safety_settings={
-                'HARASSMENT': 'block_none',
-                'HATE_SPEECH': 'block_none',
-                'SEXUALLY_EXPLICIT': 'block_none',
-                'DANGEROUS_CONTENT': 'block_none'
-            })
+    'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+    'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',  # ✅ Correct key
+    'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE'
+})
             
             if test_response and test_response.text:
                 logger.debug("✅ Gemini API connection test passed")
