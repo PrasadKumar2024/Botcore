@@ -152,7 +152,9 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print(f"Document processed, got {len(chunks)} chunks")
 
         # Save chunks to database
-        for chunk_text, metadata in chunks:
+        for chunk_data in chunks:
+            chunk_text = chunk_data[0]  # First element is text
+            metadata = chunk_data[1]    # Second element is metadata
             knowledge_chunk = models.KnowledgeChunk(
                 client_id=client_id,
                 document_id=document_id,
