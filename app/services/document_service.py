@@ -216,7 +216,7 @@ class DocumentService:
         """
         try:
             # Get document from database
-            document = self.db.query(Document).filter(Document.id == document_id).first()
+            document = db.query(Document).filter(Document.id == document_id).first()
             if not document:
                 logger.error(f"Document {document_id} not found")
                 return {"success": False, "error": "Document not found"}
