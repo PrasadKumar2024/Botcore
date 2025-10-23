@@ -351,7 +351,7 @@ class DocumentService:
             }
             
         except Exception as e:
-            db.rollback()
+            
             logger.error(f"❌ Error processing document {document_id}: {e}")
             
             # Update document with error
