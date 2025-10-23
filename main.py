@@ -194,10 +194,7 @@ async def process_document_background(document_id: str, file_path: str, client_i
             print(f"Pinecone integration failed: {e}")
             # Don't fail the whole process if Pinecone fails
 
-    except Exception as e:
-        print(f"Error processing document: {e}")
-        print(f"Error type: {type(e)}")
-
+    
         # Safe rollback with type checking
         if hasattr(db, 'rollback') and callable(getattr(db, 'rollback')):
             try:
