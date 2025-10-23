@@ -274,9 +274,9 @@ def get_context_from_knowledge_fallback(client_id: str, query: str, db: Session,
     
     return "\n\n".join(context_chunks)
     
-    except Exception as error:
+   ''' except Exception as error:
         print(f"Error getting context from knowledge base: {e}")
-        return ""
+        return "" '''
 
 # Routes
 @app.get("/", response_class=HTMLResponse)
