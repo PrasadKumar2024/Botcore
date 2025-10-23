@@ -125,14 +125,14 @@ def create_background_db_session():
 
 async def process_document_background(document_id: str, file_path: str, client_id: str):
     """Background task to process PDF and create knowledge chunks"""
-    print(f"🔧 Starting background processing for document: {document_id}")
-    print(f"📁 File path: {file_path}")
-    print(f"👤 Client ID: {client_id}")
-    
-    # Create database session using the fixed function
+    print(f"Starting background processing for document: {document_id}")
+    print(f"File path: {file_path}")
+    print(f"Client ID: {client_id}")
+
+    # Create database session
     db = create_background_db_session()
     if not db:
-        print("❌ Cannot proceed without database session")
+        print("Cannot proceed without database session")
         return
     
     document = None
@@ -140,17 +140,17 @@ async def process_document_background(document_id: str, file_path: str, client_i
         # Get document from database
         document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if not document:
-            print(f"❌ Document {document_id} not found")
+            print(f"Document {document_id} not found")
             db.close()
             return
         
-        print(f"🔄 Processing document: {document.filename}")
-        
+        print(f"Processing document: {document.filename}")
+
         # Process document with DocumentService
-        print("📄 Starting document processing...")
+        print("Starting document processing...")
         chunks = await document_service.process_document_async(file_path, client_id)
-        print(f"📄 Document processed, got {len(chunks)} chunks")
-        
+        print(f"Document processed, got {len(chunks)} chunks")
+
         # Save chunks to database
         for chunk_text, metadata in chunks:
             knowledge_chunk = models.KnowledgeChunk(
@@ -161,73 +161,70 @@ async def process_document_background(document_id: str, file_path: str, client_i
                 metadata=metadata
             )
             db.add(knowledge_chunk)
-        
+
         # Mark document as processed
         document.processed = True
-        document.processed_at = datetime.utcnow()
+        document.processed_at = datetime.datetime.now()
         document.processing_error = None
         db.commit()
-        
-        print("✅ Document processed successfully: {len(chunks)} chunks created")
 
-# 🟢 ADD PINEONE INTEGRATION HERE
-# ADD PINECONE INTEGRATION HERE
-try:
-    from app.services.pinecone_service import pinecone_service
-    
-    # Convert chunks to Pinecone format
-    pinecone_chunks = []
-    for chunk_text, metadata in chunks:
-        pinecone_chunks.append({
-            "chunk_text": chunk_text,
-            "metadata": {
-                **metadata,
-                "document_id": str(document_id),
-                "client_id": str(client_id)
-            }
-        })
-    
-    # Store in Pinecone
-    stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
-    print(f"Stored {stored_count} chunks in Pinecone")
-    
-except Exception as e:
-    print(f"Pinecone integration failed: {e}")
-    # Don't fail the whole process if Pinecone fails
-        
+        print(f"Document processed successfully: {len(chunks)} chunks created")
+
+        # ADD PINECONE INTEGRATION HERE
+        try:
+            from app.services.pinecone_service import pinecone_service
+
+            # Convert chunks to Pinecone format
+            pinecone_chunks = []
+            for chunk_text, metadata in chunks:
+                pinecone_chunks.append({
+                    "chunk_text": chunk_text,
+                    "metadata": {
+                        **metadata,
+                        "document_id": str(document_id),
+                        "client_id": str(client_id)
+                    }
+                })
+
+            # Store in Pinecone
+            stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
+            print(f"Stored {stored_count} chunks in Pinecone")
+
+        except Exception as e:
+            print(f"Pinecone integration failed: {e}")
+            # Don't fail the whole process if Pinecone fails
+
     except Exception as e:
-        print(f"❌ Error processing document: {e}")
-        print(f"🔍 Error type: {type(e)}")
-        
-        # SAFE rollback with type checking
+        print(f"Error processing document: {e}")
+        print(f"Error type: {type(e)}")
+
+        # Safe rollback with type checking
         if hasattr(db, 'rollback') and callable(getattr(db, 'rollback')):
             try:
                 db.rollback()
-                print("✅ Rollback successful")
+                print("Rollback successful")
             except Exception as rollback_error:
-                print(f"❌ Rollback failed: {rollback_error}")
+                print(f"Rollback failed: {rollback_error}")
         else:
-            print(f"❌ Cannot rollback - db is not a valid session: {type(db)}")
-        
+            print(f"Cannot rollback - db is not a valid session: {type(db)}")
+
         # Update document status to indicate processing failure
         if document and hasattr(db, 'commit') and callable(getattr(db, 'commit')):
             try:
                 document.processed = False
                 document.processing_error = str(e)
                 db.commit()
-                print("✅ Updated document status to failed")
+                print("Updated document status to failed")
             except Exception as update_error:
-                print(f"❌ Failed to update document status: {update_error}")
+                print(f"Failed to update document status: {update_error}")
         else:
-            print(f"❌ Cannot update document - invalid db session or no document")
-    
+            print("Cannot update document - invalid db session or no document")
+
     finally:
-        # SAFE close with type checking
-        if hasattr(db, 'close') and callable(getattr(db, 'close')):
+        # Close database session
+        if db:
             db.close()
-            print("✅ Database session closed")
-        else:
-            print(f"❌ Cannot close - db is not a valid session: {type(db)}")
+            print("Database session closed")
 
 
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
