@@ -224,7 +224,7 @@ async def process_document_background(document_id: str, file_path: str, client_i
             print("Database session closed")
 
 
-def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
+async def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
     """Retrieve relevant context from knowledge base for AI response"""
     try:
         # 🟢 REPLACE WITH PINEONE SEARCH
@@ -274,10 +274,6 @@ def get_context_from_knowledge_fallback(client_id: str, query: str, db: Session,
     
     return "\n\n".join(context_chunks)
     
-    except Exception as error:
-        print(f"Error getting context from knowledge base: {error}")
-        return "" 
-
 # Routes
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, db: Session = Depends(get_db)):
