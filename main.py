@@ -190,9 +190,9 @@ async def process_document_background(document_id: str, file_path: str, client_i
             stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
             print(f"Stored {stored_count} chunks in Pinecone")
 
-        except Exception as e:
-            print(f"Pinecone integration failed: {e}")
-            # Don't fail the whole process if Pinecone fails
+        except Exception as pinecone_error:
+            print(f"⚠️ Pinecone integration failed: {pinecone_error}")
+            print("📝 Chunks still saved to database")
 
     
         # Safe rollback with type checking
