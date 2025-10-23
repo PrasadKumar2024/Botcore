@@ -171,7 +171,7 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print("✅ Document processed successfully: {len(chunks)} chunks created")
 
 # 🟢 ADD PINEONE INTEGRATION HERE
-#try:
+#t
     from app.services.pinecone_service import pinecone_service
     
     # Convert chunks to Pinecone format
