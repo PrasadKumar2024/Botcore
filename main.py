@@ -171,7 +171,8 @@ async def process_document_background(document_id: str, file_path: str, client_i
         print("✅ Document processed successfully: {len(chunks)} chunks created")
 
 # 🟢 ADD PINEONE INTEGRATION HERE
-#t
+# ADD PINECONE INTEGRATION HERE
+try:
     from app.services.pinecone_service import pinecone_service
     
     # Convert chunks to Pinecone format
@@ -188,10 +189,10 @@ async def process_document_background(document_id: str, file_path: str, client_i
     
     # Store in Pinecone
     stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
-    print(f"✅ Stored {stored_count} chunks in Pinecone")
+    print(f"Stored {stored_count} chunks in Pinecone")
     
 except Exception as e:
-    print(f"❌ Pinecone storage failed: {e}")
+    print(f"Pinecone integration failed: {e}")
     # Don't fail the whole process if Pinecone fails
         
     except Exception as e:
