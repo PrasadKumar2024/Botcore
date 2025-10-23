@@ -168,7 +168,31 @@ async def process_document_background(document_id: str, file_path: str, client_i
         document.processing_error = None
         db.commit()
         
-        print(f"✅ Document processed successfully: {len(chunks)} chunks created")
+        print("✅ Document processed successfully: {len(chunks)} chunks created")
+
+# 🟢 ADD PINEONE INTEGRATION HERE
+try:
+    from app.services.pinecone_service import pinecone_service
+    
+    # Convert chunks to Pinecone format
+    pinecone_chunks = []
+    for chunk_text, metadata in chunks:
+        pinecone_chunks.append({
+            "chunk_text": chunk_text,
+            "metadata": {
+                **metadata,
+                "document_id": str(document_id),
+                "client_id": str(client_id)
+            }
+        })
+    
+    # Store in Pinecone
+    stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
+    print(f"✅ Stored {stored_count} chunks in Pinecone")
+    
+except Exception as e:
+    print(f"❌ Pinecone storage failed: {e}")
+    # Don't fail the whole process if Pinecone fails
         
     except Exception as e:
         print(f"❌ Error processing document: {e}")
@@ -208,29 +232,52 @@ async def process_document_background(document_id: str, file_path: str, client_i
 def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
     """Retrieve relevant context from knowledge base for AI response"""
     try:
-        # Simple keyword-based matching (can be enhanced with vector search)
-        knowledge_chunks = db.query(models.KnowledgeChunk).filter(
-            models.KnowledgeChunk.client_id == client_id
-        ).all()
+        # 🟢 REPLACE WITH PINEONE SEARCH
+        from app.services.pinecone_service import pinecone_service
         
-        if not knowledge_chunks:
+        # Use semantic search instead of keyword matching
+        similar_chunks = await pinecone_service.search_similar_chunks(
+            client_id=str(client_id),
+            query=query,
+            top_k=max_chunks
+        )
+        
+        if not similar_chunks:
             return ""
         
-        # Simple relevance scoring based on keyword matching
-        scored_chunks = []
-        query_lower = query.lower()
-        
-        for chunk in knowledge_chunks:
-            chunk_text_lower = chunk.chunk_text.lower()
-            score = sum(1 for word in query_lower.split() if word in chunk_text_lower)
-            if score > 0:
-                scored_chunks.append((score, chunk.chunk_text))
-        
-        # Sort by relevance score and take top chunks
-        scored_chunks.sort(reverse=True, key=lambda x: x[0])
-        context_chunks = [chunk[1] for chunk in scored_chunks[:max_chunks]]
-        
+        # Extract chunk texts
+        context_chunks = [chunk["chunk_text"] for chunk in similar_chunks]
         return "\n\n".join(context_chunks)
+    
+    except Exception as e:
+        print(f"❌ Pinecone search failed, falling back to keyword search: {e}")
+        # Fallback to original keyword search
+        return get_context_from_knowledge_fallback(client_id, query, db, max_chunks)
+
+def get_context_from_knowledge_fallback(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
+    """Fallback keyword-based search if Pinecone fails"""
+    knowledge_chunks = db.query(models.KnowledgeChunk).filter(
+        models.KnowledgeChunk.client_id == client_id
+    ).all()
+    
+    if not knowledge_chunks:
+        return ""
+    
+    # Simple relevance scoring based on keyword matching
+    scored_chunks = []
+    query_lower = query.lower()
+    
+    for chunk in knowledge_chunks:
+        chunk_text_lower = chunk.chunk_text.lower()
+        score = sum(1 for word in query_lower.split() if word in chunk_text_lower)
+        if score > 0:
+            scored_chunks.append((score, chunk.chunk_text))
+    
+    # Sort by relevance score and take top chunks
+    scored_chunks.sort(reverse=True, key=lambda x: x[0])
+    context_chunks = [chunk[1] for chunk in scored_chunks[:max_chunks]]
+    
+    return "\n\n".join(context_chunks)
     
     except Exception as e:
         print(f"Error getting context from knowledge base: {e}")
@@ -808,7 +855,7 @@ async def chat_with_bot(
             return JSONResponse({"status": "error", "message": "Client not found."}, status_code=404)
         
         # Retrieve relevant context from knowledge base
-        context = get_context_from_knowledge(client_id, user_message, db)
+        context = await get_context_from_knowledge(client_id, user_message, db)
         
         # Get conversation history (if implemented)
         conversation_history = []  # Can be enhanced to store actual conversation history
