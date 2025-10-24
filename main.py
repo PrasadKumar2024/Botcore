@@ -132,98 +132,57 @@ async def process_document_background(document_id: str, file_path: str, client_i
     # Create database session
     db = create_background_db_session()
     if not db:
-        print("Cannot proceed without database session")
+        print("❌ Cannot proceed without database session")
         return
     
-    document = None
     try:
-        # Get document from database
+        # First, verify the document exists in database
         document = db.query(models.Document).filter(models.Document.id == document_id).first()
         if not document:
-            print(f"Document {document_id} not found")
-            db.close()
+            print(f"❌ Document {document_id} not found in database")
             return
         
-        print(f"Processing document: {document.filename}")
+        print(f"📄 Processing document: {document.filename}")
 
-        # Process document with DocumentService
-        print("Starting document processing...")
-        chunks = await document_service.process_document_async(file_path, client_id)
-        print(f"Document processed, got {len(chunks)} chunks")
+        # Verify file exists on disk
+        if not os.path.exists(file_path):
+            print(f"❌ File not found on disk: {file_path}")
+            # Update document status
+            document.processed = False
+            document.processing_error = f"File not found: {file_path}"
+            db.commit()
+            return
 
-        # Save chunks to database
-        for chunk_data in chunks:
-            chunk_text = chunk_data[0]  # First element is text
-            metadata = chunk_data[1]    # Second element is metadata
-            knowledge_chunk = models.KnowledgeChunk(
-                client_id=client_id,
-                document_id=document_id,
-                chunk_text=chunk_text,
-                chunk_index=metadata.get("chunk_index", 0),
-                metadata=metadata
-            )
-            db.add(knowledge_chunk)
+        # CORRECT WAY: Process document with DocumentService using document_id and db
+        print("🔄 Starting document processing with DocumentService...")
+        result = await document_service.process_document_async(document_id, db)
+        print(f"📊 Document processing result: {result}")
 
-        # Mark document as processed
-        document.processed = True
-        document.processed_at = datetime.datetime.now()
-        document.processing_error = None
-        db.commit()
+        if result.get("success"):
+            print(f"✅ Document processed successfully: {result.get('chunks_created', 0)} chunks created")
+            if result.get('pinecone_stored', 0) > 0:
+                print(f"✅ {result.get('pinecone_stored')} chunks stored in Pinecone")
+        else:
+            print(f"❌ Document processing failed: {result.get('error')}")
 
-        print(f"Document processed successfully: {len(chunks)} chunks created")
-
-        # ADD PINECONE INTEGRATION HERE
+    except Exception as e:
+        print(f"💥 CRITICAL Error in background processing: {e}")
+        # Emergency fallback - try to update document status
         try:
-            from app.services.pinecone_service import pinecone_service
-
-            # Convert chunks to Pinecone format
-            pinecone_chunks = []
-            for chunk_text, metadata in chunks:
-                pinecone_chunks.append({
-                    "chunk_text": chunk_text,
-                    "metadata": {
-                        **metadata,
-                        "document_id": str(document_id),
-                        "client_id": str(client_id)
-                    }
-                })
-
-            # Store in Pinecone
-            stored_count = await pinecone_service.store_knowledge_chunks(client_id, pinecone_chunks)
-            print(f"Stored {stored_count} chunks in Pinecone")
-
-        except Exception as pinecone_error:
-            print(f"⚠️ Pinecone integration failed: {pinecone_error}")
-            print("📝 Chunks still saved to database")
-
-    
-        # Safe rollback with type checking
-        if hasattr(db, 'rollback') and callable(getattr(db, 'rollback')):
-            try:
-                db.rollback()
-                print("Rollback successful")
-            except Exception as rollback_error:
-                print(f"Rollback failed: {rollback_error}")
-        else:
-            print(f"Cannot rollback - db is not a valid session: {type(db)}")
-
-        # Update document status to indicate processing failure
-        if document and hasattr(db, 'commit') and callable(getattr(db, 'commit')):
-            try:
+            document = db.query(models.Document).filter(models.Document.id == document_id).first()
+            if document:
                 document.processed = False
-                document.processing_error = str(e)
+                document.processing_error = f"Background processing failed: {str(e)}"
                 db.commit()
-                print("Updated document status to failed")
-            except Exception as update_error:
-                print(f"Failed to update document status: {update_error}")
-        else:
-            print("Cannot update document - invalid db session or no document")
-
+                print("⚠️ Emergency document status update completed")
+        except Exception as update_error:
+            print(f"🚨 Failed emergency document update: {update_error}")
+        
     finally:
         # Close database session
         if db:
             db.close()
-            print("Database session closed")
+            print("🔒 Database session closed")
 
 
 async def get_context_from_knowledge(client_id: str, query: str, db: Session, max_chunks: int = 5) -> str:
