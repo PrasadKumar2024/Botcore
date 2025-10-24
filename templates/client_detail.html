@@ -403,41 +403,45 @@
 
                     <div class="row">
                         <div class="col-md-6">
-                            <!-- Chatbot Links -->
+                            <!-- Integration Section -->
                             <div class="profile-section">
                                 <h5><i class="bi bi-link"></i> Integration</h5>
                                 
+                                <!-- Chatbot URL -->
                                 <div class="mb-3">
                                     <strong>Chatbot URL:</strong>
                                     <div class="input-group mt-1">
-                                        <input type="text" class="form-control" id="chatbot-url" value="{{ chatbot_url }}" readonly>
-                                        <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('chatbot-url')">Copy</button>
+                                        <input type="text" class="form-control" id="chatbot-url" value="{{ client.chatbot_url if client.chatbot_url else 'Generating...' }}" readonly>
+                                        <button class="btn btn-outline-secondary" type="button" onclick="copyChatbotUrl()">Copy</button>
                                     </div>
                                     <small class="text-muted">Share this link with your client</small>
                                 </div>
                                 
+                                <!-- Embed Code -->
                                 <div class="mb-3">
                                     <strong>Embed Code:</strong>
-                                    <div class="embed-code mt-1" id="embed-code">{{ embed_code }}</div>
-                                    <button class="btn btn-outline-primary mt-2" onclick="copyToClipboard('embed-code')">Copy Embed Code</button>
+                                    <div class="mt-1">
+                                        <textarea class="form-control" id="embed-code" rows="4" readonly>{{ client.embed_code if client.embed_code else 'Generating...' }}</textarea>
+                                    </div>
+                                    <button class="btn btn-outline-primary mt-2" onclick="copyEmbedCode()">Copy Embed Code</button>
                                     <small class="text-muted d-block mt-1">Add this code to your client's website</small>
                                 </div>
                             </div>
 
-                            <!-- Current Status -->
+                            <!-- Bot Status Section -->
                             <div class="mt-4">
                                 <h6>Bot Status</h6>
                                 <div class="d-flex align-items-center gap-3">
-                                    <span id="web-status" class="{% if subscriptions.web.status == 'active' %}status-active{% else %}status-inactive{% endif %}">
-                                        {{ subscriptions.web.status.upper() if subscriptions.web.status else 'INACTIVE' }}
+                                    <span id="web-chat-status" class="{% if client.web_chat_active %}status-active{% else %}status-inactive{% endif %}">
+                                        {{ "ACTIVE" if client.web_chat_active else "INACTIVE" }}
                                     </span>
                                     <div class="btn-group">
-                                        <button id="web-activate-btn" class="btn btn-success btn-sm" onclick="toggleBot('web', 'activate')"
-                                                {% if subscriptions.web.status == 'active' %}style="display: none;"{% endif %}>
+                                        <button id="web-chat-activate-btn" class="btn btn-success btn-sm" onclick="toggleWebChat('activate')"
+                                                {% if client.web_chat_active %}style="display: none;"{% endif %}>
                                             Activate
                                         </button>
-                                        <button id="web-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleBot('web', 'deactivate')"
-                                                {% if subscriptions.web.status != 'active' %}style="display: none;"{% endif %}>
+                                        <button id="web-chat-deactivate-btn" class="btn btn-danger btn-sm" onclick="toggleWebChat('deactivate')"
+                                                {% if not client.web_chat_active %}style="display: none;"{% endif %}>
                                             Deactivate
                                         </button>
                                     </div>
@@ -446,27 +450,27 @@
                         </div>
                         
                         <div class="col-md-6">
-                            <!-- Subscription Management -->
+                            <!-- Web Chat Subscription Section -->
                             <div class="profile-section">
                                 <h5><i class="bi bi-calendar-check"></i> Subscription</h5>
                                 <div class="row mb-2">
                                     <div class="col-6">
                                         <strong>Start Date:</strong><br>
-                                        <span id="web-start-date" class="text-muted">
-                                            {% if subscriptions.web.start_date %}
-                                             {{ subscriptions.web.start_date.strftime('%Y-%m-%d') }}
+                                        <span id="web-chat-start-date" class="text-muted">
+                                            {% if client.web_chat_start_date %}
+                                                {{ client.web_chat_start_date.strftime('%d/%m/%Y') }}
                                             {% else %}
-                                                --/--/----
+                                                -/--/--
                                             {% endif %}
                                         </span>
                                     </div>
                                     <div class="col-6">
                                         <strong>Expiry Date:</strong><br>
-                                        <span id="web-expiry-date" class="text-muted">
-                                            {% if subscriptions.web.expiry_date %}
-                                                {{ subscriptions.web.expiry_date.strftime('%Y-%m-%d') }}
+                                        <span id="web-chat-expiry-date" class="text-muted">
+                                            {% if client.web_chat_expiry_date %}
+                                                {{ client.web_chat_expiry_date.strftime('%d/%m/%Y') }}
                                             {% else %}
-                                                --/--/----
+                                                -/--/--
                                             {% endif %}
                                         </span>
                                     </div>
@@ -476,15 +480,15 @@
                                 
                                 <h6>Add Subscription Time:</h6>
                                 <div class="subscription-buttons">
-                                    <button class="btn btn-outline-success" onclick="addMonths('web', 1)">1 Month</button>
-                                    <button class="btn btn-outline-success" onclick="addMonths('web', 2)">2 Months</button>
-                                    <button class="btn btn-outline-success" onclick="addMonths('web', 3)">3 Months</button>
-                                    <button class="btn btn-outline-success" onclick="addMonths('web', 6)">6 Months</button>
-                                    <button class="btn btn-outline-success" onclick="addMonths('web', 12)">12 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addWebChatMonths(1)">1 Month</button>
+                                    <button class="btn btn-outline-success" onclick="addWebChatMonths(2)">2 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addWebChatMonths(3)">3 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addWebChatMonths(6)">6 Months</button>
+                                    <button class="btn btn-outline-success" onclick="addWebChatMonths(12)">12 Months</button>
                                 </div>
                             </div>
 
-                            <!-- Demo Instructions -->
+                            <!-- Ready to Test Section -->
                             <div class="alert alert-info mt-3">
                                 <h6><i class="bi bi-rocket"></i> Ready to Test</h6>
                                 <small>
@@ -900,6 +904,69 @@
             } catch (error) {
                 alert('Error: ' + error.message);
             }
+        }
+
+        // Web Chat Bot specific functions
+        async function toggleWebChat(action) {
+            try {
+                const response = await fetch(`/api/clients/${CLIENT_ID}/web_chat/${action}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(result.message);
+                    location.reload();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        async function addWebChatMonths(months) {
+            try {
+                const response = await fetch(`/api/clients/${CLIENT_ID}/web_chat/subscription`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        months: months
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    alert(result.message);
+                    location.reload();
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+
+        // Copy functions for embed code and chatbot URL
+        function copyEmbedCode() {
+            const embedCode = document.getElementById('embed-code');
+            embedCode.select();
+            document.execCommand('copy');
+            alert('Embed code copied to clipboard!');
+        }
+
+        function copyChatbotUrl() {
+            const chatbotUrl = document.getElementById('chatbot-url');
+            chatbotUrl.select();
+            document.execCommand('copy');
+            alert('Chatbot URL copied to clipboard!');
         }
 
         // Utility functions
