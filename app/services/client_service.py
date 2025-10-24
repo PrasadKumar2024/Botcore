@@ -13,9 +13,27 @@ from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate
 # Set up logging
 logger = logging.getLogger(__name__)
 
+def generate_embed_code(client_id: uuid.UUID) -> Dict[str, str]:
+    """
+    Generate unique embed code and chatbot URL for a client
+    """
+    unique_id = str(uuid.uuid4())
+    
+    # Generate embed code - using your actual domain from Render
+    embed_code = f'<script src="https://botcore-z6j0.onrender.com/static/js/chat-widget.js?client_id={unique_id}"></script>'
+    
+    # Generate chatbot URL
+    chatbot_url = f"https://botcore-z6j0.onrender.com/chat/{unique_id}"
+    
+    return {
+        "embed_code": embed_code,
+        "chatbot_url": chatbot_url,
+        "unique_id": unique_id
+    }
+
 def create_client(db: Session, client_data: ClientCreate) -> Client:
     """
-    Create a new client in the database
+    Create a new client in the database with auto-generated embed code
     """
     try:
         # Create client instance with only the fields that exist in the model
@@ -28,12 +46,25 @@ def create_client(db: Session, client_data: ClientCreate) -> Client:
             updated_at=datetime.utcnow()
         )
         
-        # Add to database
+        # Add to database first to get the client ID
         db.add(db_client)
         db.commit()
         db.refresh(db_client)
         
-        logger.info(f"Created new client: {db_client.id} - {db_client.business_name}")
+        # Generate embed code and update client
+        embed_data = generate_embed_code(db_client.id)
+        db_client.embed_code = embed_data["embed_code"]
+        db_client.chatbot_url = embed_data["chatbot_url"]
+        db_client.unique_id = embed_data["unique_id"]
+        db_client.web_chat_active = False
+        db_client.web_chat_start_date = None
+        db_client.web_chat_expiry_date = None
+        
+        # Commit the embed code updates
+        db.commit()
+        db.refresh(db_client)
+        
+        logger.info(f"Created new client with embed code: {db_client.id} - {db_client.business_name}")
         return db_client
         
     except Exception as e:
@@ -305,8 +336,101 @@ def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
         
         logger.info(f"Deactivated client: {client_id}")
         return client
+
+def regenerate_embed_code(db: Session, client_id: uuid.UUID) -> Optional[Client]:
+    """
+    Regenerate embed code for an existing client
+    """
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return None
+        
+        # Generate new embed code
+        embed_data = generate_embed_code(client_id)
+        client.embed_code = embed_data["embed_code"]
+        client.chatbot_url = embed_data["chatbot_url"]
+        client.unique_id = embed_data["unique_id"]
+        client.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(client)
+        
+        logger.info(f"Regenerated embed code for client: {client_id}")
+        return client
         
     except Exception as e:
         db.rollback()
-        logger.error(f"Error deactivating client {client_id}: {str(e)}")
+        logger.error(f"Error regenerating embed code for client {client_id}: {str(e)}")
         raise
+
+def activate_web_chat(db: Session, client_id: uuid.UUID) -> Optional[Client]:
+    """
+    Activate web chat bot for a client
+    """
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return None
+        
+        client.web_chat_active = True
+        client.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(client)
+        
+        logger.info(f"Activated web chat for client: {client_id}")
+        return client
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error activating web chat for client {client_id}: {str(e)}")
+        raise
+
+def deactivate_web_chat(db: Session, client_id: uuid.UUID) -> Optional[Client]:
+    """
+    Deactivate web chat bot for a client
+    """
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return None
+        
+        client.web_chat_active = False
+        client.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(client)
+        
+        logger.info(f"Deactivated web chat for client: {client_id}")
+        return client
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deactivating web chat for client {client_id}: {str(e)}")
+        raise
+
+def set_web_chat_subscription_dates(db: Session, client_id: uuid.UUID, start_date: datetime, expiry_date: datetime) -> Optional[Client]:
+    """
+    Set web chat subscription dates for a client
+    """
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return None
+        
+        client.web_chat_start_date = start_date
+        client.web_chat_expiry_date = expiry_date
+        client.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(client)
+        
+        logger.info(f"Set web chat subscription dates for client: {client_id}")
+        return client
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error setting web chat subscription dates for client {client_id}: {str(e)}")
+        raise   
+    
