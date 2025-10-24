@@ -45,6 +45,15 @@ class Client(Base):
     webchat_position = Column(String(20), default="bottom-right")  # Widget position
     webchat_primary_color = Column(String(7), default="#007bff")  # Theme color (hex)
     webchat_welcome_message = Column(Text, default="Hello! How can I help you today?")  # Welcome message
+
+    # 🆕 WEB CHAT BOT EMBED FIELDS (Add these 6 lines below)
+    embed_code = Column(Text, nullable=True)
+    chatbot_url = Column(String(500), nullable=True)
+    unique_id = Column(String(100), unique=True, nullable=True)
+    web_chat_active = Column(Boolean, default=False)
+    web_chat_start_date = Column(DateTime, nullable=True)
+    web_chat_expiry_date = Column(DateTime, nullable=True)
+    
     
     # Relationships
     documents = relationship("Document", back_populates="client", cascade="all, delete-orphan")
