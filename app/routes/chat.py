@@ -3,7 +3,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
 import logging
-
+import uuid
+from datetime import datetime, timedelta
 from app.database import get_db
 from app.services import gemini_service, pinecone_service, subscription_service
 from app.models import Client, Subscription
@@ -105,6 +106,92 @@ def generate_conversation_id() -> str:
     """Generate a unique conversation ID"""
     import uuid
     return str(uuid.uuid4())
+
+# ADD THESE 3 ROUTES TO YOUR EXISTING chat.py
+
+@router.post("/clients/{client_id}/web_chat/activate")
+async def activate_client_web_chat(client_id: int, db: Session = Depends(get_db)):
+    """Activate web chat and generate embed codes"""
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Generate embed code and URL if first time
+        if not client.embed_code:
+            unique_id = f"{client.business_name.lower().replace(' ', '-')}-{str(uuid.uuid4().hex[:8])}"
+            embed_code = f'''
+            <div id="chatbot-container-{unique_id}"></div>
+            <script>
+                (function() {{
+                    var script = document.createElement('script');
+                    script.src = 'https://botcore-z6j0.onrender.com/static/js/chat-widget.js?client_id={unique_id}';
+                    script.async = true;
+                    document.head.appendChild(script);
+                }})();
+            </script>
+            '''
+            client.embed_code = embed_code.strip()
+            client.chatbot_url = f"https://botcore-z6j0.onrender.com/chat/{unique_id}"
+            client.unique_id = unique_id
+        
+        client.web_chat_active = True
+        client.web_chat_start_date = client.web_chat_start_date or datetime.utcnow()
+        db.commit()
+        
+        return {"message": "Web chat activated successfully", "client_id": client_id}
+        
+    except Exception as e:
+        logger.error(f"Error activating web chat: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to activate web chat")
+
+@router.post("/clients/{client_id}/web_chat/deactivate")
+async def deactivate_client_web_chat(client_id: int, db: Session = Depends(get_db)):
+    """Deactivate web chat"""
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        client.web_chat_active = False
+        db.commit()
+        
+        return {"message": "Web chat deactivated successfully", "client_id": client_id}
+        
+    except Exception as e:
+        logger.error(f"Error deactivating web chat: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to deactivate web chat")
+
+@router.post("/clients/{client_id}/web_chat/subscription")
+async def add_web_chat_subscription(client_id: int, months: int, db: Session = Depends(get_db)):
+    """Add subscription time to web chat"""
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        current_time = datetime.utcnow()
+        
+        # If no expiry date or expired, set from current time
+        if not client.web_chat_expiry_date or client.web_chat_expiry_date < current_time:
+            client.web_chat_expiry_date = current_time + timedelta(days=30 * months)
+        else:
+            # Extend existing subscription
+            client.web_chat_expiry_date = client.web_chat_expiry_date + timedelta(days=30 * months)
+        
+        # Ensure active when adding subscription
+        client.web_chat_active = True
+        db.commit()
+        
+        return {
+            "message": f"Added {months} month(s) to web chat subscription",
+            "new_expiry_date": client.web_chat_expiry_date.isoformat(),
+            "client_id": client_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error adding subscription: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to add subscription")
 
 @router.get("/api/chat/health")
 async def health_check():
