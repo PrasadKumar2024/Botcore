@@ -27,7 +27,7 @@ class GeminiService:
         self.request_timeout = 30
         self.is_available = False
         self.model = None
-        self.embedding_dimension = 768  # Gemini embedding dimension
+        self.embedding_dimension = 384 # Gemini embedding dimension
         
         # Initialize the service
         self.initialize()
@@ -85,48 +85,30 @@ class GeminiService:
         """
         return self.is_available and self.model is not None
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((Exception,))
-    )
-    def generate_embedding(self, text: str) -> List[float]:
-        """
-        Generate embedding vector for text using Gemini's embedding model
+def generate_embedding(self, text: str) -> List[float]:
+    """
+    Generate embedding vector for text using free SentenceTransformers
+    
+    Args:
+        text: Text to generate embedding for
         
-        Args:
-            text: Text to generate embedding for
+    Returns:
+        List of floats representing the embedding vector
+    """
+    try:
+        if not text or not text.strip():
+            logger.warning("⚠️ Empty text provided for embedding")
+            return [0.0] * self.embedding_dimension
+        
+        # Generate embedding using free model
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        embedding = model.encode(text).tolist()
+        logger.debug(f"✅ Generated free embedding with dimension: {len(embedding)}")
+        return embedding
             
-        Returns:
-            List of floats representing the embedding vector
-        """
-        try:
-            if not self.check_availability():
-                logger.error("❌ Gemini service not available for embeddings")
-                raise ValueError("Gemini service not available")
-            
-            if not text or not text.strip():
-                logger.warning("⚠️ Empty text provided for embedding")
-                return [0.0] * self.embedding_dimension
-            
-            # Generate embedding using Gemini
-            result = genai.embed_content(
-                model=self.embedding_model,
-                content=text,
-                task_type="retrieval_document"  # Use retrieval_document for document chunks
-            )
-            
-            if result and 'embedding' in result:
-                embedding = result['embedding']
-                logger.debug(f"✅ Generated embedding with dimension: {len(embedding)}")
-                return embedding
-            else:
-                logger.error("❌ No embedding found in Gemini response")
-                raise ValueError("Empty embedding response from Gemini")
-                
-        except Exception as e:
-            logger.error(f"❌ Error generating Gemini embedding: {str(e)}")
-            raise
+    except Exception as e:
+        logger.error(f"❌ Error generating free embedding: {str(e)}")
+        return [0.0] * self.embedding_dimension
     
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
