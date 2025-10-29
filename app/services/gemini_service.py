@@ -5,7 +5,8 @@ import time
 from typing import Optional, List, Dict, Any
 import google.generativeai as genai
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
+# Add this import
+from huggingface_hub import InferenceClient
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import requests
 
@@ -20,18 +21,22 @@ class GeminiService:
     """
     
     def __init__(self):
-        """Initialize Gemini AI with comprehensive configuration"""
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        self.embedding_model = "models/embedding-001"  # Gemini embedding model
-        self.max_retries = 3
-        self.request_timeout = 30
-        self.is_available = False
-        self.model = None
-        self.embedding_dimension = 384 # Gemini embedding dimension
-        
-        # Initialize the service
-        self.initialize()
+    """Initialize Gemini AI with comprehensive configuration"""
+    self.api_key = os.getenv("GEMINI_API_KEY")
+    self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    self.embedding_model = "models/embedding-001"  # Keep Gemini embedding model reference
+    self.max_retries = 3
+    self.request_timeout = 30
+    self.is_available = False
+    self.model = None
+    
+    # Add Hugging Face for embeddings only
+    self.hf_token = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
+    self.hf_embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # Add this line
+    self.embedding_dimension = 384  # Keep this as is
+    
+    # Initialize the service
+    self.initialize()
     
     def initialize(self):
         """Initialize Gemini AI with comprehensive error handling"""
@@ -88,21 +93,33 @@ class GeminiService:
     
 def generate_embedding(self, text: str) -> List[float]:
     """
-    Generate embedding vector for text using free SentenceTransformers
+    Generate embedding vector for text using Hugging Face API
     """
     try:
         if not text or not text.strip():
             logger.warning("⚠️ Empty text provided for embedding")
             return [0.0] * self.embedding_dimension
         
-        # Generate embedding using free model
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-        embedding = model.encode(text).tolist()
-        logger.debug(f"✅ Generated free embedding with dimension: {len(embedding)}")
-        return embedding
+        if not self.hf_token:
+            logger.warning("⚠️ Hugging Face token not configured, using zero vector")
+            return [0.0] * self.embedding_dimension
+        
+        # Use Hugging Face Inference API for embeddings
+        client = InferenceClient(token=self.hf_token)
+        embedding = client.feature_extraction(text, model=self.hf_embedding_model)
+        
+        # Convert to list
+        embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
+        
+        # Flatten if needed (HF returns 2D array)
+        if isinstance(embedding_list[0], list):
+            embedding_list = embedding_list[0]
+        
+        logger.debug(f"✅ Generated Hugging Face embedding with dimension: {len(embedding_list)}")
+        return embedding_list
             
     except Exception as e:
-        logger.error(f"❌ Error generating free embedding: {str(e)}")
+        logger.error(f"❌ Error generating Hugging Face embedding: {str(e)}")
         return [0.0] * self.embedding_dimension
     
     async def generate_embedding_async(self, text: str) -> List[float]:
