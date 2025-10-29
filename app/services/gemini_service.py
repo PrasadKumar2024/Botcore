@@ -5,6 +5,7 @@ import time
 from typing import Optional, List, Dict, Any
 import google.generativeai as genai
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import requests
 
@@ -88,12 +89,6 @@ class GeminiService:
 def generate_embedding(self, text: str) -> List[float]:
     """
     Generate embedding vector for text using free SentenceTransformers
-    
-    Args:
-        text: Text to generate embedding for
-        
-    Returns:
-        List of floats representing the embedding vector
     """
     try:
         if not text or not text.strip():
