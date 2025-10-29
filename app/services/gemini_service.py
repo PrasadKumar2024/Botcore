@@ -21,22 +21,22 @@ class GeminiService:
     """
     
     def __init__(self):
-    """Initialize Gemini AI with comprehensive configuration"""
-    self.api_key = os.getenv("GEMINI_API_KEY")
-    self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    self.embedding_model = "models/embedding-001"  # Keep Gemini embedding model reference
-    self.max_retries = 3
-    self.request_timeout = 30
-    self.is_available = False
-    self.model = None
+        """Initialize Gemini AI with comprehensive configuration"""
+        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.embedding_model = "models/embedding-001"  # Keep Gemini embedding model reference
+        self.max_retries = 3
+        self.request_timeout = 30
+        self.is_available = False
+        self.model = None
     
-    # Add Hugging Face for embeddings only
-    self.hf_token = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
-    self.hf_embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # Add this line
-    self.embedding_dimension = 384  # Keep this as is
+        # Add Hugging Face for embeddings only
+        self.hf_token = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
+        self.hf_embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # Add this line
+        self.embedding_dimension = 384  # Keep this as is
     
-    # Initialize the service
-    self.initialize()
+        # Initialize the service
+        self.initialize()
     
     def initialize(self):
         """Initialize Gemini AI with comprehensive error handling"""
