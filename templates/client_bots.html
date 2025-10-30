@@ -273,8 +273,9 @@
                         
                         <div class="mb-3">
                             <strong>Embed Code:</strong>
-                            <div class="embed-code mt-1" id="embed-code">{{ embed_code }}</div>
-                            <button class="btn btn-outline-primary mt-2" onclick="copyToClipboard('embed-code')">Copy Embed Code</button>
+                            <div class="embed-code mt-1" id="embed-code-{{ client.id }}">Click "Generate Embed Code" to create embed script</div>
+                            <button class="btn btn-outline-primary mt-2" onclick="generateEmbedCode({{ client.id }})">Generate Embed Code</button>
+                            <button class="btn btn-outline-secondary mt-2" onclick="copyToClipboard('embed-code-{{ client.id }}')" style="display: none;" id="copy-btn-{{ client.id }}">Copy Embed Code</button>
                             <small class="text-muted d-block mt-1">Add this code to your client's website</small>
                         </div>
                     </div>
@@ -365,6 +366,30 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // Edit field functionality
+        // Generate embed code functionality
+        async function generateEmbedCode(clientId) {
+            try {
+                const response = await fetch(`/api/chat/bots/${clientId}/embed-code`);
+                const result = await response.json();
+        
+                if (response.ok) {
+                    const embedElement = document.getElementById(`embed-code-${clientId}`);
+                    const copyBtn = document.getElementById(`copy-btn-${clientId}`);
+            
+                    embedElement.textContent = result.embed_code;
+                    copyBtn.style.display = 'inline-block';
+            
+                    alert('✅ Embed code generated successfully!');
+                } else {
+                    alert('❌ Error generating embed code: ' + result.detail);
+                }
+            } catch (error) {
+                console.error('Error generating embed code:', error);
+                alert('Error generating embed code. Please try again.');
+    }
+}
+
+// Edit field functionality
         function editField(fieldId, fieldType) {
             const field = document.getElementById(fieldId);
             const currentValue = field.textContent;
