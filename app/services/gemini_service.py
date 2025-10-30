@@ -91,36 +91,37 @@ class GeminiService:
         """
         return self.is_available and self.model is not None
     
-def generate_embedding(self, text: str) -> List[float]:
-    """
-    Generate embedding vector for text using Hugging Face API
-    """
-    try:
-        if not text or not text.strip():
-            logger.warning("⚠️ Empty text provided for embedding")
+    def generate_embedding(self, text: str) -> List[float]:
+        """
+        Generate embedding vector for text using Hugging Face API
+        """
+        try:
+             
+            if not text or not text.strip():
+                logger.warning("⚠️ Empty text provided for embedding")
+                return [0.0] * self.embedding_dimension
+        
+            if not self.hf_token:
+                logger.warning("⚠️ Hugging Face token not configured, using zero vector")
+                return [0.0] * self.embedding_dimension
+        
+            # Use Hugging Face Inference API for embeddings
+            client = InferenceClient(token=self.hf_token)
+            embedding = client.feature_extraction(text, model=self.hf_embedding_model)
+        
+            # Convert to list
+            embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
+        
+            # Flatten if needed (HF returns 2D array)
+            if isinstance(embedding_list[0], list):
+                embedding_list = embedding_list[0]
+        
+            logger.debug(f"✅ Generated Hugging Face embedding with dimension: {len(embedding_list)}")
+            return embedding_list
+             
+        except Exception as e:
+            logger.error(f"❌ Error generating Hugging Face embedding: {str(e)}")
             return [0.0] * self.embedding_dimension
-        
-        if not self.hf_token:
-            logger.warning("⚠️ Hugging Face token not configured, using zero vector")
-            return [0.0] * self.embedding_dimension
-        
-        # Use Hugging Face Inference API for embeddings
-        client = InferenceClient(token=self.hf_token)
-        embedding = client.feature_extraction(text, model=self.hf_embedding_model)
-        
-        # Convert to list
-        embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
-        
-        # Flatten if needed (HF returns 2D array)
-        if isinstance(embedding_list[0], list):
-            embedding_list = embedding_list[0]
-        
-        logger.debug(f"✅ Generated Hugging Face embedding with dimension: {len(embedding_list)}")
-        return embedding_list
-            
-    except Exception as e:
-        logger.error(f"❌ Error generating Hugging Face embedding: {str(e)}")
-        return [0.0] * self.embedding_dimension
     
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
