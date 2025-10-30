@@ -32,8 +32,8 @@ class GeminiService:
     
         # Add Hugging Face for embeddings only
         self.hf_token = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
-        self.hf_embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # Add this line
-        self.embedding_dimension = 384  # Keep this as is
+        self.hf_embedding_model = "sentence-transformers/all-mpnet-base-v2"  # Add this line
+        self.embedding_dimension = 768 # Keep this as is
     
         # Initialize the service
         self.initialize()
