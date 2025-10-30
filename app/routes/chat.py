@@ -196,6 +196,40 @@ async def add_web_chat_subscription(client_id: int, months: int, db: Session = D
 @router.get("/api/chat/health")
 async def health_check():
     """Health check endpoint for the chat service"""
+@router.get("/bots/{client_id}/embed-code")
+async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
+    """Generate embed code for web chat widget"""
+    try:
+        from app.models import Client
+        
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        
+        # Generate unique ID if not exists
+        if not client.unique_id:
+            client.unique_id = str(uuid.uuid4())
+            db.commit()
+            db.refresh(client)
+        
+        # Generate the actual embed code
+        embed_code = f"""
+        <script>
+          (function() {{
+            var script = document.createElement('script');
+            script.src = "https://botcore-z6j0.onrender.com/static/js/chat-widget.js";
+            script.defer = true;
+            script.setAttribute('data-bot-id', '{client.unique_id}');
+            document.head.appendChild(script);
+          }})();
+        </script>
+        """
+        
+        return {"embed_code": embed_code.strip()}
+        
+    except Exception as e:
+        logger.error(f"Error generating embed code: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to generate embed code")
     try:
         # Check if required services are available
         gemini_health = await gemini_service.validate_api_key()
