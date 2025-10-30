@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Assistant - {{ client.business_name if client else 'Our Business' }}</title>
+    
+    <!-- OwnBot Chat Widget Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', path='css/chat-widget.css') }}">
+    
+    <!-- Additional styles for standalone chat page -->
+    <style>
+        /* Reset and base styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        /* Standalone chat container */
+        .ownbot-standalone-container {
+            width: 100%;
+            max-width: 800px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Enhanced header for standalone version */
+        .ownbot-standalone-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 24px 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+
+        .ownbot-standalone-brand {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .ownbot-standalone-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .ownbot-standalone-info h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .ownbot-standalone-info p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .ownbot-standalone-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .ownbot-standalone-btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 18px;
+        }
+
+        .ownbot-standalone-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        /* Enhanced messages area for standalone */
+        .ownbot-standalone-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            background: #f8f9fa;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Enhanced input area for standalone */
+        .ownbot-standalone-input-area {
+            padding: 24px 30px;
+            background: white;
+            border-top: 1px solid #e9ecef;
+            display: flex;
+            gap: 16px;
+            flex-shrink: 0;
+        }
+
+        .ownbot-standalone-input {
+            flex: 1;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            padding: 16px 24px;
+            outline: none;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            resize: none;
+            max-height: 120px;
+            min-height: 56px;
+            font-family: inherit;
+        }
+
+        .ownbot-standalone-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .ownbot-standalone-send-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 20px;
+        }
+
+        .ownbot-standalone-send-btn:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .ownbot-standalone-send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Enhanced welcome message for standalone */
+        .ownbot-standalone-welcome {
+            text-align: center;
+            padding: 40px 30px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 16px;
+            margin-bottom: 20px;
+            border: 2px dashed #dee2e6;
+        }
+
+        .ownbot-standalone-welcome-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            color: #667eea;
+        }
+
+        .ownbot-standalone-welcome-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #2d3748;
+        }
+
+        .ownbot-standalone-welcome-text {
+            font-size: 16px;
+            color: #6c757d;
+            line-height: 1.6;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        /* Quick suggestions for standalone */
+        .ownbot-standalone-suggestions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .ownbot-standalone-suggestion {
+            background: white;
+            border: 2px solid #e9ecef;
+            padding: 16px 20px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .ownbot-standalone-suggestion:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Loading state for standalone */
+        .ownbot-standalone-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .ownbot-standalone-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Error state for standalone */
+        .ownbot-standalone-error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #f5c6cb;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        /* Responsive design for standalone */
+        @media (max-width: 768px) {
+            .ownbot-standalone-container {
+                height: 100vh;
+                border-radius: 0;
+                max-width: none;
+            }
+            
+            body {
+                padding: 0;
+            }
+            
+            .ownbot-standalone-header {
+                padding: 20px;
+            }
+            
+            .ownbot-standalone-info h1 {
+                font-size: 20px;
+            }
+            
+            .ownbot-standalone-messages {
+                padding: 20px;
+            }
+            
+            .ownbot-standalone-input-area {
+                padding: 20px;
+            }
+            
+            .ownbot-standalone-suggestions {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Dark mode support for standalone */
+        @media (prefers-color-scheme: dark) {
+            .ownbot-standalone-container {
+                background: #1a1a1a;
+                color: #ffffff;
+            }
+            
+            .ownbot-standalone-messages {
+                background: #2d2d2d;
+            }
+            
+            .ownbot-standalone-input-area {
+                background: #1a1a1a;
+                border-color: #404040;
+            }
+            
+            .ownbot-standalone-input {
+                background: #2d2d2d;
+                border-color: #404040;
+                color: #ffffff;
+            }
+            
+            .ownbot-standalone-suggestion {
+                background: #333333;
+                border-color: #404040;
+                color: #ffffff;
+            }
+            
+            .ownbot-standalone-welcome {
+                background: #2d2d2d;
+                border-color: #404040;
+            }
+            
+            .ownbot-standalone-welcome-title {
+                color: #ffffff;
+            }
+        }
+
+        /* Accessibility improvements */
+        .ownbot-standalone-btn:focus,
+        .ownbot-standalone-send-btn:focus,
+        .ownbot-standalone-suggestion:focus {
+            outline: 3px solid #667eea;
+            outline-offset: 2px;
+        }
+
+        /* High contrast mode */
+        @media (prefers-contrast: high) {
+            .ownbot-standalone-container {
+                border: 3px solid #000;
+            }
+            
+            .ownbot-standalone-header {
+                background: #000;
+            }
+            
+            .ownbot-standalone-input {
+                border-width: 3px;
+            }
+        }
+
+        /* Reduced motion */
+        @media (prefers-reduced-motion: reduce) {
+            .ownbot-standalone-btn,
+            .ownbot-standalone-send-btn,
+            .ownbot-standalone-suggestion {
+                transition: none;
+            }
+            
+            .ownbot-standalone-spinner {
+                animation: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Standalone Chat Container -->
+    <div class="ownbot-standalone-container" id="ownbotStandaloneChat">
+        <!-- Header -->
+        <div class="ownbot-standalone-header">
+            <div class="ownbot-standalone-brand">
+                <div class="ownbot-standalone-avatar">
+                    {{ (client.business_name[0] if client and client.business_name else 'A') | upper }}
+                </div>
+                <div class="ownbot-standalone-info">
+                    <h1 id="businessName">{{ client.business_name if client else 'AI Assistant' }}</h1>
+                    <p id="statusText">
+                        <span class="ownbot-status-online"></span>
+                        AI Assistant • Online
+                    </p>
+                </div>
+            </div>
+            <div class="ownbot-standalone-actions">
+                <button class="ownbot-standalone-btn" onclick="clearChat()" title="Clear conversation">
+                    🗑️
+                </button>
+                <button class="ownbot-standalone-btn" onclick="toggleTheme()" title="Toggle theme">
+                    🌙
+                </button>
+            </div>
+        </div>
+
+        <!-- Messages Container -->
+        <div class="ownbot-standalone-messages" id="messagesContainer">
+            <!-- Welcome message -->
+            <div class="ownbot-standalone-welcome">
+                <div class="ownbot-standalone-welcome-icon">🤖</div>
+                <h2 class="ownbot-standalone-welcome-title" id="welcomeTitle">
+                    Hello! I'm your AI Assistant
+                </h2>
+                <p class="ownbot-standalone-welcome-text" id="welcomeText">
+                    I can answer questions about {{ client.business_name if client else 'our business' }} based on the knowledge base. 
+                    Feel free to ask me anything!
+                </p>
+                
+                <!-- Quick suggestions -->
+                <div class="ownbot-standalone-suggestions" id="quickSuggestions">
+                    <div class="ownbot-standalone-suggestion" onclick="sendSuggestion('What are your business hours?')">
+                        What are your business hours?
+                    </div>
+                    <div class="ownbot-standalone-suggestion" onclick="sendSuggestion('What services do you offer?')">
+                        What services do you offer?
+                    </div>
+                    <div class="ownbot-standalone-suggestion" onclick="sendSuggestion('How can I contact you?')">
+                        How can I contact you?
+                    </div>
+                    <div class="ownbot-standalone-suggestion" onclick="sendSuggestion('Tell me about your company')">
+                        Tell me about your company
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Typing Indicator (Hidden by default) -->
+        <div class="ownbot-typing-indicator" id="typingIndicator" style="display: none;">
+            <div class="ownbot-typing-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <span>AI is thinking...</span>
+        </div>
+
+        <!-- Input Area -->
+        <div class="ownbot-standalone-input-area">
+            <textarea 
+                class="ownbot-standalone-input" 
+                id="messageInput"
+                placeholder="Type your message here..."
+                rows="1"
+                onkeydown="handleKeyDown(event)"
+            ></textarea>
+            <button class="ownbot-standalone-send-btn" id="sendButton" onclick="sendMessage()">
+                📤
+            </button>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script>
+        // Configuration
+        const config = {
+            clientId: '{{ client_id }}',
+            apiBaseUrl: window.location.origin,
+            businessName: '{{ client.business_name if client else "Our Business" }}',
+            welcomeMessage: '{{ client.webchat_welcome_message if client and client.webchat_welcome_message else "Hello! How can I help you today?" }}'
+        };
+
+        // State management
+        let state = {
+            messages: [],
+            sessionId: null,
+            isTyping: false,
+            theme: 'light'
+        };
+
+        // DOM elements
+        const messagesContainer = document.getElementById('messagesContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const quickSuggestions = document.getElementById('quickSuggestions');
+        const welcomeTitle = document.getElementById('welcomeTitle');
+        const welcomeText = document.getElementById('welcomeText');
+
+        // Initialize chat
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('OwnBot Standalone Chat initialized for:', config.businessName);
+            
+            // Set welcome message
+            welcomeTitle.textContent = `Hello! I'm ${config.businessName}'s AI Assistant`;
+            welcomeText.textContent = `I can answer questions about ${config.businessName} based on the knowledge base. Feel free to ask me anything!`;
+            
+            // Load previous conversation
+            loadConversation();
+            
+            // Auto-focus input
+            messageInput.focus();
+            
+            // Initialize auto-resize for textarea
+            messageInput.addEventListener('input', autoResizeTextarea);
+        });
+
+        // Send message function
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Clear input and disable send button
+            messageInput.value = '';
+            sendButton.disabled = true;
+            autoResizeTextarea();
+
+            // Add user message to chat
+            addMessage(message, 'user');
+            
+            // Hide quick suggestions after first message
+            if (quickSuggestions.style.display !== 'none') {
+                quickSuggestions.style.display = 'none';
+            }
+
+            // Show typing indicator
+            showTypingIndicator();
+
+            try {
+                // Prepare request payload
+                const payload = {
+                    message: message,
+                    session_id: state.sessionId,
+                    client_id: config.clientId,
+                    conversation_history: state.messages.slice(-5) // Last 5 messages for context
+                };
+
+                // Send to backend
+                const response = await fetch(`${config.apiBaseUrl}/api/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Hide typing indicator
+                hideTypingIndicator();
+
+                if (data.success) {
+                    // Update session ID
+                    if (data.session_id) {
+                        state.sessionId = data.session_id;
+                    }
+
+                    // Add AI response to chat
+                    addMessage(data.response, 'bot', data.sources);
+                    
+                    // Save conversation
+                    saveConversation();
+                } else {
+                    addMessage(
+                        `I apologize, but I'm having trouble processing your request. Please try again later.`,
+                        'bot'
+                    );
+                }
+
+            } catch (error) {
+                console.error('Error sending message:', error);
+                hideTypingIndicator();
+                addMessage(
+                    `I'm experiencing connection issues. Please check your internet connection and try again.`,
+                    'bot'
+                );
+            }
+
+            // Re-enable send button
+            sendButton.disabled = false;
+        }
+
+        // Send suggestion (quick question)
+        function sendSuggestion(question) {
+            messageInput.value = question;
+            sendMessage();
+        }
+
+        // Add message to chat
+        function addMessage(text, sender, sources = null) {
+            const messageElement = document.createElement('div');
+            messageElement.className = `ownbot-message ownbot-message-${sender}`;
+            
+            let messageContent = text;
+            
+            // Add sources if available (for bot messages)
+            if (sender === 'bot' && sources && sources.length > 0) {
+                messageContent += `\n\n<small style="opacity: 0.7; font-size: 12px;">Sources: ${sources.join(', ')}</small>`;
+            }
+            
+            messageElement.innerHTML = messageContent.replace(/\n/g, '<br>');
+            
+            // Add timestamp
+            const timestamp = document.createElement('div');
+            timestamp.className = 'ownbot-message-time';
+            timestamp.textContent = new Date().toLocaleTimeString([], { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+            messageElement.appendChild(timestamp);
+            
+            messagesContainer.appendChild(messageElement);
+            
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            // Add to state
+            state.messages.push({
+                text: text,
+                sender: sender,
+                timestamp: new Date().toISOString(),
+                sources: sources
+            });
+        }
+
+        // Show typing indicator
+        function showTypingIndicator() {
+            state.isTyping = true;
+            typingIndicator.style.display = 'flex';
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Hide typing indicator
+        function hideTypingIndicator() {
+            state.isTyping = false;
+            typingIndicator.style.display = 'none';
+        }
+
+        // Handle Enter key (with Shift for new line)
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Auto-resize textarea
+        function autoResizeTextarea() {
+            messageInput.style.height = 'auto';
+            messageInput.style.height = Math.min(messageInput.scrollHeight, 120) + 'px';
+        }
+
+        // Clear chat history
+        function clearChat() {
+            if (confirm('Are you sure you want to clear the conversation?')) {
+                // Remove all messages except welcome
+                const messages = messagesContainer.querySelectorAll('.ownbot-message');
+                messages.forEach(msg => msg.remove());
+                
+                // Reset state
+                state.messages = [];
+                state.sessionId = null;
+                
+                // Show quick suggestions again
+                quickSuggestions.style.display = 'grid';
+                
+                // Clear localStorage
+                localStorage.removeItem(`ownbot_conversation_${config.clientId}`);
+                
+                console.log('Chat cleared');
+            }
+        }
+
+        // Toggle theme
+        function toggleTheme() {
+            state.theme = state.theme === 'light' ? 'dark' : 'light';
+            document.body.setAttribute('data-theme', state.theme);
+            
+            // Save theme preference
+            localStorage.setItem(`ownbot_theme_${config.clientId}`, state.theme);
+        }
+
+        // Save conversation to localStorage
+        function saveConversation() {
+            try {
+                const conversationData = {
+                    messages: state.messages,
+                    sessionId: state.sessionId,
+                    timestamp: new Date().toISOString()
+                };
+                localStorage.setItem(`ownbot_conversation_${config.clientId}`, JSON.stringify(conversationData));
+            } catch (error) {
+                console.error('Error saving conversation:', error);
+            }
+        }
+
+        // Load conversation from localStorage
+        function loadConversation() {
+            try {
+                const saved = localStorage.getItem(`ownbot_conversation_${config.clientId}`);
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    state.messages = data.messages || [];
+                    state.sessionId = data.sessionId;
+                    
+                    // Reload messages
+                    state.messages.forEach(msg => {
+                        addMessage(msg.text, msg.sender, msg.sources);
+                    });
+                    
+                    // Hide quick suggestions if there are previous messages
+                    if (state.messages.length > 0) {
+                        quickSuggestions.style.display = 'none';
+                    }
+                }
+                
+                // Load theme preference
+                const savedTheme = localStorage.getItem(`ownbot_theme_${config.clientId}`);
+                if (savedTheme) {
+                    state.theme = savedTheme;
+                    document.body.setAttribute('data-theme', state.theme);
+                }
+            } catch (error) {
+                console.error('Error loading conversation:', error);
+            }
+        }
+
+        // Error handling for failed API calls
+        window.addEventListener('error', function(e) {
+            console.error('Global error:', e.error);
+        });
+
+        // Online/offline detection
+        window.addEventListener('online', function() {
+            console.log('Connection restored');
+            // Could show a notification here
+        });
+
+        window.addEventListener('offline', function() {
+            console.log('Connection lost');
+            addMessage(
+                "⚠️ You appear to be offline. Please check your internet connection.",
+                'system'
+            );
+        });
+
+        // Export functions to global scope for embed compatibility
+        window.OwnBotStandalone = {
+            sendMessage: sendMessage,
+            clearChat: clearChat,
+            toggleTheme: toggleTheme
+        };
+    </script>
+</body>
+</html>
