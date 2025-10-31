@@ -369,24 +369,34 @@
         // Generate embed code functionality
         // Generate embed code functionality
 async function generateEmbedCode(clientId) {
+    const embedElement = document.getElementById(`embed-code-${clientId}`);
+    const copyBtn = document.getElementById(`copy-btn-${clientId}`);
+    
+    // Show loading
+    embedElement.textContent = 'Generating embed code...';
+    
     try {
-        const response = await fetch(`/api/chat/bots/${clientId}/embed-code`);
+        const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
         const result = await response.json();
-    
-        if (response.ok) {
-            const embedElement = document.getElementById(`embed-code-${clientId}`);
-            const copyBtn = document.getElementById(`copy-btn-${clientId}`);
-    
+        
+        if (response.ok && result.success) {
             embedElement.textContent = result.embed_code;
             copyBtn.style.display = 'inline-block';
-    
             alert('✅ Embed code generated successfully!');
         } else {
-            alert('❌ Error generating embed code: ' + result.detail);
+            embedElement.textContent = 'Error generating embed code';
+            alert('❌ Error: ' + (result.detail || 'Unknown error'));
         }
     } catch (error) {
-        console.error('Error generating embed code:', error);
-        alert('Error generating embed code. Please try again.');
+        console.error('Error:', error);
+        embedElement.textContent = 'Error: ' + error.message;
+        alert('❌ Error generating embed code. Please try again.');
     }
 }
 
@@ -625,45 +635,6 @@ async function generateEmbedCode(clientId) {
             {% endif %}
         });
     </script>
-    <script>
-async function generateEmbedCode(clientId) {
-    const button = event.target;
-    button.disabled = true;
-    button.textContent = 'Generating...';
     
-    try {
-        const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            // Show the embed code in the textarea
-            const embedCodeElement = document.getElementById('embedCodeDisplay');
-            if (embedCodeElement) {
-                embedCodeElement.value = data.embed_code;
-                embedCodeElement.style.display = 'block';
-            }
-            
-            // Show chatbot URL
-            const urlElement = document.getElementById('chatbotUrl');
-            if (urlElement) {
-                urlElement.value = data.chatbot_url;
-            }
-            
-            alert('Embed code generated successfully!');
-        }
-    } catch (error) {
-        alert('Error: ' + error.message);
-    } finally {
-        button.disabled = false;
-        button.textContent = 'Generate Embed Code';
-    }
-}
-    </script>
 </body>
 </html>
