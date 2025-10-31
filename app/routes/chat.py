@@ -216,7 +216,7 @@ async def health_check():
         )
 
 @router.get("/api/chat/bots/{client_id}/embed-code")
-async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
+async def get_embed_code(client_id: str, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
     try:
         from app.models import Client
