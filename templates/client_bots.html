@@ -367,27 +367,30 @@
     <script>
         // Edit field functionality
         // Generate embed code functionality
-        async function generateEmbedCode(clientId) {
-            try {
-                const response = await fetch(`/api/chat/bots/${clientId}/embed-code`);
-                const result = await response.json();
-        
-                if (response.ok) {
-                    const embedElement = document.getElementById(`embed-code-${clientId}`);
-                    const copyBtn = document.getElementById(`copy-btn-${clientId}`);
-            
-                    embedElement.textContent = result.embed_code;
-                    copyBtn.style.display = 'inline-block';
-            
-                    alert('✅ Embed code generated successfully!');
-                } else {
-                    alert('❌ Error generating embed code: ' + result.detail);
-                }
-            } catch (error) {
-                console.error('Error generating embed code:', error);
-                alert('Error generating embed code. Please try again.');
+        // Generate embed code functionality
+async function generateEmbedCode(clientId) {
+    try {
+        const response = await fetch(`/api/chat/bots/${clientId}/embed-code`);
+        const result = await response.json();
+    
+        if (response.ok) {
+            const embedElement = document.getElementById(`embed-code-${clientId}`);
+            const copyBtn = document.getElementById(`copy-btn-${clientId}`);
+    
+            embedElement.textContent = result.embed_code;
+            copyBtn.style.display = 'inline-block';
+    
+            alert('✅ Embed code generated successfully!');
+        } else {
+            alert('❌ Error generating embed code: ' + result.detail);
+        }
+    } catch (error) {
+        console.error('Error generating embed code:', error);
+        alert('Error generating embed code. Please try again.');
     }
 }
+
+// Edit field functionality
 
 // Edit field functionality
         function editField(fieldId, fieldType) {
