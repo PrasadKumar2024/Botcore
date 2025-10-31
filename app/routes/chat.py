@@ -215,11 +215,12 @@ async def health_check():
             content={"status": "unhealthy", "error": str(e)}
         )
 
-@router.get("/api/chat/bots/{client_id}/embed-code")
-async def get_embed_code(client_id: str, db: Session = Depends(get_db)):
+@router.post("/api/clients/{client_id}/generate-embed-code")
+async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
     try:
         from app.models import Client
+        import uuid
         
         client = db.query(Client).filter(Client.id == client_id).first()
         if not client:
@@ -227,25 +228,24 @@ async def get_embed_code(client_id: str, db: Session = Depends(get_db)):
         
         # Generate unique ID if not exists
         if not client.unique_id:
-            client.unique_id = str(uuid.uuid4())
+            client.unique_id = f"{client.business_name.lower().replace(' ', '-')}-{uuid.uuid4().hex[:8]}"
             db.commit()
             db.refresh(client)
         
-        # Generate the actual embed code
-        embed_code = f"""
-        <script>
-          (function() {{
-            var script = document.createElement('script');
-            script.src = "https://botcore-0n2z.onrender.com/static/js/chat-widget.js";
-            script.defer = true;
-            script.setAttribute('data-bot-id', '{client.unique_id}');
-            document.head.appendChild(script);
-          }})();
-        </script>
-        """
+        # Generate embed code using chat_service
+        from app.services.chat_service import chat_service
+        embed_code = await chat_service.generate_embed_code(client)
         
-        return {"embed_code": embed_code.strip()}
+        # Save to database
+        client.embed_code = embed_code
+        db.commit()
+        
+        return {
+            "success": True,
+            "embed_code": embed_code,
+            "chatbot_url": client.chatbot_url or f"https://botcore-z6j0.onrender.com/chat/{client.unique_id}"
+        }
         
     except Exception as e:
         logger.error(f"Error generating embed code: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to generate embed code")
+        raise HTTPException(status_code=500, detail=str(e))
