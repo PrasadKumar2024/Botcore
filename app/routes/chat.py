@@ -215,7 +215,7 @@ async def health_check():
             content={"status": "unhealthy", "error": str(e)}
         )
 
-@router.get("/bots/{client_id}/embed-code")
+@router.get("/api/chat/bots/{client_id}/embed-code")
 async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
     try:
