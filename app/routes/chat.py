@@ -125,14 +125,14 @@ async def activate_client_web_chat(client_id: int, db: Session = Depends(get_db)
             <script>
                 (function() {{
                     var script = document.createElement('script');
-                    script.src = 'https://botcore-z6j0.onrender.com/static/js/chat-widget.js?client_id={unique_id}';
+                    script.src = 'https://botcore-0n2z.onrender.com/static/js/chat-widget.js?client_id={unique_id}';
                     script.async = true;
                     document.head.appendChild(script);
                 }})();
             </script>
             '''
             client.embed_code = embed_code.strip()
-            client.chatbot_url = f"https://botcore-z6j0.onrender.com/chat/{unique_id}"
+            client.chatbot_url = f"https://botcore-0n2z.onrender.com/chat/{unique_id}"
             client.unique_id = unique_id
         
         client.web_chat_active = True
@@ -196,6 +196,25 @@ async def add_web_chat_subscription(client_id: int, months: int, db: Session = D
 @router.get("/api/chat/health")
 async def health_check():
     """Health check endpoint for the chat service"""
+    try:
+        # Check if required services are available
+        gemini_health = await gemini_service.validate_api_key()
+        pinecone_health = await pinecone_service.check_health()
+        
+        return {
+            "status": "healthy",
+            "services": {
+                "gemini": "available" if gemini_health else "unavailable",
+                "pinecone": pinecone_health.get("status", "unknown")
+            }
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unhealthy", "error": str(e)}
+        )
+
 @router.get("/bots/{client_id}/embed-code")
 async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
@@ -217,7 +236,7 @@ async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
         <script>
           (function() {{
             var script = document.createElement('script');
-            script.src = "https://botcore-z6j0.onrender.com/static/js/chat-widget.js";
+            script.src = "https://botcore-0n2z.onrender.com/static/js/chat-widget.js";
             script.defer = true;
             script.setAttribute('data-bot-id', '{client.unique_id}');
             document.head.appendChild(script);
@@ -230,21 +249,3 @@ async def get_embed_code(client_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error generating embed code: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to generate embed code")
-    try:
-        # Check if required services are available
-        gemini_health = await gemini_service.validate_api_key()
-        pinecone_health = await pinecone_service.check_health()
-        
-        return {
-            "status": "healthy",
-            "services": {
-                "gemini": "available" if gemini_health else "unavailable",
-                "pinecone": pinecone_health.get("status", "unknown")
-            }
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "unhealthy", "error": str(e)}
-        )
