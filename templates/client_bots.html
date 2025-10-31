@@ -625,5 +625,45 @@ async function generateEmbedCode(clientId) {
             {% endif %}
         });
     </script>
+    <script>
+async function generateEmbedCode(clientId) {
+    const button = event.target;
+    button.disabled = true;
+    button.textContent = 'Generating...';
+    
+    try {
+        const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Show the embed code in the textarea
+            const embedCodeElement = document.getElementById('embedCodeDisplay');
+            if (embedCodeElement) {
+                embedCodeElement.value = data.embed_code;
+                embedCodeElement.style.display = 'block';
+            }
+            
+            // Show chatbot URL
+            const urlElement = document.getElementById('chatbotUrl');
+            if (urlElement) {
+                urlElement.value = data.chatbot_url;
+            }
+            
+            alert('Embed code generated successfully!');
+        }
+    } catch (error) {
+        alert('Error: ' + error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Generate Embed Code';
+    }
+}
+    </script>
 </body>
 </html>
