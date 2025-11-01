@@ -313,7 +313,7 @@ def get_client_by_phone_number(db: Session, phone_number: str) -> Optional[Clien
         return None
     
     return phone.client
-
+'''
 def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
     Deactivate a client (soft delete)
@@ -339,7 +339,7 @@ def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
    except Exception as e:
         db.rollback()
         logger.error(f"Error deactivating client: {str(e)}")
-        raise
+        raise '''
 
 def regenerate_embed_code(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
