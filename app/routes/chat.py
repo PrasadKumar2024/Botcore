@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from app.database import get_db
-#from app.services import gemini_service, pinecone_service, subscription_service
+from app.services import gemini_service, pinecone_service #subscription_service
 from app.models import Client, Subscription
 from app.schemas import ChatRequest, ChatResponse
 from app.utils.date_utils import check_subscription_active
