@@ -358,7 +358,7 @@ def regenerate_embed_code(db: Session, client_id: uuid.UUID) -> Optional[Client]
         
         logger.info(f"Regenerated embed code for client: {client_id}")
         return client
-        
+    
     except Exception as e:
         db.rollback()
         logger.error(f"Error regenerating embed code for client {client_id}: {str(e)}")
