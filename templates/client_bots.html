@@ -376,7 +376,7 @@ async function generateEmbedCode(clientId) {
     embedElement.textContent = 'Generating embed code...';
     
     try {
-        const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
+        const response = await fetch(`/api/clients/${clientId}/regenerate-embed-code`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
