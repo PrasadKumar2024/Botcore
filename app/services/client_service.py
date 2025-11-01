@@ -14,6 +14,119 @@ from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate
 # Set up logging
 logger = logging.getLogger(__name__)
 
+class ClientService:
+    """Client service with static methods"""
+    
+    @staticmethod
+    def get_all_clients(db: Session) -> List[Client]:
+        return db.query(Client).all()
+    
+    @staticmethod
+    def get_client(db: Session, client_id: str) -> Optional[Client]:
+        return db.query(Client).filter(Client.id == client_id).first()
+    
+    @staticmethod
+    def get_phone_number(db: Session, client_id: str) -> Optional[PhoneNumber]:
+        return db.query(PhoneNumber).filter(PhoneNumber.client_id == client_id).first()
+    
+    @staticmethod
+    def create_client(db: Session, client_data: ClientCreate) -> Client:
+        return create_client(db, client_data)
+    
+    @staticmethod
+    def get_client_documents(db: Session, client_id: str) -> List[Document]:
+        return db.query(Document).filter(Document.client_id == client_id).all()
+    
+    @staticmethod
+    def get_client_subscriptions(db: Session, client_id: str) -> List[Subscription]:
+        return db.query(Subscription).filter(Subscription.client_id == client_id).all()
+    
+    @staticmethod
+    def get_whatsapp_profile(db: Session, client_id: str):
+        from app.models import WhatsAppProfile
+        return db.query(WhatsAppProfile).filter(WhatsAppProfile.client_id == client_id).first()
+    
+    @staticmethod
+    def update_client(db: Session, client_id: str, business_name: str, business_type: str) -> Client:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if client:
+            client.business_name = business_name
+            client.business_type = business_type
+            client.updated_at = datetime.utcnow()
+            db.commit()
+            db.refresh(client)
+        return client
+    
+    @staticmethod
+    def delete_client(db: Session, client_id: str):
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if client:
+            db.delete(client)
+            db.commit()
+    
+    @staticmethod
+    def update_client_status(db: Session, client_id: str, status: str):
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if client:
+            client.status = status
+            client.updated_at = datetime.utcnow()
+            db.commit()
+    
+    @staticmethod
+    def activate_subscription(db: Session, client_id: str, bot_type: str, months: int) -> Subscription:
+        subscription = db.query(Subscription).filter(
+            Subscription.client_id == client_id,
+            Subscription.bot_type == bot_type
+        ).first()
+        
+        if not subscription:
+            subscription = Subscription(
+                client_id=client_id,
+                bot_type=bot_type,
+                is_active=True,
+                start_date=datetime.utcnow(),
+                expiry_date=datetime.utcnow() + relativedelta(months=months)
+            )
+            db.add(subscription)
+        else:
+            if subscription.expiry_date and subscription.expiry_date > datetime.utcnow():
+                subscription.expiry_date += relativedelta(months=months)
+            else:
+                subscription.expiry_date = datetime.utcnow() + relativedelta(months=months)
+            subscription.is_active = True
+        
+        db.commit()
+        db.refresh(subscription)
+        return subscription
+    
+    @staticmethod
+    def deactivate_subscription(db: Session, client_id: str, bot_type: str):
+        subscription = db.query(Subscription).filter(
+            Subscription.client_id == client_id,
+            Subscription.bot_type == bot_type
+        ).first()
+        if subscription:
+            subscription.is_active = False
+            db.commit()
+    
+    @staticmethod
+    def update_whatsapp_profile(db: Session, client_id: str, business_name: str, address: str):
+        from app.models import WhatsAppProfile
+        profile = db.query(WhatsAppProfile).filter(WhatsAppProfile.client_id == client_id).first()
+        if not profile:
+            profile = WhatsAppProfile(
+                client_id=client_id,
+                business_name=business_name,
+                address=address
+            )
+            db.add(profile)
+        else:
+            profile.business_name = business_name
+            profile.address = address
+        db.commit()
+        db.refresh(profile)
+        return profile
+
 def generate_embed_code(client_id: uuid.UUID) -> Dict[str, str]:
     """
     Generate unique embed code and chatbot URL for a client
