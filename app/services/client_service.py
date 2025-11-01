@@ -336,6 +336,10 @@ def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
         
         logger.info(f"Deactivated client: {client_id}")
         return client
+   except Exception as e:
+        db.rollback()
+        logger.error(f"Error deactivating client: {str(e)}")
+        raise
 
 def regenerate_embed_code(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
