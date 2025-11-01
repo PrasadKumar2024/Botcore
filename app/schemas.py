@@ -4,6 +4,20 @@ from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 import uuid
+from pydantic import BaseModel
+from typing import Optional, List, Dict
+
+class ChatRequest(BaseModel):
+    message: str
+    client_id: str
+    conversation_id: Optional[str] = None
+    conversation_history: Optional[List[Dict[str, str]]] = []
+
+class ChatResponse(BaseModel):
+    success: bool
+    response: str
+    conversation_id: str
+    client_id: str
 
 # Enums for business types and status
 class BusinessType(str, Enum):
