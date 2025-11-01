@@ -21,6 +21,7 @@ from sqlalchemy import text
 # Import AI Services
 from app.services.gemini_service import GeminiService
 from app.services.document_service import DocumentService
+from app.routes.chat import router as chat_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -32,6 +33,7 @@ app = FastAPI(
 # Initialize AI Services
 gemini_service = GeminiService()
 document_service = DocumentService()
+app.include_router(chat_router)
 
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads")
