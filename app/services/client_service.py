@@ -5,7 +5,7 @@ from datetime import datetime, date
 from typing import List, Optional, Dict, Any
 import logging
 import uuid
-
+from dateutil.relativedelta import relativedelta 
 from app.models import Client, Subscription, PhoneNumber, Document
 from app.schemas import ClientCreate, ClientUpdate, SubscriptionCreate
 #from app.services.client_service import ClientService
@@ -314,7 +314,7 @@ def get_client_by_phone_number(db: Session, phone_number: str) -> Optional[Clien
         return None
     
     return phone.client
-'''
+
 def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
     Deactivate a client (soft delete)
@@ -337,10 +337,10 @@ def deactivate_client(db: Session, client_id: uuid.UUID) -> Optional[Client]:
         
         logger.info(f"Deactivated client: {client_id}")
         return client
-   except Exception as e:
+    except Exception as e:
         db.rollback()
         logger.error(f"Error deactivating client: {str(e)}")
-        raise '''
+        raise 
 
 def regenerate_embed_code(db: Session, client_id: uuid.UUID) -> Optional[Client]:
     """
