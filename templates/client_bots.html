@@ -273,8 +273,7 @@
                         
                         <div class="mb-3">
                             <strong>Embed Code:</strong>
-                            <div class="embed-code mt-1" id="embed-code-{{ client.id }}">Click "Generate Embed Code" to create embed script</div>
-                            <button class="btn btn-outline-primary mt-2" onclick="generateEmbedCode('{{ client.id }}')">Generate Embed Code</button>
+                            <div class="embed-code mt-1" id="embed-code-{{ client.id }}">Loading embed code automatically...</div>
                             <button class="btn btn-outline-secondary mt-2" onclick="copyToClipboard('embed-code-{{ client.id }}')" style="display: none;" id="copy-btn-{{ client.id }}">Copy Embed Code</button>
                             <small class="text-muted d-block mt-1">Add this code to your client's website</small>
                         </div>
@@ -365,44 +364,63 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Edit field functionality
-        // Generate embed code functionality
-        // Generate embed code functionality
-async function generateEmbedCode(clientId) {
-    const embedElement = document.getElementById(`embed-code-${clientId}`);
-    const copyBtn = document.getElementById(`copy-btn-${clientId}`);
-    
-    // Show loading
-    embedElement.textContent = 'Generating embed code...';
-    
-    try {
-        const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
+        // AUTOMATICALLY GENERATE EMBED CODE ON PAGE LOAD
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🟡 Page loaded, generating embed code automatically for client:', '{{ client.id }}');
+            generateEmbedCodeAutomatically('{{ client.id }}');
         });
-        
-        const result = await response.json();
-        
-        if (response.ok && result.success) {
-            embedElement.textContent = result.embed_code;
-            copyBtn.style.display = 'inline-block';
-            alert('✅ Embed code generated successfully!');
-        } else {
-            embedElement.textContent = 'Error generating embed code';
-            alert('❌ Error: ' + (result.detail || 'Unknown error'));
+
+        async function generateEmbedCodeAutomatically(clientId) {
+            console.log('🔴 Auto-generating embed code for client:', clientId);
+            
+            const embedElement = document.getElementById(`embed-code-${clientId}`);
+            const copyBtn = document.getElementById(`copy-btn-${clientId}`);
+            
+            if (!embedElement) {
+                console.error('❌ Embed element not found for ID:', `embed-code-${clientId}`);
+                return;
+            }
+            
+            if (!clientId) {
+                console.error('❌ clientId is null or undefined');
+                embedElement.textContent = 'Error: Client ID missing';
+                return;
+            }
+
+            try {
+                console.log('🟡 Making API request to:', `/api/clients/${clientId}/generate-embed-code`);
+                
+                const response = await fetch(`/api/clients/${clientId}/generate-embed-code`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                console.log('🟢 API Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                console.log('🟢 API Response data:', result);
+                
+                if (result.success) {
+                    embedElement.textContent = result.embed_code;
+                    copyBtn.style.display = 'inline-block';
+                    console.log('✅ Embed code generated successfully!');
+                } else {
+                    embedElement.textContent = 'Error: ' + (result.detail || 'Failed to generate embed code');
+                    console.error('❌ API Error:', result);
+                }
+            } catch (error) {
+                console.error('❌ Fetch Error:', error);
+                embedElement.textContent = 'Error: ' + error.message;
+            }
         }
-    } catch (error) {
-        console.error('Error:', error);
-        embedElement.textContent = 'Error: ' + error.message;
-        alert('❌ Error generating embed code. Please try again.');
-    }
-}
 
-// Edit field functionality
-
-// Edit field functionality
+        // Edit field functionality
         function editField(fieldId, fieldType) {
             const field = document.getElementById(fieldId);
             const currentValue = field.textContent;
@@ -461,22 +479,13 @@ async function generateEmbedCode(clientId) {
         // Copy to clipboard functionality
         function copyToClipboard(elementId) {
             const element = document.getElementById(elementId);
-            let text = element.value || element.textContent || element.innerText;
+            let text = element.textContent || element.innerText;
             
             // Clean up text for embed code
             text = text.replace(/\s+/g, ' ').trim();
             
             navigator.clipboard.writeText(text).then(function() {
-                // Show success feedback
-                const originalText = element.type === 'button' ? element.textContent : null;
-                if (element.type === 'button') {
-                    element.textContent = 'Copied!';
-                    setTimeout(() => {
-                        element.textContent = originalText;
-                    }, 2000);
-                } else {
-                    alert('✅ Copied to clipboard!');
-                }
+                alert('✅ Copied to clipboard!');
             }).catch(function(err) {
                 console.error('Could not copy text: ', err);
                 alert('Failed to copy. Please select and copy manually.');
