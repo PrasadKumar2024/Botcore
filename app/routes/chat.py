@@ -216,10 +216,10 @@ async def health_check():
         )
 
 @router.post("/api/clients/{client_id}/generate-embed-code")
-async def generate_embed_code(client_id: int, db: Session = Depends(get_db)):
+async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
     try:
-        client = db.query(Client).filter(Client.id == client_id).first()
+        client = db.query(Client).filter(Client.id == str(chat_request.client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
