@@ -274,7 +274,7 @@
                         <div class="mb-3">
                             <strong>Embed Code:</strong>
                             <div class="embed-code mt-1" id="embed-code-{{ client.id }}">Click "Generate Embed Code" to create embed script</div>
-                            <button class="btn btn-outline-primary mt-2" onclick="generateEmbedCode({{ client.id }})">Generate Embed Code</button>
+                            <button class="btn btn-outline-primary mt-2" onclick="generateEmbedCode('{{ client.id }}')">Generate Embed Code</button>
                             <button class="btn btn-outline-secondary mt-2" onclick="copyToClipboard('embed-code-{{ client.id }}')" style="display: none;" id="copy-btn-{{ client.id }}">Copy Embed Code</button>
                             <small class="text-muted d-block mt-1">Add this code to your client's website</small>
                         </div>
