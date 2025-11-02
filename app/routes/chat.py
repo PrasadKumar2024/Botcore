@@ -219,7 +219,7 @@ async def health_check():
 async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
     try:
-        client = db.query(Client).filter(Client.id == str(chat_request.client_id)).first()
+        client = db.query(Client).filter(Client.id == client_id)).first()
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -231,7 +231,7 @@ async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
             unique_id = client.unique_id
         
         # Your actual Render domain
-        BASE_URL = "https://botcore-0n2z.onrender.com"
+        BASE_URL = "https://botcore-z6j0.onrender.com"
         
         # Generate embed code
         embed_code = f'''<div id="chatbot-container-{unique_id}"></div>
