@@ -238,7 +238,7 @@ async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
 <script>
     (function() {{
         var script = document.createElement('script');
-        script.src = '{BASE_URL}/static/js/chat-widget.js?client_id={client_id}';
+        script.src = '{BASE_URL}/js/chat-widget.js?client_id={client_id}';
         script.async = true;
         document.head.appendChild(script);
     }})();
