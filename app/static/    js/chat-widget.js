@@ -5,10 +5,10 @@
 (function() {
     'use strict';
     
-    // Configuration
+    // Configuration - FIXED API URL
     const config = {
-        apiBaseUrl: window.ownBotConfig?.apiBaseUrl || 'https://ownbot.chat/api',
-        clientId: window.ownBotConfig?.clientId || null,
+        apiBaseUrl: window.ownBotConfig?.apiBaseUrl || 'https://botcore-z6j0.onrender.com/api',
+        clientId: window.ownBotConfig?.clientId || getClientIdFromScript(),
         widgetPosition: window.ownBotConfig?.position || 'bottom-right',
         primaryColor: window.ownBotConfig?.primaryColor || '#2563eb',
         secondaryColor: window.ownBotConfig?.secondaryColor || '#ffffff',
@@ -16,6 +16,19 @@
         autoOpen: window.ownBotConfig?.autoOpen !== undefined ? window.ownBotConfig.autoOpen : false,
         autoOpenDelay: window.ownBotConfig?.autoOpenDelay || 5000
     };
+    
+    // Get client ID from script URL parameter
+    function getClientIdFromScript() {
+        const scripts = document.getElementsByTagName('script');
+        for (let script of scripts) {
+            const src = script.src;
+            if (src && src.includes('chat-widget.js')) {
+                const url = new URL(src);
+                return url.searchParams.get('client_id');
+            }
+        }
+        return null;
+    }
     
     // State management
     let state = {
@@ -33,9 +46,12 @@
     // Initialize the widget
     function init() {
         if (!config.clientId) {
-            console.error('OwnBot: Client ID is required. Please set window.ownBotConfig.clientId');
+            console.error('OwnBot: Client ID is required. Please set window.ownBotConfig.clientId or pass it as URL parameter');
             return;
         }
+        
+        console.log('OwnBot: Initializing with client ID:', config.clientId);
+        console.log('OwnBot: API Base URL:', config.apiBaseUrl);
         
         createWidget();
         bindEvents();
@@ -163,6 +179,7 @@
                 transition: all 0.3s ease;
                 bottom: 70px;
                 right: 0;
+                pointer-events: none;
             }
             
             .ownbot-widget.ownbot-bottom-left .ownbot-chat-window {
@@ -173,6 +190,7 @@
             .ownbot-chat-window.ownbot-open {
                 opacity: 1;
                 transform: translateY(0);
+                pointer-events: all;
             }
             
             .ownbot-chat-window.ownbot-minimized {
@@ -422,8 +440,10 @@
             timestamp: new Date().toISOString()
         });
         
-        // Save to storage
-        saveConversationToStorage();
+        // Save to storage (only if not initial greeting)
+        if (state.messages.length > 1) {
+            saveConversationToStorage();
+        }
     }
     
     // Show typing indicator
@@ -441,7 +461,7 @@
         typingIndicator.style.display = 'none';
     }
     
-    // Send message to backend
+    // Send message to backend - FIXED ENDPOINT
     async function sendMessage() {
         const message = inputField.value.trim();
         
@@ -457,14 +477,21 @@
         showTypingIndicator();
         
         try {
-            // Prepare request payload
+            // Prepare request payload - FIXED FORMAT
             const payload = {
-                message,
-                conversationId: state.conversationId,
-                clientId: config.clientId
+                message: message,
+                client_id: config.clientId,
+                conversation_id: state.conversationId,
+                conversation_history: state.messages.slice(-10).map(msg => ({
+                    role: msg.sender === 'user' ? 'user' : 'assistant',
+                    content: msg.text
+                }))
             };
             
-            // Send to backend
+            console.log('OwnBot: Sending message to:', `${config.apiBaseUrl}/chat`);
+            console.log('OwnBot: Payload:', payload);
+            
+            // Send to backend - FIXED ENDPOINT
             const response = await fetch(`${config.apiBaseUrl}/chat`, {
                 method: 'POST',
                 headers: {
@@ -473,18 +500,23 @@
                 body: JSON.stringify(payload)
             });
             
+            console.log('OwnBot: Response status:', response.status);
+            
             if (!response.ok) {
+                const errorText = await response.text();
+                console.error('OwnBot: Server error:', errorText);
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             
             const data = await response.json();
+            console.log('OwnBot: Response data:', data);
             
             // Hide typing indicator
             hideTypingIndicator();
             
             // Update conversation ID if received
-            if (data.conversationId) {
-                state.conversationId = data.conversationId;
+            if (data.conversation_id) {
+                state.conversationId = data.conversation_id;
             }
             
             // Add bot response to chat
@@ -522,14 +554,29 @@
             
             if (data) {
                 const parsed = JSON.parse(data);
-                state.messages = parsed.messages || [];
-                state.conversationId = parsed.conversationId || null;
                 
-                // Render loaded messages
-                if (state.messages.length > 0) {
-                    state.messages.forEach(msg => {
-                        addMessage(msg.text, msg.sender);
-                    });
+                // Only load if conversation is recent (within 24 hours)
+                const timestamp = new Date(parsed.timestamp);
+                const now = new Date();
+                const hoursDiff = (now - timestamp) / (1000 * 60 * 60);
+                
+                if (hoursDiff < 24) {
+                    state.messages = parsed.messages || [];
+                    state.conversationId = parsed.conversationId || null;
+                    
+                    // Render loaded messages
+                    if (state.messages.length > 0) {
+                        state.messages.forEach(msg => {
+                            const messageElement = document.createElement('div');
+                            messageElement.className = `ownbot-message ownbot-message-${msg.sender}`;
+                            messageElement.textContent = msg.text;
+                            messageContainer.appendChild(messageElement);
+                        });
+                        messageContainer.scrollTop = messageContainer.scrollHeight;
+                    }
+                } else {
+                    // Clear old conversation
+                    clearConversationFromStorage();
                 }
             }
         } catch (error) {
