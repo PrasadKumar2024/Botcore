@@ -125,7 +125,7 @@ async def activate_client_web_chat(client_id: int, db: Session = Depends(get_db)
             <script>
                 (function() {{
                     var script = document.createElement('script');
-                    script.src = 'https://botcore-0n2z.onrender.com/static/js/chat-widget.js?client_id={unique_id}';
+                    script.src = 'https://botcore-z6j0.onrender.com/static/js/chat-widget.js?client_id={unique_id}';
                     script.async = true;
                     document.head.appendChild(script);
                 }})();
