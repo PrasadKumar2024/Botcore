@@ -86,6 +86,36 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+@app.get("/debug-static-files")
+async def debug_static_files():
+    import os
+    import pathlib
+    
+    # Check current directory
+    current_dir = pathlib.Path().absolute()
+    
+    # Check static directory
+    static_path = current_dir / "app" / "static" / "js"
+    
+    result = {
+        "current_directory": str(current_dir),
+        "static_js_path": str(static_path),
+        "static_dir_exists": static_path.exists(),
+        "files_in_static_js": []
+    }
+    
+    if static_path.exists():
+        result["files_in_static_js"] = os.listdir(static_path)
+    
+    # Check if file exists and get details
+    chat_widget_path = static_path / "chat-widget.js"
+    result["chat_widget_exists"] = chat_widget_path.exists()
+    
+    if chat_widget_path.exists():
+        result["chat_widget_size"] = chat_widget_path.stat().st_size
+        result["chat_widget_permissions"] = oct(chat_widget_path.stat().st_mode)[-3:]
+    
+    return result
 # Setup templates
 templates = Jinja2Templates(directory="templates")
 
