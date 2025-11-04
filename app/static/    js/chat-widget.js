@@ -1,6 +1,6 @@
 // app/static/js/chat-widget.js
 // OwnBot Web Chat Widget - No Email Collection
-// Version: 1.0.0
+// Version: 1.0.0vv
 
 (function() {
     'use strict';
