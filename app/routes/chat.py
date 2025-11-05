@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from app.database import get_db
 from app.services import gemini_service, pinecone_service #subscription_service
-from app.models import Client, Subscription
+from app.models import Client, Subscription, BotType
 from app.schemas import ChatRequest, ChatResponse
 from app.utils.date_utils import check_subscription_active
 
@@ -35,7 +35,7 @@ async def chat_endpoint(
         # Check if web chat subscription is active
         web_subscription = db.query(Subscription).filter(
             Subscription.client_id == chat_request.client_id,
-            Subscription.bot_type == "web"
+            Subscription.bot_type == BotType.WEB
         ).first()
         
         if not web_subscription or not check_subscription_active(web_subscription):
