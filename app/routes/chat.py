@@ -38,7 +38,7 @@ async def chat_endpoint(
             Subscription.bot_type == BotType.WEB
         ).first()
         
-        if not web_subscription or not check_subscription_active(web_subscription):
+        if not web_subscription or not check_subscription_active(web_subscription.expiry_date):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Web chat subscription is not active"
