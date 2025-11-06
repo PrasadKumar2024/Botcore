@@ -17,7 +17,7 @@ __all__ = [
    # "SubscriptionService",
   #  "TwilioService",
     "GeminiService",
-    "PineconeService", 
+    "PineconeService"
  #   "SpeechService",
    # "MultilingualService"
 ]
