@@ -45,7 +45,7 @@ async def chat_endpoint(
             )
         
         # Generate embedding for the query
-        query_embedding = await gemini_service.generate_embeddings([chat_request.message])
+        query_embedding = await gemini_service.generate_embedding_async([chat_request.message])
         
         if not query_embedding or len(query_embedding) == 0:
             raise HTTPException(
@@ -55,7 +55,7 @@ async def chat_endpoint(
         
         # Query Pinecone for relevant context
         query_result = await pinecone_service.query_embeddings(
-            query_embedding=query_embedding[0],
+            query_embedding=query_embedding,
             client_id=str(chat_request.client_id),
             top_k=5
         )
