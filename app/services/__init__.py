@@ -7,6 +7,8 @@ from .subscription_service import SubscriptionService
 from .twilio_service import TwilioService '''
 from .gemini_service import GeminiService
 from .pinecone_service import PineconeService
+from .gemini_service import gemini_service
+from .pinecone_service import pinecone_service
 #from .speech_service import SpeechService
 #from .multilingual_service import MultilingualService
 
@@ -16,8 +18,10 @@ __all__ = [
   #  "DocumentService", 
    # "SubscriptionService",
   #  "TwilioService",
-    "GeminiService",
-    "PineconeService"
+   # "GeminiService",
+   # "PineconeService"
+     "gemini_service",
+     "pinecone_service"
  #   "SpeechService",
    # "MultilingualService"
 ]
