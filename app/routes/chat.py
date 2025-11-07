@@ -54,9 +54,10 @@ async def chat_endpoint(
             )
         
         # Query Pinecone for relevant context
+        # Query Pinecone for relevant context
         query_result = await pinecone_service.search_similar_chunks(
-            query_embedding=query_embedding,
             client_id=str(chat_request.client_id),
+            query=chat_request.message,  # ✅ Changed from query_embedding to query
             top_k=5
         )
         
@@ -65,11 +66,12 @@ async def chat_endpoint(
             # Continue without context rather than failing completely
         
         # Extract context from query results
+        # Extract context from query results
         context = []
         if query_result.get("matches"):
             for match in query_result["matches"]:
-                if "metadata" in match and "text" in match["metadata"]:
-                    context.append(match["metadata"]["text"])
+                if "chunk_text" in match:  # ✅ Changed from metadata/text to chunk_text
+                    context.append(match["chunk_text"])
         
         # Generate response using Gemini
         response_result = await gemini_service.generate_response(
