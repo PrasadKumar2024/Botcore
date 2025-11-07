@@ -74,26 +74,22 @@ async def chat_endpoint(
                     context.append(match["chunk_text"])
         
         # Generate response using Gemini
-        response_result = await gemini_service.generate_response(
+         
+        # Generate response using Gemini
+        response_text = gemini_service.generate_contextual_response(
+            context="\n".join(context),  # Join context list into a single string
             query=chat_request.message,
-            context=context,
+            business_name=client.business_name, # Pass the client's name
             conversation_history=chat_request.conversation_history
-        )
-        
-        if not response_result["success"]:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to generate response: {response_result.get('error')}"
-            )
-        
-        # Return the successful response
+       )
+
+# Return the successful response
         return ChatResponse(
             success=True,
-            response=response_result["response"],
+            response=response_text,
             conversation_id=chat_request.conversation_id or generate_conversation_id(),
             client_id=chat_request.client_id
-        )
-        
+         )
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
