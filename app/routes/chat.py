@@ -54,7 +54,7 @@ async def chat_endpoint(
             )
         
         # Query Pinecone for relevant context
-        query_result = await pinecone_service.query_embeddings(
+        query_result = await pinecone_service.search_similar_chunks(
             query_embedding=query_embedding,
             client_id=str(chat_request.client_id),
             top_k=5
