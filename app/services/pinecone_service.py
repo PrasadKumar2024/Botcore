@@ -339,7 +339,7 @@ class PineconeService:
             return 0
     
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
-    async def query_embeddings(
+    async def search_similar_chunks(
 
         self,
         client_id: str,
