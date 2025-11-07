@@ -87,7 +87,7 @@ async def chat_endpoint(
         return ChatResponse(
             success=True,
             response=response_text,
-            conversation_id=chat_request.conversation_id or generate_conversation_id(),
+            session_id=chat_request.conversation_id or generate_conversation_id(),
             client_id=chat_request.client_id
          )
     except HTTPException:
