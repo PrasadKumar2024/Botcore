@@ -411,8 +411,11 @@ class PineconeService:
             similar_chunks = similar_chunks[:top_k]
             
             logger.info(f"✅ Found {len(similar_chunks)} relevant chunks (threshold: {min_score})")
-            
-            return similar_chunks
+
+            return {
+            "success": True,           # ✅ Add success flag
+            "matches": similar_chunks  # ✅ Wrap in expected format
+             }
             
         except Exception as e:
             logger.error(f"❌ Error searching Pinecone: {str(e)}")
