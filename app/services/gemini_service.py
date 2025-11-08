@@ -276,39 +276,74 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
         query: str, 
         business_name: str,
         conversation_history: Optional[List[Dict]] = None,
-        temperature: float = 0.3  # Lower temperature for more consistent RAG responses
+        temperature: float = 0.7  # Higher temperature for more creative responses
     ) -> str:
         """
         Generate a contextual response using RAG approach with conversation history
-        
-        Args:
-            context: Retrieved context from knowledge base
-            query: User's question
-            business_name: Name of the business
-            conversation_history: Optional list of previous messages
-            temperature: Controls response randomness
-            
-        Returns:
-            AI-generated response
         """
-        # Validate inputs
-        if not context or not context.strip():
-            logger.warning(f"⚠️ No context available for query: {query}")
-            return f"I'm the AI assistant for {business_name}. I don't have enough information in my knowledge base to answer that question accurately. Please ensure relevant documents have been uploaded, or contact {business_name} directly for assistance."
-        
+    # Validate inputs
         if not query or len(query.strip()) < 2:
             return "Could you please clarify your question? I want to make sure I provide you with the most accurate information."
-        
-        # Build enhanced prompt with conversation history
-        prompt = self.create_rag_prompt(context, query, business_name)
-        
-        # Add conversation history for context continuity
+    
+    # Build enhanced prompt that allows for natural conversation
+        prompt = self._create_conversational_rag_prompt(context, query, business_name, conversation_history)
+    
+    # Generate response with appropriate temperature
+        return self.generate_response(prompt, temperature=temperature, max_tokens=512)
+
+    def _create_conversational_rag_prompt(
+        self, 
+        context: str, 
+        query: str, 
+        business_name: str,
+        conversation_history: Optional[List[Dict]] = None
+    ) -> str:
+        """
+        Create a conversational RAG prompt that allows for natural dialogue
+        """
+    
+    # Base instructions that encourage natural conversation
+        base_instructions = f"""You are a friendly, knowledgeable AI assistant for {business_name}. Your role is to help customers by:
+
+    1. Answering questions using the provided context when available
+    2. Having natural, engaging conversations when context isn't available
+    3. Being helpful, conversational, and professional
+    4. Asking follow-up questions to better understand needs
+
+    IMPORTANT GUIDELINES:
+    - If the context contains relevant information, use it to answer accurately
+    - If the context doesn't contain exactly what's needed, have a natural conversation
+    - For greetings and casual questions, respond conversationally
+    - Never say "I don't have information in my knowledge base" - instead, have a normal conversation
+    - Be engaging and ask relevant follow-up questions"""
+
+    # Add conversation history if available
+        history_context = ""
         if conversation_history and len(conversation_history) > 0:
-            history_context = self._format_conversation_history(conversation_history)
-            prompt = f"{history_context}\n\n{prompt}"
+            history_context = "PREVIOUS CONVERSATION:\n"
+            for msg in conversation_history[-4:]:  # Last 4 messages for context
+                role = "USER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
+                content = msg.get("content", "")
+                history_context += f"{role}: {content}\n"
+            history_context += "\n"
+
+    # Context section (only if we have context)
+        context_section = ""
+        if context and context.strip():
+            context_section = f"RELEVANT INFORMATION:\n{context}\n\n"
+
+        prompt = f"""{base_instructions}
+
+    {history_context}
+    {context_section}
+    CURRENT QUESTION: {query}
+
+    YOUR RESPONSE (as {business_name}'s friendly AI assistant):"""
+    
+        return prompt
         
         # Generate response with lower temperature for more factual accuracy
-        return self.generate_response(prompt, temperature=temperature, max_tokens=512)
+        
     
     def _format_conversation_history(self, history: List[Dict]) -> str:
         """
