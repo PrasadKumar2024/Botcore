@@ -709,7 +709,7 @@
 
 /* Important overrides for all child elements */
 .ownbot-chat-widget * {
-    all: unset !important;
+    
     box-sizing: border-box !important;
     font-family: inherit !important;
 }
