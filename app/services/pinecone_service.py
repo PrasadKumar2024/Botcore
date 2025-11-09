@@ -345,7 +345,7 @@ class PineconeService:
         client_id: str,
         query: str,
         top_k: int = 5,
-        min_score: float = 0.7,
+        min_score: float = 0.3,
         include_metadata: bool = True
     ) -> List[Dict[str, Any]]:
         """
@@ -412,10 +412,11 @@ class PineconeService:
             
             logger.info(f"✅ Found {len(similar_chunks)} relevant chunks (threshold: {min_score})")
 
-            return {
-            "success": True,           # ✅ Add success flag
-            "matches": similar_chunks  # ✅ Wrap in expected format
-             }
+            # Debug logging to see what's being returned
+            for i, chunk in enumerate(similar_chunks):
+                logger.info(f"  📄 Chunk {i+1} - Score: {chunk['score']:.3f} | Text: {chunk['chunk_text'][:80]}...")
+
+            return similar_chunks  # ✅ Return list directly!
             
         except Exception as e:
             logger.error(f"❌ Error searching Pinecone: {str(e)}")
