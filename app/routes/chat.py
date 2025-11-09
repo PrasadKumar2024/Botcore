@@ -55,41 +55,53 @@ async def chat_endpoint(
         
         # Query Pinecone for relevant context
         # Query Pinecone for relevant context
-        query_result = await pinecone_service.search_similar_chunks(
-            client_id=str(chat_request.client_id),
-            query=chat_request.message,  # ✅ Changed from query_embedding to query
-            top_k=5
-        )
-        
-        if not query_result["success"]:
-            logger.error(f"Pinecone query failed: {query_result.get('error')}")
-            # Continue without context rather than failing completely
-        
-        # Extract context from query results
-        # Extract context from query results
-        context = []
-        if query_result.get("matches"):
-            for match in query_result["matches"]:
-                if "chunk_text" in match:  # ✅ Changed from metadata/text to chunk_text
-                    context.append(match["chunk_text"])
-        
-        # Generate response using Gemini
-         
-        # Generate response using Gemini
-        response_text = gemini_service.generate_contextual_response(
-            context="\n".join(context),  # Join context list into a single string
-            query=chat_request.message,
-            business_name=client.business_name, # Pass the client's name
-            conversation_history=chat_request.conversation_history
-       )
+        # Query Pinecone for relevant context
+context_results = await pinecone_service.search_similar_chunks(
+    client_id=str(chat_request.client_id),
+    query=chat_request.message,
+    top_k=10,
+    min_score=0.3
+)
+
+# Extract context text from the list of chunks (FIX for list indices error)
+context_parts = []
+if context_results and isinstance(context_results, list):
+    for match in context_results:
+        # Assuming each match is a dictionary with "chunk_text"
+        if isinstance(match, dict) and "chunk_text" in match:
+            context_parts.append(match["chunk_text"])
+
+# Join the context parts into a single string for the LLM
+context_text = ""
+if context_parts:
+    context_text = "\n\n".join(context_parts)
+    logger.info(f"✅ Found {len(context_parts)} relevant chunks for RAG.")
+else:
+    logger.warning("⚠️ No relevant context found or context extraction failed. Using fallback.")
+
+# Generate response using Gemini
+if context_text:
+    response_text = gemini_service.generate_contextual_response(
+        context=context_text,
+        query=chat_request.message,
+        business_name=client.business_name,
+        conversation_history=chat_request.conversation_history or []
+    )
+else:
+    response_text = gemini_service.generate_simple_response(
+        query=chat_request.message,
+        business_name=client.business_name,
+        use_rag_fallback=False
+    )
 
 # Return the successful response
-        return ChatResponse(
-            success=True,
-            response=response_text,
-            session_id=chat_request.conversation_id or generate_conversation_id(),
-            client_id=chat_request.client_id
-         )
+return ChatResponse(
+    success=True,
+    response=response_text,
+    session_id=chat_request.conversation_id or generate_conversation_id(),
+    conversation_id=chat_request.conversation_id or generate_conversation_id(),
+    client_id=chat_request.client_id
+)
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
