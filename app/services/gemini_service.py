@@ -309,49 +309,49 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
         conversation_history: Optional[List[Dict]] = None
     ) -> str:
         """
-        Create a conversational RAG prompt that allows for natural dialogue
+        Create a conversational RAG prompt that prioritizes context when available
         """
-    
-    # Base instructions that encourage natural conversation
-        base_instructions = f"""You are a friendly, knowledgeable AI assistant for {business_name}. Your role is to help customers by:
+        base_instructions = f"""You are a friendly, knowledgeable AI assistant for {business_name}.
 
-    1. Answering questions using the provided context when available
-    2. Having natural, engaging conversations when context isn't available
-    3. Being helpful, conversational, and professional
-    4. Asking follow-up questions to better understand needs
+    PRIORITY RULES (IN ORDER):
+    1. If the CONTEXT section below contains relevant information, USE IT to answer accurately
+    2. If context exists but doesn't directly answer the question, use it to provide related helpful info
+    3. Only for casual greetings (hi, hello, how are you) respond naturally without context
+    4. For specific questions without context, acknowledge limitation politely
 
-    IMPORTANT GUIDELINES:
-    - If the context contains relevant information, use it to answer accurately
-    - If the context doesn't contain exactly what's needed, have a natural conversation
-    - For greetings and casual questions, respond conversationally
-    - Never say "I don't have information in my knowledge base" - instead, have a normal conversation
-    - Be engaging and ask relevant follow-up questions"""
+    RESPONSE STYLE:
+    - Be warm, professional, and conversational
+    - Keep answers concise (2-4 sentences)
+    - Use natural language, not robotic"""
 
-    # Add conversation history if available
         history_context = ""
         if conversation_history and len(conversation_history) > 0:
             history_context = "PREVIOUS CONVERSATION:\n"
-            for msg in conversation_history[-4:]:  # Last 4 messages for context
+            for msg in conversation_history[-4:]:
                 role = "USER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
                 content = msg.get("content", "")
                 history_context += f"{role}: {content}\n"
             history_context += "\n"
 
-    # Context section (only if we have context)
         context_section = ""
         if context and context.strip():
-            context_section = f"RELEVANT INFORMATION:\n{context}\n\n"
+            context_section = f"""
+    ==========================================
+    📚 IMPORTANT CONTEXT FROM {business_name.upper()}'S KNOWLEDGE BASE:
+    {context}
+    ==========================================
+
+    ⚠️ USE THE CONTEXT ABOVE TO ANSWER THE QUESTION BELOW!
+
+    """
 
         prompt = f"""{base_instructions}
 
-    {history_context}
-    {context_section}
-    CURRENT QUESTION: {query}
+    {history_context}{context_section}CUSTOMER QUESTION: {query}
 
-    YOUR RESPONSE (as {business_name}'s friendly AI assistant):"""
+    YOUR RESPONSE (prioritize context if available, then be conversational):"""
     
         return prompt
-        
         # Generate response with lower temperature for more factual accuracy
         
     
