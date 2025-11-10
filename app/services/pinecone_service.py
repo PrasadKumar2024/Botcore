@@ -345,7 +345,7 @@ class PineconeService:
         client_id: str,
         query: str,
         top_k: int = 5,
-        min_score: float = 0.3,
+        min_score: float = 0.2,
         include_metadata: bool = True
     ) -> List[Dict[str, Any]]:
         """
