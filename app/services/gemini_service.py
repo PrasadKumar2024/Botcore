@@ -94,34 +94,34 @@ class GeminiService:
     def generate_embedding(self, text: str) -> List[float]:
         """
         Generate embedding vector for text using Hugging Face API
+        (FIX: Re-raises exceptions to enable retry logic in PineconeService)
         """
         try:
-             
             if not text or not text.strip():
-                logger.warning("⚠️ Empty text provided for embedding")
+                logger.warning("Empty text provided for embedding")
                 return [0.0] * self.embedding_dimension
-        
+
             if not self.hf_token:
-                logger.warning("⚠️ Hugging Face token not configured, using zero vector")
+                logger.warning("Hugging Face token not configured, using zero vector")
                 return [0.0] * self.embedding_dimension
-        
-            # Use Hugging Face Inference API for embeddings
+
             client = InferenceClient(token=self.hf_token)
             embedding = client.feature_extraction(text, model=self.hf_embedding_model)
-        
-            # Convert to list
+
             embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
-        
-            # Flatten if needed (HF returns 2D array)
             if isinstance(embedding_list[0], list):
                 embedding_list = embedding_list[0]
-        
-            logger.debug(f"✅ Generated Hugging Face embedding with dimension: {len(embedding_list)}")
+
+            logger.debug(f"Generated Hugging Face embedding with dimension: {len(embedding_list)}")
             return embedding_list
-             
+
         except Exception as e:
-            logger.error(f"❌ Error generating Hugging Face embedding: {str(e)}")
-            return [0.0] * self.embedding_dimension
+            logger.error(
+                f"Critical error generating Hugging Face embedding: {type(e).__name__}: {str(e)}. "
+                "Re-raising for retry."
+            )
+            # THIS IS THE FIX – let Pinecone retry
+            raise
     
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
@@ -271,89 +271,64 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
         return prompt
     
     def generate_contextual_response(
-        self, 
-        context: str, 
-        query: str, 
+        self,
+        context: str,
+        query: str,
         business_name: str,
         conversation_history: Optional[List[Dict]] = None,
-        temperature: float = 0.5
+        temperature: float = 0.6,          # balanced for facts + warmth
     ) -> str:
         """
-        Generate a contextual response using RAG approach with conversation history
+        Generate a human-like response that always blends PDF facts with a friendly tone.
         """
         if not query or len(query.strip()) < 2:
-            return "Could you please clarify your question? I want to make sure I provide you with the most accurate information."
-    
-        is_casual = self._is_casual_query(query)
-    
-       if context and context.strip() and not is_casual:
-            logger.info("📚 Using PDF context for response")
-            prompt = self.create_rag_prompt(context, query, business_name)
-            temperature = 0.3
-        else:
-            logger.info("💬 Using conversational mode")
-            prompt = self._create_conversational_rag_prompt(context, query, business_name, conversation_history)
-            temperature = 0.7
-    
-   v    if conversation_history and len(conversation_history) > 0:
-            history_context = self._format_conversation_history(conversation_history)
-            prompt = f"{history_context}\n\n{prompt}"
-    
+            return "Could you please clarify your question? I'd love to help!"
+
+        logger.info("Using unified RAG prompt for seamless blending.")
+
+        prompt = self._create_unified_rag_prompt(
+            context, query, business_name, conversation_history
+        )
         return self.generate_response(prompt, temperature=temperature, max_tokens=512)
 
-    def _create_conversational_rag_prompt(
-        self, 
-        context: str, 
-        query: str, 
-        business_name: str,
-        conversation_history: Optional[List[Dict]] = None
-    ) -> str:
-        """
-        Create a conversational RAG prompt that prioritizes context when available
-        """
-        base_instructions = f"""You are a friendly, knowledgeable AI assistant for {business_name}.
+    
+    def _create_unified_rag_prompt(
+            self,
+            context: str,
+            query: str,
+            business_name: str,
+            conversation_history: Optional[List[Dict]] = None,
+        ) -> str:
+            """Single prompt that handles PDF facts + natural conversation."""
+            # ---- history (last 3 messages) ----
+            history = ""
+            if conversation_history:
+                history = "RECENT CHAT CONTEXT:\n"
+                for msg in conversation_history[-3:]:
+                    role = "CUSTOMER" if msg.get("role") in ("user", "customer") else "YOU"
+                    history += f"{role}: {msg.get('content', '')}\n"
+                history += "\n"
 
-    PRIORITY RULES (IN ORDER):
-    1. If the CONTEXT section below contains relevant information, USE IT to answer accurately
-    2. If context exists but doesn't directly answer the question, use it to provide related helpful info
-    3. Only for casual greetings (hi, hello, how are you) respond naturally without context
-    4. For specific questions without context, acknowledge limitation politely
-
-    RESPONSE STYLE:
-    - Be warm, professional, and conversational
-    - Keep answers concise (2-4 sentences)
-    - Use natural language, not robotic"""
-
-        history_context = ""
-        if conversation_history and len(conversation_history) > 0:
-            history_context = "PREVIOUS CONVERSATION:\n"
-            for msg in conversation_history[-4:]:
-                role = "USER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
-                content = msg.get("content", "")
-                history_context += f"{role}: {content}\n"
-            history_context += "\n"
-
-        context_section = ""
-        if context and context.strip():
-            context_section = f"""
-    ==========================================
-    📚 IMPORTANT CONTEXT FROM {business_name.upper()}'S KNOWLEDGE BASE:
+        # ---- knowledge base (only if present) ----
+            kb = ""
+            if context and context.strip():
+                kb = f"""KNOWLEDGE BASE ABOUT {business_name.upper()}:
     {context}
-    ==========================================
-
-    ⚠️ USE THE CONTEXT ABOVE TO ANSWER THE QUESTION BELOW!
 
     """
 
-        prompt = f"""{base_instructions}
+            return f"""You are {business_name}'s friendly AI assistant. Your personality is warm, helpful, and naturally conversational.
 
-    {history_context}{context_section}CUSTOMER QUESTION: {query}
+    CORE RULES:
+    1. **ALWAYS be human-like and engaging** – natural language, occasional emojis, warm tone
+    2. **PRIORITIZE ACCURACY** – if the Knowledge Base has relevant info, USE IT
+    3. **BE HONEST ABOUT LIMITS** – if the KB lacks the answer, say so naturally
+    4. **MAINTAIN FLOW** – keep responses concise (2-3 sentences) and end with an engaging question
+    5. **BLEND SEAMLESSLY** – weave facts into conversation, never sound robotic
 
-    YOUR RESPONSE (prioritize context if available, then be conversational):"""
-    
-        return prompt
-        # Generate response with lower temperature for more factual accuracy
-        
+    {history}{kb}CUSTOMER'S CURRENT QUESTION: {query}
+
+    YOUR RESPONSE (as {business_name}'s friendly assistant – blend facts with personality):"""    
     
     def _format_conversation_history(self, history: List[Dict]) -> str:
         """
