@@ -276,19 +276,29 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
         query: str, 
         business_name: str,
         conversation_history: Optional[List[Dict]] = None,
-        temperature: float = 0.7  # Higher temperature for more creative responses
+        temperature: float = 0.5
     ) -> str:
         """
         Generate a contextual response using RAG approach with conversation history
         """
-    # Validate inputs
         if not query or len(query.strip()) < 2:
             return "Could you please clarify your question? I want to make sure I provide you with the most accurate information."
     
-    # Build enhanced prompt that allows for natural conversation
-        prompt = self._create_conversational_rag_prompt(context, query, business_name, conversation_history)
+        is_casual = self._is_casual_query(query)
     
-    # Generate response with appropriate temperature
+       if context and context.strip() and not is_casual:
+            logger.info("📚 Using PDF context for response")
+            prompt = self.create_rag_prompt(context, query, business_name)
+            temperature = 0.3
+        else:
+            logger.info("💬 Using conversational mode")
+            prompt = self._create_conversational_rag_prompt(context, query, business_name, conversation_history)
+            temperature = 0.7
+    
+   v    if conversation_history and len(conversation_history) > 0:
+            history_context = self._format_conversation_history(conversation_history)
+            prompt = f"{history_context}\n\n{prompt}"
+    
         return self.generate_response(prompt, temperature=temperature, max_tokens=512)
 
     def _create_conversational_rag_prompt(
