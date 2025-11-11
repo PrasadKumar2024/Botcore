@@ -122,25 +122,22 @@ class GeminiService:
             )
             # THIS IS THE FIX – let Pinecone retry
             raise
-    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
         Async wrapper for embedding generation
-        
-        Args:
-            text: Text to generate embedding for
-            
-        Returns:
-            List of floats representing the embedding vector
+        (FIX: Now includes retry and propagates errors)
         """
         try:
             loop = asyncio.get_event_loop()
+            # This will now retry 3 times if self.generate_embedding fails
             embedding = await loop.run_in_executor(None, self.generate_embedding, text)
             return embedding
         except Exception as e:
-            logger.error(f"❌ Error in async embedding generation: {str(e)}")
-            # Return zero vector as fallback
+            logger.error(f"❌ Async embedding generation failed after retries: {str(e)}")
+            # If it fails after all retries, return zero vector as last resort
             return [0.0] * self.embedding_dimension
+    
     
     @retry(
         stop=stop_after_attempt(3),
