@@ -8,6 +8,8 @@ import json
 import time
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
+# ADD THIS LINE AFTER OTHER IMPORTS
+from app.services.gemini_service import gemini_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ class PineconeService:
         self.pc = None
         self.index = None
         self._initialized = False
+        self.gemini_service = gemini_service  # ← INJECT GEMINI SERVICE
         
         # Initialize connection
         self.initialize()
