@@ -345,7 +345,7 @@ class PineconeService:
         client_id: str,
         query: str,
         top_k: int = 5,
-        min_score: float = 0.2,
+        min_score: float = 0.1,
         include_metadata: bool = True
     ) -> List[Dict[str, Any]]:
         """
@@ -381,7 +381,7 @@ class PineconeService:
                 filter={
                     "client_id": {"$eq": str(client_id)}
                 },
-                top_k=top_k * 2,  # Get more results to filter by score
+                top_k=20,  # Get more results to filter by score
                 include_metadata=True
             )
             
