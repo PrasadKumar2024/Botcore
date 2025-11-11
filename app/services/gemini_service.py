@@ -172,13 +172,7 @@ class GeminiService:
         # Re-raise for retry mechanism
             raise Exception(f"Embedding generation failed: {str(e)}")
 
-         except Exception as e:
-             logger.error(
-                 f"Critical error generating Hugging Face embedding: {type(e).__name__}: {str(e)}. "
-                 "Re-raising for retry."
-                 )
-            # THIS IS THE FIX – let Pinecone retry
-             raise
+         
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
