@@ -6,7 +6,6 @@ from typing import Optional, List, Dict, Any
 import google.generativeai as genai
 from dotenv import load_dotenv
 # Add this import
-from huggingface_hub import InferenceClient
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import requests
 
@@ -31,8 +30,7 @@ class GeminiService:
         self.model = None
     
         # Add Hugging Face for embeddings only
-        self.hf_token = os.getenv("HUGGINGFACE_API_KEY")  # Add this line
-        self.hf_embedding_model = "sentence-transformers/all-mpnet-base-v2"  # Add this line
+          # Add this line
         self.embedding_dimension = 768 # Keep this as is
     
         # Initialize the service
