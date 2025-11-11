@@ -97,7 +97,7 @@ class PineconeService:
         """Check if Pinecone is properly configured"""
         return self._initialized and self.pc is not None and self.index is not None
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    
     def generate_embedding(self, text: str) -> List[float]:
         """
         Generate embedding using Gemini's embedding model
