@@ -283,7 +283,14 @@ class PineconeService:
                     vector_id = f"{client_id}_{document_id}_{chunk_id}"
                     
                     # Generate embedding (async)
-                    embedding = await self.generate_embedding_async(chunk_text)
+                    try:
+                        embedding = await self.gemini_service.generate_embedding_async(chunk_text)
+                        if all(abs(x) < 1e-8 for x in embedding):
+                            logger.warning("Skipping zero vector chunk")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Embedding failed for chunk: {e}")
+                        continue
                     
                     # Prepare metadata
                     vector_metadata = {
