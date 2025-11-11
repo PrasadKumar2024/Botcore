@@ -89,90 +89,66 @@ class GeminiService:
         """
         return self.is_available and self.model is not None
     
+
     def generate_embedding(self, text: str) -> List[float]:
         """
-        Generate embedding vector for text using Google Gemini Embeddings API
-        (FIX: Complete switch from Hugging Face to reliable Gemini embeddings)
+        Generate embedding using Gemini native API
+        (FINAL: Combines best validation + removes GoogleAPIError)
         """
     # Input validation
         if not text or not text.strip():
-            logger.warning("⚠️ Empty text provided for embedding")
+            logger.warning("Empty text for embedding")
             return [0.0] * self.embedding_dimension
 
         if not self.api_key:
-            logger.error("❌ Gemini API key not configured for embeddings")
+            logger.error("Gemini API key not configured")
             raise Exception("Gemini API key not configured")
 
         if not self.embedding_model:
-            logger.error("❌ Gemini embedding model not available")
+            logger.error("Gemini embedding model not available")
             raise Exception("Gemini embedding model not configured")
 
         try:
-        # Clean and prepare text for embedding
+        # Text cleaning
             clean_text = text.strip().replace('\n', ' ').replace('\r', ' ')
-        
-        # Ensure text is not too long (Gemini has limits)
             if len(clean_text) > 10000:
-                logger.warning(f"⚠️ Truncating long text for embedding: {len(clean_text)} chars")
+                logger.warning(f"Truncating long text: {len(clean_text)} chars")
                 clean_text = clean_text[:10000]
-        
-        # Generate embedding using Gemini's native API
-            logger.debug(f"🔍 Generating Gemini embedding for text: {clean_text[:100]}...")
-        
+
+        # Generate embedding
             result = genai.embed_content(
-                model=self.embedding_model,  # "models/embedding-001"
+                model=self.embedding_model,
                 content=clean_text,
-                task_type="retrieval_document",  # Optimized for document retrieval
-                title="Document Chunk"  # Optional but helpful
+                task_type="retrieval_document"
             )
-        
-        # Validate response structure
+
+        # Validate response
             if not result or 'embedding' not in result:
-                logger.error("❌ Gemini embedding returned invalid response structure")
                 raise Exception("Invalid embedding response from Gemini")
         
             embedding = result['embedding']
-         
-        # Validate embedding dimensions and content
+        
+        # Enhanced validation
             if not embedding or len(embedding) == 0:
-                logger.error("❌ Gemini embedding returned empty vector")
-                raise Exception("Empty embedding vector from Gemini")
+                raise Exception("Empty embedding vector")
         
-        # Log successful generation
-            logger.info(f"✅ Generated Gemini embedding: {len(embedding)} dimensions")
+            if all(abs(x) < 1e-8 for x in embedding):
+                raise Exception("Zero vector embedding")
         
-        # Validate it's not a zero vector
-            if all(x == 0.0 for x in embedding):
-                logger.error("❌ Gemini embedding returned zero vector")
-                raise Exception("Zero vector embedding from Gemini")
-        
-        # Dimension validation - Gemini should return 768
+        # Dimension check
             if len(embedding) != self.embedding_dimension:
-                logger.warning(f"⚠️ Embedding dimension mismatch: Gemini={len(embedding)}, Expected={self.embedding_dimension}")
-            # This is critical - we need exact dimension match for Pinecone
-                if len(embedding) > self.embedding_dimension:
-                # Truncate if too long (shouldn't happen with Gemini)
-                    embedding = embedding[:self.embedding_dimension]
-                    logger.warning(f"⚠️ Truncated embedding to {len(embedding)} dimensions")
-                else:
-                # Pad if too short (shouldn't happen with Gemini)
-                    padding = [0.0] * (self.embedding_dimension - len(embedding))
-                    embedding.extend(padding)
-                    logger.warning(f"⚠️ Padded embedding to {len(embedding)} dimensions")
+                logger.warning(f"Dimension mismatch: {len(embedding)} vs {self.embedding_dimension}")
+
+        # Success logging
+            magnitude = (sum(x*x for x in embedding)) ** 0.5
+            logger.info(f"Gemini embedding: {len(embedding)}D, magnitude: {magnitude:.3f}")
         
             return embedding
- 
-        except genai.types.GoogleAPIError as e:
-            logger.error(f"❌ Gemini API error in embedding generation: {str(e)}")
-        # Re-raise for retry mechanism
-            raise Exception(f"Gemini API error: {str(e)}")
-    
-        except Exception as e:
-            logger.error(f"❌ Unexpected error in Gemini embedding generation: {str(e)}")
-        # Re-raise for retry mechanism
-            raise Exception(f"Embedding generation failed: {str(e)}")
 
-         
+        except Exception as e:
+            logger.error(f"Gemini embedding failed: {str(e)}")
+            raise
+    
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def generate_embedding_async(self, text: str) -> List[float]:
         """
@@ -238,22 +214,10 @@ class GeminiService:
             # Safety settings to minimize blocking
             # Safety settings - COMPLETELY DISABLE BLOCKING to prevent "finish_reason: 2"
             safety_settings = [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH", 
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_NONE"
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_NONE"
-                }
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
             ]
             # Generate response
             response = self.model.generate_content(
