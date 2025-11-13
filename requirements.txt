@@ -16,7 +16,7 @@ pdfplumber==0.10.3
 pypdfium2==4.30.0
 pdfminer.six==20221105
 sentence-transformers
-
+cohere>=5.0.0
 # AI & Processing
 google-generativeai>=0.8.0
 pinecone-client==3.2.2
