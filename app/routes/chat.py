@@ -45,7 +45,7 @@ async def chat_endpoint(
             )
         
         # Generate embedding for the query
-        query_embedding = await gemini_service.generate_embedding_async(chat_request.message)
+        query_embedding = await cohere_service.generate_query_embedding(chat_request.message)
         
         if not query_embedding or len(query_embedding) == 0:
             raise HTTPException(
