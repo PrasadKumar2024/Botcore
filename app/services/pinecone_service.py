@@ -30,7 +30,7 @@ class PineconeService:
         self.pc = None
         self.index = None
         self._initialized = False
-        self.gemini_service = gemini_service  # ← INJECT GEMINI SERVICE
+        
         
         # Initialize connection
         self.initialize()
