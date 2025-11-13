@@ -331,9 +331,9 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
         {context.strip()}
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-       """
-           else:
-        # No context available
+        """
+            else:
+        # No.t context available
                 return f"""You are {business_name}'s assistant but you don't have access to specific information right now.
 
         Customer asks: "{query}"
