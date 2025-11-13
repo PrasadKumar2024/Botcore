@@ -69,7 +69,7 @@ class CohereService:
             logger.debug(f"✅ Cohere embedding generated: {len(embedding)}D (input_type: {input_type})")
             return embedding
             
-        except cohere.CohereError as e:
+        except Exception as e:
             logger.error(f"❌ Cohere API error: {str(e)}")
             return self._get_zero_embedding()
         except Exception as e:
