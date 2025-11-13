@@ -311,56 +311,78 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
             business_name: str,
             conversation_history: Optional[List[Dict]] = None,
         ) -> str:
-            """Single prompt that handles PDF facts + natural conversation."""
-            # ---- history (last 3 messages) ----
-            history = ""
-            if conversation_history:
-                history = "RECENT CHAT CONTEXT:\n"
-                for msg in conversation_history[-3:]:
-                    role = "CUSTOMER" if msg.get("role") in ("user", "customer") else "YOU"
-                    history += f"{role}: {msg.get('content', '')}\n"
-                history += "\n"
-
-        # ---- knowledge base (only if present) ----
-            kb = ""
-            if context and context.strip():
-                kb = f"""KNOWLEDGE BASE ABOUT {business_name.upper()}:
-    {context}
-
-    """
-
-            return f"""You are {business_name}'s friendly AI assistant. Your personality is warm, helpful, and naturally conversational.
-
-    CORE RULES:
-    1. **ALWAYS be human-like and engaging** – natural language, occasional emojis, warm tone
-    2. **PRIORITIZE ACCURACY** – if the Knowledge Base has relevant info, USE IT
-    3. **BE HONEST ABOUT LIMITS** – if the KB lacks the answer, say so naturally
-    4. **MAINTAIN FLOW** – keep responses concise (2-3 sentences) and end with an engaging question
-    5. **BLEND SEAMLESSLY** – weave facts into conversation, never sound robotic
-
-    {history}{kb}CUSTOMER'S CURRENT QUESTION: {query}
-
-    YOUR RESPONSE (as {business_name}'s friendly assistant – blend facts with personality):"""    
+            """Best RAG prompt - forces LLM to use PDF context"""
     
-    def _format_conversation_history(self, history: List[Dict]) -> str:
-        """
-        Format conversation history for context
-        
-        Args:
-            history: List of message dictionaries
+    # Build conversation history if exists
+            history_section = ""
+            if conversation_history and len(conversation_history) > 0:
+                history_section = "RECENT CONVERSATION:\n"
+                for msg in conversation_history[-3:]:
+                    role = "Customer" if msg.get("role") in ("user", "customer") else "Assistant"
+                    content = msg.get('content', '')[:150]
+                    history_section += f"{role}: {content}\n"
+                history_section += "\n"
+
+    # Build knowledge base section with strong markers
+            knowledge_section = ""
+            if context and context.strip():
+                knowledge_section = f"""📚 OFFICIAL INFORMATION FROM {business_name.upper()}:
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        {context.strip()}
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+       """
+           else:
+        # No context available
+                return f"""You are {business_name}'s assistant but you don't have access to specific information right now.
+
+        Customer asks: "{query}"
+
+        Respond EXACTLY like this: "I don't have that specific information in my current knowledge base. Please contact {business_name} directly for accurate details. Is there anything else I can help with?"
+
+        Your response:"""
+
+            # Main prompt with clear instructions
+            return f"""You are {business_name}'s official AI assistant.
+
+        {history_section}{knowledge_section}
+        🎯 YOUR TASK:
+        Answer the customer's question using ONLY the official information above.
+
+        📋 STRICT RULES:
+        1. Quote facts from the official information directly
+        2. Answer in 2-3 sentences maximum
+        3. Be friendly and professional
+        4. Add one relevant emoji
+        5. If the official information doesn't contain the answer, say: "I don't have that specific detail. Please contact {business_name} directly!"
+
+       ✅ EXAMPLE:
+       Customer: "What are your hours?"
+       You: "We're open Monday-Saturday, 9:00 AM to 8:00 PM! 😊 Emergency care is available 24/7."
+
+       ❓ CUSTOMER QUESTION: {query}
+
+       💬 YOUR ANSWER (use the official information above):""" 
+    
+       def _format_conversation_history(self, history: List[Dict]) -> str:
+           """
+           Format conversation history for context
+         
+           Args:
+               history: List of message dictionaries
             
-        Returns:
-            Formatted conversation history string
-        """
-        formatted = "PREVIOUS CONVERSATION (for context only):\n"
+           Returns:
+               Formatted conversation history string
+           """
+           formatted = "PREVIOUS CONVERSATION (for context only):\n"
         
         # Take last 6 messages (3 exchanges) for context
-        for msg in history[-6:]:
-            role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
-            content = msg.get("content", "")[:200]  # Truncate long messages
-            formatted += f"{role}: {content}\n"
-        
-        return formatted
+            for msg in history[-6:]:
+                role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
+                content = msg.get("content", "")[:200]  # Truncate long messages
+                formatted += f"{role}: {content}\n"
+         
+            return formatted
     
     def generate_simple_response(
         self, 
