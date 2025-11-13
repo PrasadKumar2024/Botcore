@@ -9,7 +9,6 @@ import time
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
 # ADD THIS LINE AFTER OTHER IMPORTS
-from app.services.gemini_service import gemini_service
 
 logger = logging.getLogger(__name__)
 
@@ -101,81 +100,6 @@ class PineconeService:
         return self._initialized and self.pc is not None and self.index is not None
     
     
-    def generate_embedding(self, text: str) -> List[float]:
-        """
-        Generate embedding using Gemini's embedding model
-        This provides MUCH better semantic search than simple embeddings
-        
-        Args:
-            text: Text to generate embedding for
-            
-        Returns:
-            List of floats representing the embedding vector
-        """
-        try:
-            # Import Gemini service for embeddings
-            from app.services.gemini_service import gemini_service
-            
-            # Use Gemini to generate actual embeddings
-            embedding = gemini_service.generate_embedding(text)
-            
-            if embedding and len(embedding) > 0:
-                logger.debug(f"✅ Generated Gemini embedding with dimension: {len(embedding)}")
-                return embedding
-            else:
-                logger.warning("❌ Gemini embedding failed, using fallback")
-                return self._generate_fallback_embedding(text)
-                
-        except ImportError as e:
-            logger.error(f"❌ Gemini service not available: {str(e)}")
-            return self._generate_fallback_embedding(text)
-        except Exception as e:
-            logger.error(f"❌ Error generating Gemini embedding: {str(e)}")
-            # Fallback to simple embedding
-            return self._generate_fallback_embedding(text)
-    
-    def _generate_fallback_embedding(self, text: str) -> List[float]:
-        """Fallback embedding if Gemini fails"""
-        try:
-            # More sophisticated fallback embedding
-            embedding = [0.0] * self.dimension
-            text_lower = text.lower().strip()
-            
-            if not text_lower:
-                return embedding
-            
-            # Use word frequency and character distribution
-            words = text_lower.split()
-            for i, word in enumerate(words[:100]):  # Limit words
-                for j, char in enumerate(word[:10]):  # Limit chars per word
-                    idx = (i * 10 + j) % self.dimension
-                    embedding[idx] += (ord(char) * (i + 1)) / 10000.0
-            
-            # Normalize
-            magnitude = sum(x**2 for x in embedding) ** 0.5
-            if magnitude > 0:
-                embedding = [x / magnitude for x in embedding]
-            
-            logger.debug("✅ Generated fallback embedding")
-            return embedding
-            
-        except Exception as e:
-            logger.error(f"❌ Error in fallback embedding: {str(e)}")
-            # Return zero vector as last resort
-            return [0.0] * self.dimension
-    
-    async def generate_embedding_async(self, text: str) -> List[float]:
-        """
-        Async wrapper for embedding generation to avoid blocking event loop
-        """
-        try:
-            # Run embedding generation in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            embedding = await loop.run_in_executor(None, self.generate_embedding, text)
-            return embedding
-        except Exception as e:
-            logger.error(f"❌ Error in async embedding generation: {str(e)}")
-            return self._generate_fallback_embedding(text)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=5))
     async def store_knowledge_chunk(
@@ -210,7 +134,7 @@ class PineconeService:
             vector_id = f"{client_id}_{document_id}_{chunk_id}"
             
             # Generate embedding for the chunk text (async)
-            embedding = await self.generate_embedding_async(chunk_text)
+            embedding = await cohere_service.generate_embedding_async(chunk_text)
             
             # Prepare metadata
             vector_metadata = {
@@ -381,7 +305,7 @@ class PineconeService:
                 return []
             
             # Generate embedding for query (async)
-            query_embedding = await self.generate_embedding_async(query)
+            query_embedding = await cohere_service.generate_embedding_async(query)
             
             logger.info(f"🔍 Searching Pinecone for client {client_id} with query: {query[:50]}...")
             
