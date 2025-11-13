@@ -24,7 +24,7 @@ class PineconeService:
         self.api_key = os.getenv("PINECONE_API_KEY")
         self.environment = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
         self.index_name = os.getenv("PINECONE_INDEX", "botcore-knowledge")
-        self.dimension = 768  # Standard embedding dimension
+        self.dimension = 1024 # Standard embedding dimension
         self.metric = "cosine"  # Similarity metric
         
         self.pc = None
@@ -212,7 +212,7 @@ class PineconeService:
                     
                     # Generate embedding (async)
                     try:
-                        embedding = await self.gemini_service.generate_embedding_async(chunk_text)
+                        embedding = await cohere_service.generate_document_embedding(chunk_text)
                         if all(abs(x) < 1e-8 for x in embedding):
                             logger.warning("Skipping zero vector chunk")
                             continue
