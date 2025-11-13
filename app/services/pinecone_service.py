@@ -9,6 +9,7 @@ import time
 import aiohttp
 from tenacity import retry, stop_after_attempt, wait_exponential
 # ADD THIS LINE AFTER OTHER IMPORTS
+from app.services.cohere_service import cohere_service
 
 logger = logging.getLogger(__name__)
 
