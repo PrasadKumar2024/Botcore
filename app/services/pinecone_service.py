@@ -306,7 +306,7 @@ class PineconeService:
                 return []
             
             # Generate embedding for query (async)
-            query_embedding = await cohere_service.generate_embedding_async(query)
+            query_embedding = await cohere_service.generate_query_embedding(query)
             
             logger.info(f"🔍 Searching Pinecone for client {client_id} with query: {query[:50]}...")
             
