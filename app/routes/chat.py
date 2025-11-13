@@ -44,57 +44,70 @@ async def chat_endpoint(
                 detail="Web chat subscription is not active"
             )
         
-        # Generate embedding for the query
-        query_embedding = await cohere_service.generate_query_embedding(chat_request.message)
         
-        if not query_embedding or len(query_embedding) == 0:
+        from app.services.cohere_service import cohere_service
+        
+        logger.info(f"🔍 Processing query: '{chat_request.message}'")
+        
+        try:
+            query_embedding = await cohere_service.generate_query_embedding(chat_request.message)
+            logger.info(f"✅ Query embedding generated: {len(query_embedding)}D")
+        except Exception as e:
+            logger.error(f"❌ Failed to generate query embedding: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to generate query embedding"
+                detail="Failed to process your question"
             )
         
-        # Query Pinecone for relevant context
-        # Query Pinecone for relevant context
-        # Query Pinecone for relevant context
+        # Search Pinecone for relevant context
+        logger.info(f"🔎 Searching Pinecone for client: {chat_request.client_id}")
+        
         context_results = await pinecone_service.search_similar_chunks(
             client_id=str(chat_request.client_id),
             query=chat_request.message,
-            top_k=10,
-            min_score=0.3
+            top_k=5,
+            min_score=0.2  # Lowered for better recall
         )
-
-# Extract context text from the list of chunks (FIX for list indices error)
+        
+        # Extract context from results
         context_parts = []
         if context_results and isinstance(context_results, list):
-            for match in context_results:
-        # Assuming each match is a dictionary with "chunk_text"
+            logger.info(f"📊 Pinecone returned {len(context_results)} matches")
+            for i, match in enumerate(context_results):
                 if isinstance(match, dict) and "chunk_text" in match:
-                    context_parts.append(match["chunk_text"])
-
-# Join the context parts into a single string for the LLM
+                    score = match.get('score', 0)
+                    text = match.get('chunk_text', '')
+                    logger.info(f"  Match {i+1}: Score={score:.3f}, Length={len(text)} chars")
+                    context_parts.append(text)
+        else:
+            logger.warning("⚠️ No matches returned from Pinecone")
+        
+        # Build final context
         context_text = ""
         if context_parts:
             context_text = "\n\n".join(context_parts)
-            logger.info(f"✅ Found {len(context_parts)} relevant chunks for RAG.")
+            logger.info(f"✅ Built context: {len(context_text)} total chars")
+            logger.info(f"📝 Context preview: {context_text[:200]}...")
         else:
-            logger.warning("⚠️ No relevant context found or context extraction failed. Using fallback.")
-
- # Generate response using Gemini
-        if context_text:
+            logger.warning("⚠️ No valid context found - will use fallback")
+        
+        # Generate response using Gemini
+        if context_text and len(context_text) > 50:
+            logger.info(f"🤖 Using RAG mode with {len(context_parts)} chunks")
+            
             response_text = gemini_service.generate_contextual_response(
                 context=context_text,
                 query=chat_request.message,
                 business_name=client.business_name,
                 conversation_history=chat_request.conversation_history or []
             )
+            
+            logger.info(f"✅ Generated response: {response_text[:150]}...")
         else:
-            response_text = gemini_service.generate_simple_response(
-                query=chat_request.message,
-                business_name=client.business_name,
-                use_rag_fallback=False
-            )
-
-# Return the successful response
+            logger.warning("⚠️ Insufficient context - using fallback response")
+            response_text = f"I apologize, but I don't have specific information about that in my knowledge base. Please contact {client.business_name} directly for accurate details. How else can I help you today? 😊"
+        
+        # Return successful response
         return ChatResponse(
             success=True,
             response=response_text,
@@ -102,7 +115,6 @@ async def chat_endpoint(
             conversation_id=chat_request.conversation_id or generate_conversation_id(),
             client_id=chat_request.client_id
         )
-
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
