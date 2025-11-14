@@ -23,7 +23,7 @@ class PineconeService:
         """Initialize Pinecone connection"""
         self.api_key = os.getenv("PINECONE_API_KEY")
         self.environment = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
-        self.index_name = os.getenv("PINECONE_INDEX", "botcore-knowledge")
+        self.index_name = os.getenv("PINECONE_INDEX_NAME", "botcore-knowledge")
         self.dimension = 1024 # Standard embedding dimension
         self.metric = "cosine"  # Similarity metric
         
