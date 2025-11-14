@@ -305,83 +305,83 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
 
     
     def _create_unified_rag_prompt(
-            self,
-            context: str,
-            query: str,
-            business_name: str,
-            conversation_history: Optional[List[Dict]] = None,
-        ) -> str:
-            """Best RAG prompt - forces LLM to use PDF context"""
+        self,
+        context: str,
+        query: str,
+        business_name: str,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> str:
+        """Best RAG prompt - forces LLM to use PDF context"""
+
+        # Build conversation history if exists
+        history_section = ""
+        if conversation_history and len(conversation_history) > 0:
+            history_section = "RECENT CONVERSATION:\n"
+            for msg in conversation_history[-3:]:
+                role = "Customer" if msg.get("role") in ("user", "customer") else "Assistant"
+                content = msg.get('content', '')[:150]
+                history_section += f"{role}: {content}\n"
+            history_section += "\n"
+
+        # Build knowledge base section with strong markers
+        knowledge_section = ""
+        if context and context.strip():
+            knowledge_section = f"""📚 OFFICIAL INFORMATION FROM {business_name.upper()}:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{context.strip()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+"""
+        else:
+            # No.t context available
+            return f"""You are {business_name}'s assistant but you don't have access to specific information right now.
+
+Customer asks: "{query}"
+
+Respond EXACTLY like this: "I don't have that specific information in my current knowledge base. Please contact {business_name} directly for accurate details. Is there anything else I can help with?"
+
+Your response:"""
+
+        # Main prompt with clear instructions
+        return f"""You are {business_name}'s official AI assistant.
+
+{history_section}{knowledge_section}
+🎯 YOUR TASK:
+Answer the customer's question using ONLY the official information above.
+
+📋 STRICT RULES:
+1. Quote facts from the official information directly
+2. Answer in 2-3 sentences maximum
+3. Be friendly and professional
+4. Add one relevant emoji
+5. If the official information doesn't contain the answer, say: "I don't have that specific detail. Please contact {business_name} directly!"
+
+✅ EXAMPLE:
+Customer: "What are your hours?"
+You: "We're open Monday-Saturday, 9:00 AM to 8:00 PM! 😊 Emergency care is available 24/7."
+
+❓ CUSTOMER QUESTION: {query}
+
+💬 YOUR ANSWER (use the official information above):""" 
     
-    # Build conversation history if exists
-            history_section = ""
-            if conversation_history and len(conversation_history) > 0:
-                history_section = "RECENT CONVERSATION:\n"
-                for msg in conversation_history[-3:]:
-                    role = "Customer" if msg.get("role") in ("user", "customer") else "Assistant"
-                    content = msg.get('content', '')[:150]
-                    history_section += f"{role}: {content}\n"
-                history_section += "\n"
-
-    # Build knowledge base section with strong markers
-            knowledge_section = ""
-            if context and context.strip():
-                knowledge_section = f"""📚 OFFICIAL INFORMATION FROM {business_name.upper()}:
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        {context.strip()}
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+    def _format_conversation_history(self, history: List[Dict]) -> str:
         """
-            else:
-        # No.t context available
-                return f"""You are {business_name}'s assistant but you don't have access to specific information right now.
-
-        Customer asks: "{query}"
-
-        Respond EXACTLY like this: "I don't have that specific information in my current knowledge base. Please contact {business_name} directly for accurate details. Is there anything else I can help with?"
-
-        Your response:"""
-
-            # Main prompt with clear instructions
-            return f"""You are {business_name}'s official AI assistant.
-
-        {history_section}{knowledge_section}
-        🎯 YOUR TASK:
-        Answer the customer's question using ONLY the official information above.
-
-        📋 STRICT RULES:
-        1. Quote facts from the official information directly
-        2. Answer in 2-3 sentences maximum
-        3. Be friendly and professional
-        4. Add one relevant emoji
-        5. If the official information doesn't contain the answer, say: "I don't have that specific detail. Please contact {business_name} directly!"
-
-       ✅ EXAMPLE:
-       Customer: "What are your hours?"
-       You: "We're open Monday-Saturday, 9:00 AM to 8:00 PM! 😊 Emergency care is available 24/7."
-
-       ❓ CUSTOMER QUESTION: {query}
-
-       💬 YOUR ANSWER (use the official information above):""" 
-    
-   def _format_conversation_history(self, history: List[Dict]) -> str:
-       """
-       Format conversation history for context
-         
-       Args:
-           history: List of message dictionaries
+        Format conversation history for context
             
-       Returns:
-           Formatted conversation history string
-       """          
-       formatted = "PREVIOUS CONVERSATION (for context only):\n"
-            # Take last 6 messages (3 exchanges) for context
-       for msg in history[-6:]:
-           role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
-           content = msg.get("content", "")[:200]  # Truncate long messages
-           formatted += f"{role}: {content}\n"
-         
-       return formatted
+        Args:
+            history: List of message dictionaries
+                
+        Returns:
+            Formatted conversation history string
+        """          
+        formatted = "PREVIOUS CONVERSATION (for context only):\n"
+        # Take last 6 messages (3 exchanges) for context
+        for msg in history[-6:]:
+            role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
+            content = msg.get("content", "")[:200]  # Truncate long messages
+            formatted += f"{role}: {content}\n"
+            
+        return formatted
     
     def generate_simple_response(
         self, 
