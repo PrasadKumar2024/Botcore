@@ -364,25 +364,24 @@ YOUR RESPONSE (as {business_name}'s AI assistant, using ONLY the context above):
 
        💬 YOUR ANSWER (use the official information above):""" 
     
-       def _format_conversation_history(self, history: List[Dict]) -> str:
-           """
-           Format conversation history for context
+   def _format_conversation_history(self, history: List[Dict]) -> str:
+       """
+       Format conversation history for context
          
-           Args:
-               history: List of message dictionaries
+       Args:
+           history: List of message dictionaries
             
-           Returns:
-               Formatted conversation history string
-           """
-           formatted = "PREVIOUS CONVERSATION (for context only):\n"
-        
-        # Take last 6 messages (3 exchanges) for context
-            for msg in history[-6:]:
-                role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
-                content = msg.get("content", "")[:200]  # Truncate long messages
-                formatted += f"{role}: {content}\n"
+       Returns:
+           Formatted conversation history string
+       """          
+       formatted = "PREVIOUS CONVERSATION (for context only):\n"
+            # Take last 6 messages (3 exchanges) for context
+       for msg in history[-6:]:
+           role = "CUSTOMER" if msg.get("role") in ["user", "customer"] else "ASSISTANT"
+           content = msg.get("content", "")[:200]  # Truncate long messages
+           formatted += f"{role}: {content}\n"
          
-            return formatted
+       return formatted
     
     def generate_simple_response(
         self, 
