@@ -1185,7 +1185,7 @@ async def delete_client(client_id: str, db: Session = Depends(get_db)):
             "status": "error", 
             "message": f"Failed to delete client: {str(e)}"
              }, status_code=500)
-    @app.get("/debug-embedding")
+@app.get("/debug-embedding")
 async def debug_embedding():
     """Test if Cohere embeddings are working"""
     from app.services.cohere_service import cohere_service
