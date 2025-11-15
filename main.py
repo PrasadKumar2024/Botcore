@@ -1184,95 +1184,117 @@ async def delete_client(client_id: str, db: Session = Depends(get_db)):
         return JSONResponse({
             "status": "error", 
             "message": f"Failed to delete client: {str(e)}"
-        }, status_code=500)
+             }, status_code=500)
     @app.get("/debug-embedding")
-    async def debug_embedding():
-        from app.services.cohere_service import cohere_service
+async def debug_embedding():
+    """Test if Cohere embeddings are working"""
+    from app.services.cohere_service import cohere_service
     
-        test_text = "What are the clinic timings?"
-        try:
-            embedding = await cohere_service.generate_query_embedding(test_text)
-            return {
-                "success": True,
-                "text": test_text,
-                "dimension": len(embedding),
-               "is_zero": all(abs(x) < 0.001 for x in embedding),
-               "magnitude": (sum(x**2 for x in embedding) ** 0.5),
-               "first_5": embedding[:5]
-            }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    test_text = "What are the clinic timings?"
+    try:
+        embedding = await cohere_service.generate_query_embedding(test_text)
+        return {
+            "success": True,
+            "text": test_text,
+            "dimension": len(embedding),
+            "is_zero": all(abs(x) < 0.001 for x in embedding),
+            "magnitude": round((sum(x**2 for x in embedding) ** 0.5), 3),
+            "first_5": [round(x, 4) for x in embedding[:5]]
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False, 
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
-    @app.get("/debug-search/{client_id}")
-    async def debug_search(client_id: str):
-        from app.services.pinecone_service import pinecone_service
+@app.get("/debug-search/{client_id}")
+async def debug_search(client_id: str):
+    """Test if Pinecone search is working"""
+    from app.services.pinecone_service import pinecone_service
     
-        query = "What are the clinic timings?"
-        try:
-            results = await pinecone_service.search_similar_chunks(
-                client_id=client_id,
-                query=query,
-                top_k=5,
-                min_score=0.0  # Get ALL results
-            )
-            return {
-                "success": True,
-                "query": query,
-                "client_id": client_id,
-                "results_count": len(results),
-               "results": results
-           }
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+    query = "What are the clinic timings?"
+    try:
+        results = await pinecone_service.search_similar_chunks(
+            client_id=client_id,
+            query=query,
+            top_k=5,
+            min_score=0.0  # Get ALL results regardless of score
+        )
+        return {
+            "success": True,
+            "query": query,
+            "client_id": client_id,
+            "results_count": len(results),
+            "results": results[:3]  # Return top 3 for brevity
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False, 
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
 
-    @app.get("/debug-full-rag/{client_id}")
-    async def debug_full_rag(client_id: str):
-        from app.services.pinecone_service import pinecone_service
-        from app.services.gemini_service import gemini_service
-        from app.database import get_db
-        from app.models import Client
+@app.get("/debug-full-rag/{client_id}")
+async def debug_full_rag(client_id: str, db: Session = Depends(get_db)):
+    """Test complete RAG pipeline"""
+    from app.services.pinecone_service import pinecone_service
+    from app.services.gemini_service import gemini_service
     
-        db = next(get_db())
-        client = db.query(Client).filter(Client.id == client_id).first()
-    
+    try:
+        client = db.query(models.Client).filter(models.Client.id == client_id).first()
+        if not client:
+            return {"success": False, "error": "Client not found"}
+        
         query = "What are the clinic timings?"
-    
-    # Step 1: Search Pinecone
+        
+        # Step 1: Search Pinecone
         context_results = await pinecone_service.search_similar_chunks(
             client_id=client_id,
             query=query,
             top_k=5,
             min_score=0.2
-       )
-    
-    # Step 2: Extract context
+        )
+        
+        # Step 2: Extract context
         context_parts = []
         if context_results:
             for match in context_results:
                 if isinstance(match, dict) and "chunk_text" in match:
                     context_parts.append(match["chunk_text"])
-    
+        
         context_text = "\n\n".join(context_parts) if context_parts else ""
-    
-     # Step 3: Generate response
+        
+        # Step 3: Generate response
         if context_text:
             response = gemini_service.generate_contextual_response(
                 context=context_text,
                 query=query,
                 business_name=client.business_name,
-               conversation_history=[]
+                conversation_history=[]
             )
         else:
             response = "No context found"
-    
+        
         return {
             "success": True,
             "query": query,
             "context_found": len(context_parts),
             "context_preview": context_text[:500] if context_text else "EMPTY",
-            "response": response
+            "response": response,
+            "pinecone_results": len(context_results)
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
         }
 
+# === END DEBUG ENDPOINTS ===
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=10000)
