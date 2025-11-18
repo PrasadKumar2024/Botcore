@@ -383,6 +383,8 @@ You: "We're open Monday-Saturday, 9:00 AM to 8:00 PM! 😊 Emergency care is ava
             
         return formatted
     
+    # UPDATED CODE FOR gemini.py
+
     def generate_simple_response(
         self, 
         query: str, 
@@ -395,42 +397,32 @@ You: "We're open Monday-Saturday, 9:00 AM to 8:00 PM! 😊 Emergency care is ava
         Args:
             query: User's question
             business_name: Name of the business
-            use_rag_fallback: Whether to suggest RAG for specific queries
+            use_rag_fallback: Whether to suggest RAG (now controlled by chat.py)
             
         Returns:
             AI-generated response
         """
-        if use_rag_fallback and self._requires_specific_knowledge(query):
-            return f"I'm {business_name}'s AI assistant. For specific questions about {business_name}'s services, policies, or offerings, I can provide more accurate answers if you've uploaded relevant documents to my knowledge base. Otherwise, please contact {business_name} directly for the most accurate information."
         
-        prompt = f"""You are a helpful AI assistant for {business_name}. 
+        # This logic is now controlled by chat.py
+        # If chat.py calls this with use_rag_fallback=True, it means it *thinks*
+        # it might be a specific question but RAG is off.
+        if use_rag_fallback:
+             # This check is now an LLM call, not keywords
+            if self._requires_specific_knowledge(query, business_name):
+                return f"I'm {business_name}'s AI assistant. For specific questions about {business_name}'s services, policies, or offerings, I need to have the relevant documents in my knowledge base. Otherwise, please contact {business_name} directly for the most accurate information."
+        
+        # If use_rag_fallback=False, it means RAG was already tried and failed.
+        # So, we just answer the question as a general AI.
+        
+        prompt = f"""You are a helpful and friendly AI assistant for {business_name}.
+You are having a general conversation.
+DO NOT mention your knowledge base or PDFs. Just answer the question.
 
 Customer question: {query}
 
-Provide a brief, helpful response. If this requires specific information about {business_name}'s services, products, or policies, politely explain that you need more specific context.
-
-Response:"""
+Brief, helpful response:"""
         
         return self.generate_response(prompt, temperature=0.7)
-    
-    def _requires_specific_knowledge(self, query: str) -> bool:
-        """
-        Determine if a query likely requires specific business knowledge
-        
-        Args:
-            query: User's question
-            
-        Returns:
-            True if query likely needs specific business context
-        """
-        specific_keywords = [
-            'price', 'cost', 'fee', 'hour', 'open', 'close', 'service',
-            'product', 'policy', 'procedure', 'requirement', 'document',
-            'form', 'application', 'process', 'timeline', 'deadline'
-        ]
-        
-        query_lower = query.lower()
-        return any(keyword in query_lower for keyword in specific_keywords)
     
     def validate_api_key(self) -> Dict[str, Any]:
         """
