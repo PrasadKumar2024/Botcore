@@ -423,7 +423,54 @@ Customer question: {query}
 Brief, helpful response:"""
         
         return self.generate_response(prompt, temperature=0.7)
-    
+    def _requires_specific_knowledge(self, query: str, business_name: str) -> bool:
+        """
+        Determine if a query likely requires specific business knowledge
+        (UPGRADED to use an LLM for better accuracy)
+        
+        Args:
+            query: User's question
+            business_name: Name of the business
+            
+        Returns:
+            True if query likely needs specific business context
+        """
+        logger.info(f"Checking if query needs specific knowledge: '{query}'")
+        
+        prompt = f"""You are an expert query classifier.
+Your task is to determine if a user's question requires specific, internal knowledge about a business (like its hours, prices, services, or policies) or if it's a general greeting or chit-chat.
+
+Respond with ONLY 'True' (if it needs specific info) or 'False' (if it's general).
+
+Business Name: {business_name}
+
+-- Examples of 'True' (needs specific info) --
+'What are your hours?'
+'How much does a consultation cost?'
+'timings'
+'address'
+'Do you offer service X?'
+
+-- Examples of 'False' (general chat) --
+'Hi'
+'How are you?'
+'Thanks'
+'Tell me a joke'
+
+-- User Query --
+Query: "{query}"
+
+Classification (True/False):"""
+
+        try:
+            response = self.generate_response(prompt, temperature=0.0, max_tokens=10)
+            result = response.strip().lower()
+            logger.info(f"Knowledge check for '{query}': {result}")
+            return result == 'true'
+        except Exception as e:
+            logger.error(f"Failed knowledge check: {e}")
+            # Fail safe: assume it's general chat
+            return False
     def validate_api_key(self) -> Dict[str, Any]:
         """
         Comprehensive API key validation
