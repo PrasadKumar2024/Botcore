@@ -16,24 +16,20 @@ logger = logging.getLogger(__name__)
 
 # UPDATED CODE FOR chat.py
 
+
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(
     chat_request: ChatRequest,
     db: Session = Depends(get_db)
 ) -> ChatResponse:
     """
-    Handle chat messages from the web chat widget.
-    Returns AI responses based on the client's PDF knowledge base,
-    with a smart fallback for general questions.
+    Smart RAG Pipeline: Rewrite -> Search -> Rerank -> Answer
     """
     try:
         # 1. Validate Client
         client = db.query(Client).filter(Client.id == chat_request.client_id).first()
         if not client:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Client not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
         
         # 2. Check Subscription
         web_subscription = db.query(Subscription).filter(
@@ -42,85 +38,68 @@ async def chat_endpoint(
         ).first()
         
         if not web_subscription or not check_subscription_active(web_subscription.expiry_date):
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Web chat subscription is not active"
-            )
+            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="Web chat subscription is not active")
         
-        # Import Cohere service
         from app.services.cohere_service import cohere_service
         
         logger.info(f"🔍 Processing query for {client.business_name}: '{chat_request.message}'")
         
-        # 3. Search for Context (RAG Attempt)
-        context_text = ""
+        # 🧠 STEP 1: SMART QUERY REWRITING
+        # This fixes "timings" vs "hours" by standardizing the language
+        search_query = gemini_service.rewrite_query(chat_request.message, chat_request.conversation_history)
+        
+        # 🔎 STEP 2: BROAD SEARCH 
+        # We ask Pinecone for MORE results (15) with a LOWER score (0.01) to ensure we don't miss anything.
         try:
-            # Generate query embedding
-            query_embedding = await cohere_service.generate_query_embedding(chat_request.message)
-            logger.info(f"✅ Query embedding generated: {len(query_embedding)}D")
+            query_embedding = await cohere_service.generate_query_embedding(search_query)
             
-            # Search Pinecone
-            logger.info(f"🔎 Searching Pinecone for client: {chat_request.client_id}")
-            context_results = await pinecone_service.search_similar_chunks(
+            raw_results = await pinecone_service.search_similar_chunks(
                 client_id=str(chat_request.client_id),
-                query=chat_request.message,
-                top_k=5,
-                min_score=0.2 # Set a reasonable score
+                query=search_query,
+                top_k=15,       # Fetch many candidates
+                min_score=0.01  # Extremely low threshold to ensure recall
+            )
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            raw_results = []
+        
+        # Extract just the text for reranking
+        candidate_docs = [match['chunk_text'] for match in raw_results if 'chunk_text' in match]
+        
+        # 🥇 STEP 3: COHERE RERANK (The Genius Step)
+        # Cohere compares the Question vs. Documents and picks the ACTUAL best ones.
+        final_chunks = []
+        if candidate_docs:
+            reranked_results = await cohere_service.rerank_documents(
+                query=search_query, 
+                documents=candidate_docs, 
+                top_n=3 
             )
             
-            # Build context from results
-            context_parts = []
-            if context_results and isinstance(context_results, list):
-                logger.info(f"📊 Pinecone returned {len(context_results)} matches")
-                for i, match in enumerate(context_results):
-                    if isinstance(match, dict) and "chunk_text" in match:
-                        score = match.get('score', 0)
-                        text = match.get('chunk_text', '')
-                        logger.info(f"  Match {i+1}: Score={score:.3f}, Length={len(text)} chars")
-                        context_parts.append(text)
-                
-                if context_parts:
-                    context_text = "\n\n".join(context_parts)
-                    logger.info(f"✅ Built context: {len(context_text)} total chars")
-            else:
-                logger.warning("⚠️ No matches returned from Pinecone")
-        
-        except Exception as e:
-            logger.error(f"❌ Error during Pinecone search: {e}")
-            # Don't fail the chat, just proceed without context
-            context_text = ""
-            
-        # 4. Generate Response (RAG or Fallback)
-        response_text = ""
-        
-        # --- THIS IS THE NEW LOGIC ---
-        if context_text and len(context_text) > 50:
-            # PATH 1: RAG - We have context!
-            logger.info(f"🤖 Using RAG mode with {len(context_parts)} chunks")
+            # Filter by Rerank Score (High Confidence)
+            for res in reranked_results:
+                logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
+                if res['score'] > 0.4: # 40% relevance threshold (Very reliable)
+                    final_chunks.append(res['text'])
+
+        # 📝 STEP 4: GENERATE ANSWER
+        if final_chunks and len("".join(final_chunks)) > 20:
+            context_text = "\n\n".join(final_chunks)
             response_text = gemini_service.generate_contextual_response(
                 context=context_text,
-                query=chat_request.message,
+                query=chat_request.message, # Pass original user query to bot
                 business_name=client.business_name,
-                conversation_history=chat_request.conversation_history or []
+                conversation_history=chat_request.conversation_history
             )
-            logger.info(f"✅ Generated RAG response: {response_text[:150]}...")
-        
         else:
-            # PATH 2: FALLBACK - No context found, use general model
-            logger.warning("⚠️ Insufficient context - using general fallback")
-            
-            # Use the simple response function. 
-            # We set use_rag_fallback=False because we *already tried* RAG and it failed.
-            # This tells the function to just answer the question.
+            # Fallback: Only used if Reranker says "Absolutely nothing matches"
+            logger.warning("⚠️ Reranker found no relevant docs. Using general fallback.")
             response_text = gemini_service.generate_simple_response(
                 query=chat_request.message,
                 business_name=client.business_name,
-                use_rag_fallback=False # <-- IMPORTANT
+                use_rag_fallback=False
             )
-            logger.info(f"✅ Generated General response: {response_text[:150]}...")
-        # --- END OF NEW LOGIC ---
 
-        # 5. Return successful response
         return ChatResponse(
             success=True,
             response=response_text,
@@ -128,19 +107,14 @@ async def chat_endpoint(
             conversation_id=chat_request.conversation_id or generate_conversation_id(),
             client_id=chat_request.client_id
         )
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
+
     except Exception as e:
         logger.error(f"Unexpected error in chat endpoint: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing your message"
         )
-
-# ADD THESE 3 ROUTES TO YOUR EXISTING chat.py
-
+        
 @router.post("/clients/{client_id}/web_chat/activate")
 async def activate_client_web_chat(client_id: int, db: Session = Depends(get_db)):
     """Activate web chat and generate embed codes"""
