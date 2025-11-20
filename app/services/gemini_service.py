@@ -31,7 +31,7 @@ class GeminiService:
     
         # Add Hugging Face for embeddings only
           # Add this line
-        self.embedding_dimension = 768 # Keep this as is
+        self.embedding_dimension = 1024# Keep this as is
     
         # Initialize the service
         self.initialize()
