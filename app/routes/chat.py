@@ -65,7 +65,7 @@ async def chat_endpoint(
                 client_id=str(chat_request.client_id),
                 query=chat_request.message,
                 top_k=5,
-                min_score=0.1 # Set a reasonable score
+                min_score=0.3 # Set a reasonable score
             )
             
             # Build context from results
