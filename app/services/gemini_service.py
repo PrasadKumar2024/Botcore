@@ -59,7 +59,31 @@ class GeminiService:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Gemini AI: {e}")
             self.is_available = False
-    
+        # --- ADD THIS NEW METHOD TO GeminiService CLASS ---
+    def rewrite_query(self, user_query: str, conversation_history: List[Dict] = None) -> str:
+        """
+        Rewrites the user's query to be specific and searchable.
+        """
+        if not self.check_availability():
+            return user_query
+
+        prompt = f"""You are an AI Search Optimizer. Rewrite this query to be perfect for a vector search.
+        1. Remove filler words.
+        2. Expand synonyms (e.g., "timings" -> "operating hours schedule").
+        3. OUTPUT ONLY THE REWRITTEN QUERY. NO QUOTES.
+
+        User Raw Query: "{user_query}"
+        """
+        
+        try:
+            # Fast, low-temp generation
+            response = self.generate_response(prompt, temperature=0.1, max_tokens=50)
+            cleaned = response.strip().replace('"', '').replace("'", "")
+            logger.info(f"🔄 Rewritten: {user_query} -> {cleaned}")
+            return cleaned
+        except Exception:
+            return user_query
+            
     def _test_connection(self):
         """Test connection to Gemini API"""
         try:
