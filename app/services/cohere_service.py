@@ -87,7 +87,39 @@ class CohereService:
         Generate embedding for search queries (optimized for retrieval)
         """
         return await self.generate_embedding_async(text, input_type="search_query")
+
     
+        # --- ADD THIS NEW METHOD TO CohereService CLASS ---
+    async def rerank_documents(self, query: str, documents: List[str], top_n: int = 3) -> List[Dict[str, Any]]:
+        """
+        Re-ranks a list of documents to find the MOST relevant ones.
+        """
+        if not documents or not self.is_available:
+            return []
+            
+        try:
+            # Using the existing self.client
+            response = self.client.rerank(
+                model="rerank-english-v3.0", 
+                query=query,
+                documents=documents,
+                top_n=top_n
+            )
+            
+            reranked = []
+            for result in response.results:
+                reranked.append({
+                    "text": documents[result.index],
+                    "score": result.relevance_score,
+                    "index": result.index
+                })
+            
+            return reranked
+        except Exception as e:
+            logger.error(f"❌ Cohere Rerank failed: {e}")
+            # Fallback: return original list with dummy scores
+            return [{"text": d, "score": 0.5, "index": i} for i, d in enumerate(documents[:top_n])]
+            
     def _get_zero_embedding(self) -> List[float]:
         """Return a zero vector of 1024 dimensions as fallback"""
         return [0.0] * 1024
