@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 import PyPDF2
 import pdfplumber
+import fitz  
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from app.models import Document, Client, KnowledgeChunk
