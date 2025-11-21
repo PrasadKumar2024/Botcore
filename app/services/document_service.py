@@ -35,7 +35,7 @@ class DocumentService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10)
     )
-        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def extract_text_from_pdf(self, file_path: str) -> str:
         """
         Robust text extraction using PyMuPDF (fitz).
