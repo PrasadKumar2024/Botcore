@@ -1,4 +1,3 @@
-
 import os
 import logging
 import shutil
@@ -6,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Tuple, Dict, Any
 from fastapi import UploadFile, HTTPException
-import PyPDF2
+import fitz  # PyMuPDF - REPLACED PyPDF2
 try:
     import magic
 except ImportError:
@@ -35,7 +34,7 @@ class FileUtils:
     
     def validate_pdf_file(self, file: UploadFile) -> Tuple[bool, str]:
         """
-        Validate PDF file for type, size, and security
+        Validate PDF file for type, size, and security using PyMuPDF
         Returns: (is_valid, error_message)
         """
         try:
@@ -52,9 +51,10 @@ class FileUtils:
             file.file.seek(0)  # Reset file pointer
             
             # Validate MIME type using python-magic
-            mime = magic.from_buffer(content, mime=True)
-            if mime not in self.allowed_mime_types:
-                return False, f"Invalid file type: {mime}. Only PDF files are allowed."
+            if magic:
+                mime = magic.from_buffer(content, mime=True)
+                if mime not in self.allowed_mime_types:
+                    return False, f"Invalid file type: {mime}. Only PDF files are allowed."
             
             # Check file size by reading entire file (for accurate size)
             file.file.seek(0, os.SEEK_END)
@@ -67,15 +67,22 @@ class FileUtils:
             if file_size == 0:
                 return False, "File is empty"
             
-            # Additional PDF-specific validation
+            # Additional PDF-specific validation using PyMuPDF
             try:
-                pdf_reader = PyPDF2.PdfReader(file.file)
-                if len(pdf_reader.pages) == 0:
+                # Read entire file content for PyMuPDF validation
+                file_content = file.file.read()
+                file.file.seek(0)  # Reset pointer
+                
+                # Validate with PyMuPDF
+                doc = fitz.open(stream=file_content, filetype="pdf")
+                if len(doc) == 0:
                     return False, "PDF contains no pages"
                 
                 # Check if PDF is encrypted
-                if pdf_reader.is_encrypted:
+                if doc.is_encrypted:
                     return False, "Encrypted PDFs are not supported"
+                
+                doc.close()
                     
             except Exception as e:
                 return False, f"Invalid PDF file: {str(e)}"
@@ -175,31 +182,31 @@ class FileUtils:
     
     def extract_pdf_info(self, file_path: str) -> Dict[str, Any]:
         """
-        Extract basic information from PDF file
+        Extract basic information from PDF file using PyMuPDF
         """
         try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                
-                info = {
-                    "page_count": len(pdf_reader.pages),
-                    "is_valid": True,
-                    "has_text": False,
-                    "author": pdf_reader.metadata.get('/Author', '') if pdf_reader.metadata else '',
-                    "title": pdf_reader.metadata.get('/Title', '') if pdf_reader.metadata else '',
-                    "creator": pdf_reader.metadata.get('/Creator', '') if pdf_reader.metadata else ''
-                }
-                
-                # Check if PDF contains extractable text (sample first page)
-                if info["page_count"] > 0:
-                    try:
-                        first_page = pdf_reader.pages[0]
-                        text = first_page.extract_text()
-                        info["has_text"] = len(text.strip()) > 0
-                    except:
-                        info["has_text"] = False
-                
-                return info
+            doc = fitz.open(file_path)
+            
+            info = {
+                "page_count": len(doc),
+                "is_valid": True,
+                "has_text": False,
+                "author": doc.metadata.get('author', ''),
+                "title": doc.metadata.get('title', ''),
+                "creator": doc.metadata.get('creator', '')
+            }
+            
+            # Check if PDF contains extractable text (sample first page)
+            if info["page_count"] > 0:
+                try:
+                    first_page = doc[0]
+                    text = first_page.get_text()
+                    info["has_text"] = len(text.strip()) > 0
+                except:
+                    info["has_text"] = False
+            
+            doc.close()
+            return info
                 
         except Exception as e:
             logger.error(f"Error extracting PDF info: {str(e)}")
@@ -207,25 +214,25 @@ class FileUtils:
     
     def extract_text_from_pdf(self, file_path: str) -> Tuple[str, int]:
         """
-        Extract all text from PDF file
+        Extract all text from PDF file using PyMuPDF
         Returns: (extracted_text, character_count)
         """
         try:
             full_text = ""
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                
-                for page_num, page in enumerate(pdf_reader.pages):
-                    try:
-                        text = page.extract_text()
-                        if text:
-                            full_text += text + "\n\n"
-                    except Exception as e:
-                        logger.warning(f"Error extracting text from page {page_num + 1}: {str(e)}")
-                        continue
+            doc = fitz.open(file_path)
             
+            for page_num, page in enumerate(doc):
+                try:
+                    text = page.get_text()
+                    if text:
+                        full_text += text + "\n\n"
+                except Exception as e:
+                    logger.warning(f"Error extracting text from page {page_num + 1}: {str(e)}")
+                    continue
+            
+            doc.close()
             char_count = len(full_text)
-            logger.info(f"Extracted {char_count} characters from PDF")
+            logger.info(f"Extracted {char_count} characters from PDF using PyMuPDF")
             return full_text, char_count
             
         except Exception as e:
