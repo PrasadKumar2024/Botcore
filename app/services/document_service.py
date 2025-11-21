@@ -31,12 +31,10 @@ class DocumentService:
         self.chunk_overlap = 200
         self.max_retries = 3
     
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
+    
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def extract_text_from_pdf(self, file_path: str) -> str:
+        logger.info("✅✅✅ New PyMuPDF Extractor is now active! ✅✅✅")
         """
         Robust text extraction using PyMuPDF (fitz).
         Includes validation, resource management, and scanned document detection.
