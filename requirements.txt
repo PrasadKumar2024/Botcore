@@ -4,6 +4,7 @@ uvicorn==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 python-magic==0.4.27
+pymupdf>=1.23.0
 
 # Database
 sqlalchemy==2.0.23
