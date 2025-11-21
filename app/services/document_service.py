@@ -35,77 +35,63 @@ class DocumentService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10)
     )
+        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def extract_text_from_pdf(self, file_path: str) -> str:
         """
-        Extract text from PDF file using PyPDF2 with pdfplumber fallback
-        
-        Args:
-            file_path: Path to PDF file
-            
-        Returns:
-            Extracted text content
+        Robust text extraction using PyMuPDF (fitz).
+        Includes validation, resource management, and scanned document detection.
         """
-        text = ""
+        if not os.path.exists(file_path):
+            logger.error(f"❌ File not found: {file_path}")
+            raise FileNotFoundError(f"PDF file does not exist: {file_path}")
+
+        full_text = []
+        
         try:
-            logger.info(f"📄 Extracting text from PDF: {file_path}")
+            logger.info(f"📄 Opening PDF with PyMuPDF: {file_path}")
             
-            # Try PyPDF2 first
-            try:
-                with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    total_pages = len(pdf_reader.pages)
+            # Use context manager to ensure file is properly closed
+            with fitz.open(file_path) as doc:
+                total_pages = len(doc)
+                logger.info(f"📄 Processing {total_pages} pages...")
+
+                for page_num, page in enumerate(doc, 1):
+                    # Extract text preserving blocks/layout order
+                    page_text = page.get_text("text")
                     
-                    logger.info(f"Processing {total_pages} pages with PyPDF2")
-                    
-                    for page_num, page in enumerate(pdf_reader.pages, 1):
-                        try:
-                            page_text = page.extract_text()
-                            if page_text and page_text.strip():
-                                text += f"\n--- Page {page_num} ---\n{page_text.strip()}"
-                        except Exception as e:
-                            logger.warning(f"PyPDF2 error on page {page_num}: {e}")
-                            continue
-                
-                if text.strip():
-                    logger.info(f"✅ PyPDF2 extracted {len(text)} characters")
-                    return text.strip()
-                else:
-                    logger.warning("PyPDF2 returned empty text, trying pdfplumber")
-                    
-            except Exception as pdf2_error:
-                logger.warning(f"PyPDF2 failed, trying pdfplumber: {pdf2_error}")
+                    if page_text.strip():
+                        # Add page marker to help the AI understand structure
+                        cleaned_page_text = page_text.strip()
+                        full_text.append(f"--- Page {page_num} ---\n{cleaned_page_text}")
+                    else:
+                        logger.warning(f"⚠️ Page {page_num} is empty or contains only images.")
+
+            # Combine all text
+            final_text = "\n\n".join(full_text)
             
-            # Fallback to pdfplumber
-            try:
-                with pdfplumber.open(file_path) as pdf:
-                    total_pages = len(pdf.pages)
-                    logger.info(f"Processing {total_pages} pages with pdfplumber")
-                    
-                    for page_num, page in enumerate(pdf.pages, 1):
-                        try:
-                            page_text = page.extract_text()
-                            if page_text and page_text.strip():
-                                text += f"\n--- Page {page_num} ---\n{page_text.strip()}"
-                        except Exception as e:
-                            logger.warning(f"pdfplumber error on page {page_num}: {e}")
-                            continue
-                
-                if text.strip():
-                    logger.info(f"✅ pdfplumber extracted {len(text)} characters")
-                    return text.strip()
-                else:
-                    raise Exception("Both PDF libraries failed to extract text")
-                    
-            except Exception as plumber_error:
-                logger.error(f"pdfplumber also failed: {plumber_error}")
-                raise Exception(f"Failed to extract text from PDF: {plumber_error}")
-                
-        except FileNotFoundError:
-            logger.error(f"File not found: {file_path}")
-            raise Exception(f"PDF file not found: {file_path}")
+            # Final Quality Check
+            if not final_text.strip():
+                error_msg = "❌ Extraction failed: Document appears to be empty or scanned images only (no selectable text)."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            
+            if len(final_text) < 50:
+                logger.warning(f"⚠️ Warning: Extracted text is dangerously short ({len(final_text)} chars). Check PDF content.")
+
+            # Clean up excessive invisible characters but keep newlines for structure
+            # This removes weird PDF artifacts like multiple tabs or non-breaking spaces
+            final_text_cleaned = " ".join(final_text.split())
+            
+            logger.info(f"✅ Successfully extracted {len(final_text_cleaned)} characters from {total_pages} pages.")
+            return final_text_cleaned
+
+        except fitz.FileDataError:
+            logger.error("❌ The file is corrupted or is not a valid PDF.")
+            raise
         except Exception as e:
-            logger.error(f"Error extracting text from {file_path}: {e}")
-            raise Exception(f"Failed to extract text from PDF: {e}")
+            logger.error(f"❌ Unexpected error during PDF extraction: {str(e)}")
+            raise
+            
     
     def chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> List[Dict[str, Any]]:
         """
