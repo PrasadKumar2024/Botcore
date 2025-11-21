@@ -6,8 +6,6 @@ import asyncio
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-import PyPDF2
-import pdfplumber
 import fitz  
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -689,25 +687,13 @@ class DocumentService:
                 }
             }
     
-    @retry(
-        stop=stop_after_attempt(2),
+    
+    @retry( stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=1, min=2, max=5)
     )
     def validate_and_save_pdf(self, file, client_id: str, upload_dir: str, original_filename: str) -> str:
         """
-        Validate and save uploaded PDF file with enhanced validation
-        
-        Args:
-            file: Uploaded file object
-            client_id: UUID of the client
-            upload_dir: Directory to save uploads
-            original_filename: Original name of the file
-            
-        Returns:
-            Path to saved file
-            
-        Raises:
-            ValueError: If validation fails
+        Validate and save uploaded PDF file with enhanced validation using PyMuPDF ONLY
         """
         try:
             # Validate file extension
@@ -715,17 +701,17 @@ class DocumentService:
                 raise ValueError("Only PDF files are allowed")
             
             # Validate file size (max 50MB)
-            file.file.seek(0, 2)  # Seek to end
+            file.file.seek(0, 2)
             file_size = file.file.tell()
-            file.file.seek(0)  # Reset to start
+            file.file.seek(0)
             
-            if file_size > 50 * 1024 * 1024:  # 50MB
+            if file_size > 50 * 1024 * 1024:
                 raise ValueError("File size must be less than 50MB")
             
             if file_size == 0:
                 raise ValueError("File is empty")
             
-            # Generate unique filename
+            # Generate unique filename and path
             file_extension = os.path.splitext(original_filename)[1]
             unique_filename = f"{uuid.uuid4()}{file_extension}"
             file_path = os.path.join(upload_dir, unique_filename)
@@ -740,21 +726,13 @@ class DocumentService:
             
             logger.info(f"💾 Saved file: {file_path} ({len(content)} bytes)")
             
-            # Validate PDF content
+            # ✅ VALIDATE WITH PyMuPDF ONLY
             try:
-                with open(file_path, 'rb') as f:
-                    # Try PyPDF2 first
-                    try:
-                        pdf_reader = PyPDF2.PdfReader(f)
-                        num_pages = len(pdf_reader.pages)
-                        logger.info(f"✅ PDF validated with PyPDF2: {num_pages} pages")
-                    except Exception:
-                        # Try pdfplumber as fallback
-                        f.seek(0)
-                        with pdfplumber.open(f) as pdf:
-                            num_pages = len(pdf.pages)
-                        logger.info(f"✅ PDF validated with pdfplumber: {num_pages} pages")
-                        
+                # Use fitz (PyMuPDF) to confirm it is a valid PDF
+                doc = fitz.open(file_path)
+                num_pages = len(doc)
+                doc.close()
+                logger.info(f"✅ PDF validated with PyMuPDF: {num_pages} pages")
             except Exception as e:
                 # Delete invalid file
                 if os.path.exists(file_path):
@@ -766,7 +744,7 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Error saving PDF file: {e}")
             raise
-    
+                
     async def health_check(self) -> Dict[str, Any]:
         """
         Comprehensive health check for document service
