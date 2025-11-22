@@ -47,6 +47,7 @@ async def chat_endpoint(
         # 🧠 STEP 1: SMART QUERY REWRITING
         # This fixes "timings" vs "hours" by standardizing the language
         search_query = gemini_service.rewrite_query(chat_request.message, chat_request.conversation_history)
+        logger.info(f"🔄 Query rewriting: '{chat_request.message}' -> '{search_query}'")
         
         # 🔎 STEP 2: BROAD SEARCH 
         # We ask Pinecone for MORE results (15) with a LOWER score (0.01) to ensure we don't miss anything.
@@ -59,6 +60,9 @@ async def chat_endpoint(
                 top_k=15,       # Fetch many candidates
                 min_score=0.01  # Extremely low threshold to ensure recall
             )
+            logger.info(f"📊 Raw search found {len(raw_results)} chunks")
+                for i, result in enumerate(raw_results[:3]):  # Log top 3 results
+                    logger.info(f"  📄 Chunk {i+1} - Score: {result.get('score', 0):.3f} | Text: {result.get('chunk_text', '')[:80]}...")
         except Exception as e:
             logger.error(f"Search failed: {e}")
             raw_results = []
