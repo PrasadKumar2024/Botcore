@@ -20,18 +20,15 @@ class DocumentService:
     Comprehensive document processing service with Pinecone integration
     Handles PDF processing, chunking, vector storage, and semantic search
     """
-    
-        def __init__(self):
-            """Initialize document service with dependencies"""
-            self.gemini_service = gemini_service
-            self.pinecone_service = pinecone_service
-        
-            # CHANGE 3: Reduced chunk size from 1000 -> 512 for better precision
-            # This helps vector search find specific answers in smaller text blocks.
-            self.max_chunk_size = 512 
-            self.chunk_overlap = 100  # Reduced overlap slightly to match
-        
-            self.max_retries = 3
+    def __init__(self):
+        """Initialize document service with dependencies"""
+         self.gemini_service = gemini_service
+         self.pinecone_service = pinecone_service
+         # CHANGE 3: Reduced chunk size from 1000 -> 512 for better precision
+         # This helps vector search find specific answers in smaller text blocks.
+         self.max_chunk_size = 512 
+         self.chunk_overlap = 100  # Reduced overlap slightly to match        
+         self.max_retries = 3
             
     
     
