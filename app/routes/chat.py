@@ -69,8 +69,7 @@ async def chat_endpoint(
         
         # Extract just the text for reranking
         candidate_docs = [match['chunk_text'] for match in raw_results if 'chunk_text' in match]
-        
-        # 🥇 STEP 3: COHERE RERANK (The Genius Step)
+                # 🥇 STEP 3: COHERE RERANK (The Genius Step)
         # Cohere compares the Question vs. Documents and picks the ACTUAL best ones.
         final_chunks = []
         if candidate_docs:
@@ -83,7 +82,9 @@ async def chat_endpoint(
             # Filter by Rerank Score (High Confidence)
             for res in reranked_results:
                 logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
-                if res['score'] > 0.4: # 40% relevance threshold (Very reliable)
+                
+                # CHANGE 1: Lowered threshold from 0.4 to 0.25 to catch more relevant info
+                if res['score'] > 0.25: 
                     final_chunks.append(res['text'])
 
         # 📝 STEP 4: GENERATE ANSWER
@@ -96,13 +97,16 @@ async def chat_endpoint(
                 conversation_history=chat_request.conversation_history
             )
         else:
-            # Fallback: Only used if Reranker says "Absolutely nothing matches"
-            logger.warning("⚠️ Reranker found no relevant docs. Using general fallback.")
-            response_text = gemini_service.generate_simple_response(
-                query=chat_request.message,
-                business_name=client.business_name,
-                use_rag_fallback=False
+            # CHANGE 2: Fixed Fallback Logic
+            # If Reranker says "nothing matches", we explicitly admit we don't know.
+            # We do NOT call generate_simple_response() because that causes hallucinations.
+            logger.warning("⚠️ Reranker found no relevant docs. Sending Safe Fallback.")
+            
+            response_text = (
+                f"I apologize, but I don't have specific information about that in "
+                f"{client.business_name}'s documents. Please contact them directly for details."
             )
+                
 
         return ChatResponse(
             success=True,
