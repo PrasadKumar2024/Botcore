@@ -7,7 +7,7 @@
     
     // Configuration - FIXED API URL
     const config = {
-        apiBaseUrl: window.ownBotConfig?.apiBaseUrl || 'https://botcore-z6j0.onrender.com/api',
+        apiBaseUrl: window.ownBotConfig?.apiBaseUrl || 'https://botcore-0n2z.onrender.com/api',
         clientId: window.ownBotConfig?.clientId || getClientIdFromScript(),
         widgetPosition: window.ownBotConfig?.position || 'bottom-right',
         primaryColor: window.ownBotConfig?.primaryColor || '#2563eb',
