@@ -87,7 +87,7 @@ async def chat_endpoint(
                 logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
                 
                 # CHANGE 1: Lowered threshold from 0.4 to 0.25 to catch more relevant info
-                if res['score'] > 0.25: 
+                if res['score'] > 0.1: 
                     final_chunks.append(res['text'])
 
         # 📝 STEP 4: GENERATE ANSWER
