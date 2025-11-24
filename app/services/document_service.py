@@ -93,58 +93,79 @@ class DocumentService:
     
     def chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> List[Dict[str, Any]]:
         """
-        Split text into overlapping chunks with metadata
-        
-        Args:
-            text: The text to chunk
-            chunk_size: Maximum size of each chunk in characters
-            overlap: Number of characters to overlap between chunks
-            
-        Returns:
-            List of chunk dictionaries with text and metadata
+        Enhanced chunking with smart features but maintaining compatibility
         """
-        chunk_size = chunk_size or self.max_chunk_size
-        overlap = overlap or self.chunk_overlap
+        try:
+            import re
         
-        if not text or not text.strip():
-            logger.warning("Empty text provided for chunking")
-            return []
+        # Clean text
+            text = re.sub(r'\n\n\n+', '\n\n', text.strip())
+            text = text.replace('\r\n', '\n').replace('\r', '\n')
         
-        chunks = []
-        start = 0
-        text_length = len(text)
+        # Split by paragraphs
+            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
-        logger.info(f"Chunking text of length {text_length} with chunk_size={chunk_size}, overlap={overlap}")
+            chunks = []
+            for i, para in enumerate(paragraphs):
+                if len(para) > 50:
+                # Determine chunk type intelligently
+                    chunk_type = self._determine_chunk_type(para)
+                
+                    chunks.append({
+                    # Required fields (system compatibility)
+                        "chunk_text": para,
+                        "start_pos": 0,
+                        "end_pos": len(para),
+                        "char_count": len(para),
+                        "word_count": len(para.split()),
+                        "chunk_index": i,
+                    
+                    # Smart fields (future enhancement)
+                        "chunk_type": chunk_type,
+                        "topics": self._extract_topics(para),
+                        "importance_score": self._calculate_importance(para)
+                    })
         
-        while start < text_length:
-            end = start + chunk_size
-            
-            # Try to break at natural boundaries for better context
-            if end < text_length:
-                # Look for sentence/paragraph boundaries
-                best_break = self._find_optimal_breakpoint(text, start, end)
-                if best_break > start:
-                    end = best_break
-            
-            # Extract and clean the chunk
-            chunk_text = text[start:end].strip()
-            
-            if chunk_text and len(chunk_text) > 50:  # Only add meaningful chunks
-                chunk_data = {
-                    "chunk_text": chunk_text,
-                    "start_pos": start,
-                    "end_pos": end,
-                    "char_count": len(chunk_text),
-                    "word_count": len(chunk_text.split())
-                }
-                chunks.append(chunk_data)
-                logger.debug(f"Created chunk {len(chunks)}: {len(chunk_text)} characters")
-            
-            # Move start position with overlap
-            start = end - overlap if end < text_length else text_length
+            logger.info(f"✅ Created {len(chunks)} smart chunks")
         
-        logger.info(f"✅ Created {len(chunks)} chunks from text")
-        return chunks
+            for i, chunk in enumerate(chunks[:3]):
+                preview = chunk['chunk_text'][:60].replace('\n', ' ')
+                logger.info(f"  Chunk {i+1} [{chunk.get('chunk_type', 'unknown')}]: {preview}...")
+        
+            return chunks
+        
+        except Exception as e:
+            logger.error(f"Error in smart chunking: {e}")
+            return [{
+                "chunk_text": text,
+                "start_pos": 0,
+                "end_pos": len(text),
+                "char_count": len(text),
+                "word_count": len(text.split()),
+                "chunk_index": 0,
+                "chunk_type": "fallback"
+            }]
+
+    def _determine_chunk_type(self, text: str) -> str:
+        """Intelligently determine chunk type"""
+        text_lower = text.lower()
+    
+        if any(marker in text_lower for marker in ['timing', 'hour', 'schedule']):
+            return "schedule"
+        elif any(marker in text_lower for marker in ['contact', 'phone', 'email', 'address']):
+            return "contact_info"
+        elif any(marker in text_lower for marker in ['service', 'provide', 'offer']):
+            return "services"
+        elif any(marker in text_lower for marker in ['doctor', 'physician', 'dr.']):
+            return "staff"
+        elif any(marker in text_lower for marker in ['payment', 'cash', 'card', 'upi']):
+            return "payment"
+        elif any(marker in text_lower for marker in ['appointment', 'booking', 'schedule']):
+            return "booking"
+        else:
+            return "general_info"
+        
+
     
     def _find_optimal_breakpoint(self, text: str, start: int, end: int) -> int:
         """
