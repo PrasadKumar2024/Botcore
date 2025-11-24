@@ -107,14 +107,18 @@ async def chat_endpoint(
                 f"{client.business_name}'s documents. Please contact them directly for details."
             )
                 
+                # ... (This goes inside chat_endpoint, replacing the old return block) ...
 
         return ChatResponse(
             success=True,
             response=response_text,
-            session_id=chat_request.conversation_id or generate_conversation_id(),
-            conversation_id=chat_request.conversation_id or generate_conversation_id(),
+            # ✅ FIX: Use uuid directly. Removes dependency on missing function.
+            session_id=chat_request.conversation_id or str(uuid.uuid4()),
+            conversation_id=chat_request.conversation_id or str(uuid.uuid4()),
             client_id=chat_request.client_id
         )
+        
+        
 
     except Exception as e:
         logger.error(f"Unexpected error in chat endpoint: {str(e)}")
