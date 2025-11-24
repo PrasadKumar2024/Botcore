@@ -25,6 +25,9 @@ async def chat_endpoint(
     """
     Smart RAG Pipeline: Rewrite -> Search -> Rerank -> Answer
     """
+    logger.info("🔥🔥🔥 CHAT ENDPOINT HIT - DEBUG VERSION ACTIVE 🔥🔥🔥")
+    logger.info(f"📝 Received message: '{chat_request.message}'")
+    logger.info(f"👤 Client ID: {chat_request.client_id}")
     try:
         # 1. Validate Client
         client = db.query(Client).filter(Client.id == chat_request.client_id).first()
