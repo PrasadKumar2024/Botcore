@@ -188,8 +188,7 @@ class GeminiService:
             logger.error(f"❌ Async embedding generation failed after retries: {str(e)}")
             # If it fails after all retries, return zero vector as last resort
             return [0.0] * self.embedding_dimension
-    
-    
+        
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -204,15 +203,6 @@ class GeminiService:
     ) -> str:
         """
         Generate AI response using Gemini with advanced configuration
-        
-        Args:
-            prompt: The prompt to send to Gemini
-            temperature: Controls randomness (0.0 to 1.0)
-            max_tokens: Maximum tokens in response
-            system_message: Optional system message for context
-            
-        Returns:
-            Generated response text
         """
         if not self.check_availability():
             logger.error("❌ Gemini service not available")
@@ -232,17 +222,17 @@ class GeminiService:
                 top_p=0.8,
                 top_k=40,
                 max_output_tokens=max_tokens,
-                stop_sequences=None
             )
             
-            # Safety settings to minimize blocking
-            # Safety settings - COMPLETELY DISABLE BLOCKING to prevent "finish_reason: 2"
+            # ✅ FIX 1: ULTRA-ROBUST SAFETY SETTINGS
+            # Using list of dictionaries is the most compatible way to prevent "finish_reason: 2"
             safety_settings = [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                 {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
                 {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
                 {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
             ]
+
             # Generate response
             response = self.model.generate_content(
                 full_prompt,
@@ -250,18 +240,26 @@ class GeminiService:
                 safety_settings=safety_settings
             )
             
-            if response and response.text:
-                response_text = response.text.strip()
-                logger.info(f"✅ Successfully generated response ({len(response_text)} chars)")
-                return response_text
-            else:
-                logger.warning("❌ Empty or blocked response from Gemini")
-                return "I apologize, but I couldn't generate a response. This might be due to content safety filters or technical issues."
-                
+            # ✅ FIX 2: PREVENT CRASH ON BLOCKED CONTENT
+            # We strictly check if the response has text parts before accessing .text
+            try:
+                if response.parts:
+                    response_text = response.text.strip()
+                    logger.info(f"✅ Successfully generated response ({len(response_text)} chars)")
+                    return response_text
+                else:
+                    # If parts is empty, it was blocked or empty
+                    logger.warning(f"⚠️ Gemini response empty. Finish Reason: {response.candidates[0].finish_reason}")
+                    return "I apologize, but I couldn't generate a response due to safety guidelines."
+            except ValueError:
+                # Catch the specific Google API error for blocked content
+                logger.warning("⚠️ Gemini blocked the response (ValueError caught).")
+                return "I apologize, but I couldn't generate a response due to safety guidelines."
+            
         except Exception as e:
             logger.error(f"❌ Error generating Gemini response: {str(e)}")
-            return "I apologize, but I'm experiencing technical difficulties. Please try again in a moment."
-    
+            return "I apologize, but I'm experiencing technical difficulties."
+                
     def create_rag_prompt(
         self, 
         context: str, 
