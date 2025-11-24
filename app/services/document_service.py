@@ -396,7 +396,7 @@ class DocumentService:
                         client_id=str(client_id),
                         query=query,
                         top_k=max_chunks,
-                        min_score=0.6
+                        min_score=0.35
                     )
                     
                     if similar_chunks:
