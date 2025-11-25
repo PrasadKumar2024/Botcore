@@ -124,7 +124,7 @@ class DocumentService:
                 for i in range(0, len(text), 300):
                     chunk = text[i:i+300].strip()
                     if len(chunk) > 50:
-                    paragraphs.append(chunk)
+                        paragraphs.append(chunk)
         
         # Step 5: Create chunk objects
             chunks = []
