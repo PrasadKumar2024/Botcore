@@ -88,54 +88,49 @@ class DocumentService:
             raise
         except Exception as e:
             logger.error(f"❌ Unexpected error during PDF extraction: {str(e)}")
-            raise
-            
+            raise            
     
+    
+        
     def chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> List[Dict[str, Any]]:
         """
-        Enhanced chunking with smart features but maintaining compatibility
+        Enhanced chunking: Robust paragraph splitting without complex dependencies.
         """
         try:
             import re
-        
-        # Clean text
+            
+            # 1. Clean text
             text = re.sub(r'\n\n\n+', '\n\n', text.strip())
             text = text.replace('\r\n', '\n').replace('\r', '\n')
-        
-        # Split by paragraphs
+            
+            # 2. Split by paragraphs (Double newline is the best natural boundary)
             paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        
+            
             chunks = []
             for i, para in enumerate(paragraphs):
-                if len(para) > 50:
-                # Determine chunk type intelligently
+                # Filter out tiny noise (e.g., page numbers, single symbols)
+                if len(para) > 20:
+                    # Determine basic type for metadata
                     chunk_type = self._determine_chunk_type(para)
-                
+                    
                     chunks.append({
-                    # Required fields (system compatibility)
+                        # Standard fields required by your database
                         "chunk_text": para,
                         "start_pos": 0,
                         "end_pos": len(para),
                         "char_count": len(para),
                         "word_count": len(para.split()),
                         "chunk_index": i,
-                    
-                    # Smart fields (future enhancement)
-                        "chunk_type": chunk_type,
-                        "topics": self._extract_topics(para),
-                        "importance_score": self._calculate_importance(para)
+                        # Smart metadata
+                        "chunk_type": chunk_type
                     })
-        
+            
             logger.info(f"✅ Created {len(chunks)} smart chunks")
-        
-            for i, chunk in enumerate(chunks[:3]):
-                preview = chunk['chunk_text'][:60].replace('\n', ' ')
-                logger.info(f"  Chunk {i+1} [{chunk.get('chunk_type', 'unknown')}]: {preview}...")
-        
             return chunks
-        
+            
         except Exception as e:
-            logger.error(f"Error in smart chunking: {e}")
+            logger.error(f"Error in chunking: {e}")
+            # Fallback: Return original text as one chunk
             return [{
                 "chunk_text": text,
                 "start_pos": 0,
@@ -145,28 +140,7 @@ class DocumentService:
                 "chunk_index": 0,
                 "chunk_type": "fallback"
             }]
-
-    def _determine_chunk_type(self, text: str) -> str:
-        """Intelligently determine chunk type"""
-        text_lower = text.lower()
-    
-        if any(marker in text_lower for marker in ['timing', 'hour', 'schedule']):
-            return "schedule"
-        elif any(marker in text_lower for marker in ['contact', 'phone', 'email', 'address']):
-            return "contact_info"
-        elif any(marker in text_lower for marker in ['service', 'provide', 'offer']):
-            return "services"
-        elif any(marker in text_lower for marker in ['doctor', 'physician', 'dr.']):
-            return "staff"
-        elif any(marker in text_lower for marker in ['payment', 'cash', 'card', 'upi']):
-            return "payment"
-        elif any(marker in text_lower for marker in ['appointment', 'booking', 'schedule']):
-            return "booking"
-        else:
-            return "general_info"
-        
-
-    
+            
     def _find_optimal_breakpoint(self, text: str, start: int, end: int) -> int:
         """
         Find optimal break point for chunking at natural boundaries
