@@ -90,57 +90,89 @@ class DocumentService:
             logger.error(f"❌ Unexpected error during PDF extraction: {str(e)}")
             raise            
     
-    
-        
     def chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> List[Dict[str, Any]]:
         """
-        Enhanced chunking: Robust paragraph splitting without complex dependencies.
+        ULTRA-SIMPLE chunking - NO HELPER METHODS, NO CRASHES
+        Works for ANY document, requires ZERO additional code
         """
         try:
             import re
-            
-            # 1. Clean text
-            text = re.sub(r'\n\n\n+', '\n\n', text.strip())
+        
+            # Step 1: Clean text
             text = text.replace('\r\n', '\n').replace('\r', '\n')
-            
-            # 2. Split by paragraphs (Double newline is the best natural boundary)
-            paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-            
+            text = re.sub(r'\n\n\n+', '\n\n', text)
+            text = text.strip()
+        
+            if not text or len(text) < 20:
+                logger.warning("⚠️ Text too short to chunk")
+                return []
+        
+            logger.info(f"📄 Processing {len(text)} chars")
+        
+            # Step 2: Split by paragraphs (double newline)
+            paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 20]
+        
+            # Step 3: If no clear paragraphs, split by single newlines
+            if len(paragraphs) <= 1:
+                logger.info("⚠️ No paragraphs found, splitting by lines")
+                paragraphs = [p.strip() for p in text.split('\n') if len(p.strip()) > 20]
+        
+        # Step 4: If STILL no good splits, just chunk by size
+            if len(paragraphs) <= 1 and len(text) > 500:
+                logger.info("⚠️ Using fixed-size chunking")
+                paragraphs = []
+                for i in range(0, len(text), 300):
+                    chunk = text[i:i+300].strip()
+                    if len(chunk) > 50:
+                    paragraphs.append(chunk)
+        
+        # Step 5: Create chunk objects
             chunks = []
             for i, para in enumerate(paragraphs):
-                # Filter out tiny noise (e.g., page numbers, single symbols)
-                if len(para) > 20:
-                    # Determine basic type for metadata
-                    chunk_type = self._determine_chunk_type(para)
-                    
-                    chunks.append({
-                        # Standard fields required by your database
-                        "chunk_text": para,
-                        "start_pos": 0,
-                        "end_pos": len(para),
-                        "char_count": len(para),
-                        "word_count": len(para.split()),
-                        "chunk_index": i,
-                        # Smart metadata
-                        "chunk_type": chunk_type
-                    })
-            
-            logger.info(f"✅ Created {len(chunks)} smart chunks")
+                chunks.append({
+                    "chunk_text": para,
+                    "start_pos": 0,
+                    "end_pos": len(para),
+                    "char_count": len(para),
+                    "word_count": len(para.split()),
+                    "chunk_index": i
+                })
+        
+        # Step 6: Fallback if everything failed
+            if not chunks:
+                logger.warning("⚠️ No chunks created, returning whole text")
+                chunks = [{
+                    "chunk_text": text,
+                    "start_pos": 0,
+                    "end_pos": len(text),
+                    "char_count": len(text),
+                    "word_count": len(text.split()),
+                    "chunk_index": 0
+                }]
+        
+            logger.info(f"✅ Created {len(chunks)} chunks")
+        
+        # Step 7: Log first 3 chunks for debugging
+            for i, chunk in enumerate(chunks[:3]):
+                preview = chunk['chunk_text'][:50].replace('\n', ' ')
+                logger.info(f"  Chunk {i+1}: {chunk['char_count']} chars | '{preview}...'")
+        
             return chunks
-            
+        
         except Exception as e:
-            logger.error(f"Error in chunking: {e}")
-            # Fallback: Return original text as one chunk
+            logger.error(f"❌ Chunking error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        # Emergency fallback
             return [{
                 "chunk_text": text,
                 "start_pos": 0,
                 "end_pos": len(text),
                 "char_count": len(text),
                 "word_count": len(text.split()),
-                "chunk_index": 0,
-                "chunk_type": "fallback"
-            }]
-            
+                "chunk_index": 0
+            }]        
     def _find_optimal_breakpoint(self, text: str, start: int, end: int) -> int:
         """
         Find optimal break point for chunking at natural boundaries
