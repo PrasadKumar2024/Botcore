@@ -74,21 +74,35 @@ async def chat_endpoint(
         candidate_docs = [match['chunk_text'] for match in raw_results if 'chunk_text' in match]
                 # 🥇 STEP 3: COHERE RERANK (The Genius Step)
         # Cohere compares the Question vs. Documents and picks the ACTUAL best ones.
+                # 🥇 STEP 3: COHERE RERANK (With Fail-Safe)
         final_chunks = []
+        
         if candidate_docs:
-            reranked_results = await cohere_service.rerank_documents(
-                query=search_query, 
-                documents=candidate_docs, 
-                top_n=3 
-            )
-            
-            # Filter by Rerank Score (High Confidence)
-            for res in reranked_results:
-                logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
+            try:
+                # Try to Rerank
+                reranked_results = await cohere_service.rerank_documents(
+                    query=search_query, 
+                    documents=candidate_docs, 
+                    top_n=3 
+                )
                 
-                # CHANGE 1: Lowered threshold from 0.4 to 0.25 to catch more relevant info
-                if res['score'] > 0.1: 
-                    final_chunks.append(res['text'])
+                # If Reranking worked, filter by score
+                if reranked_results:
+                    for res in reranked_results:
+                        logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
+                        if res['score'] > 0.1:  # Low threshold for short queries
+                            final_chunks.append(res['text'])
+                else:
+                    # If Reranker returned empty (but no error), fallback to raw Pinecone results
+                    logger.warning("⚠️ Reranker returned no results. Using raw Pinecone chunks.")
+                    final_chunks = candidate_docs[:3]
+
+            except Exception as e:
+                # 🚨 CIRCUIT BREAKER: If Cohere fails (429, 500, etc.), DO NOT FAIL THE CHAT.
+                # Fallback to the top 3 raw results from Pinecone.
+                logger.error(f"❌ Reranker failed (Cohere error): {e}. Falling back to Pinecone results.")
+                final_chunks = candidate_docs[:3]
+                
 
         # 📝 STEP 4: GENERATE ANSWER
         if final_chunks and len("".join(final_chunks)) > 20:
