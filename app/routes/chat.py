@@ -54,22 +54,22 @@ async def chat_endpoint(
         
         # 🔎 STEP 2: BROAD SEARCH 
         # We ask Pinecone for MORE results (15) with a LOWER score (0.01) to ensure we don't miss anything.
-        try:
-            query_embedding = await cohere_service.generate_query_embedding(search_query)
-            
-            raw_results = await pinecone_service.search_similar_chunks(
-                client_id=str(chat_request.client_id),
-                query=search_query,
-                top_k=15,       # Fetch many candidates
-                min_score=0.01  # Extremely low threshold to ensure recall
-            )
-            logger.info(f"📊 Raw search found {len(raw_results)} chunks")
-            for i, result in enumerate(raw_results[:3]):  # Log top 3 results
-                logger.info(f"  📄 Chunk {i+1} - Score: {result.get('score', 0):.3f} | Text: {result.get('chunk_text', '')[:80]}...")
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            raw_results = []
-        
+        # --- FIXED SEARCH BLOCK ---
+        query_embedding = await cohere_service.generate_query_embedding(search_query)
+
+        raw_results = await pinecone_service.search_similar_chunks(
+            client_id=str(chat_request.client_id),
+            query=search_query,
+            top_k=15,
+            min_score=-1.0      # allow negative similarity (very important fix)
+        )
+
+        logger.info(f"📊 Raw search found {len(raw_results)} chunks")
+        for i, result in enumerate(raw_results[:3]):
+            score = result.get("score", 0)
+            preview = (result.get("chunk_text", "") or "")[:140].replace("\n", " ")
+            logger.info(f"  📄 Chunk {i+1} | Score: {score:.6f} | Text: {preview}...")
+         
         # Extract just the text for reranking
         candidate_docs = [match['chunk_text'] for match in raw_results if 'chunk_text' in match]
                 # 🥇 STEP 3: COHERE RERANK (The Genius Step)
@@ -87,15 +87,20 @@ async def chat_endpoint(
                 )
                 
                 # If Reranking worked, filter by score
-                if reranked_results:
-                    for res in reranked_results:
-                        logger.info(f"⚖️ Rerank Score: {res['score']:.4f} | Text: {res['text'][:30]}...")
-                        if res['score'] > 0.1:  # Low threshold for short queries
-                            final_chunks.append(res['text'])
-                else:
-                    # If Reranker returned empty (but no error), fallback to raw Pinecone results
-                    logger.warning("⚠️ Reranker returned no results. Using raw Pinecone chunks.")
-                    final_chunks = candidate_docs[:3]
+                # --- FIXED RERANKING BLOCK ---
+                if reranked_results: # trust ordering instead of score thresholds 
+                    final_chunks = [r.get("text") for r in reranked_results if r.get("text")]
+ # remove duplicates + keep only top 3
+                    final_chunks = list(dict.fromkeys(final_chunks))[:3]
+   # if all rerank scores are extremely small, fallback
+                    scores = [float(r.get("score", 0)) for r in reranked_results]
+                    if scores and all(s < 0.01 for s in scores):
+                        logger.warning("⚠️ Rerank scores too low — using Pinecone instead")
+                        final_chunks = candidate_docs[:3]
+
+                    else:
+                        logger.warning("⚠️ Reranker returned no results. Using raw Pinecone chunks.")
+                        final_chunks = candidate_docs[:3]
 
             except Exception as e:
                 # 🚨 CIRCUIT BREAKER: If Cohere fails (429, 500, etc.), DO NOT FAIL THE CHAT.
