@@ -325,7 +325,7 @@ class PineconeService:
             
             for match in results.matches:
                 # Only include results above similarity threshold
-                if match.score >= min_score:
+                if match.score is not None and match.score >= min_score:
                     chunk_data = {
                         "chunk_id": match.metadata.get("chunk_id"),
                         "document_id": match.metadata.get("document_id"),
