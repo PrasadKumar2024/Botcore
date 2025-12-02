@@ -24,7 +24,8 @@ async def whatsapp_webhook(request: Request):
 
     # Call your existing chat logic — MUST return text (string). Adapt as needed.
     # Example: handle_chat_query(client_id, incoming_text) -> reply_text
-    reply_text = await handle_chat_query(client_id, incoming_text)
+    # TEMP TEST: replace chat call with simple echo to verify webhook
+    reply_text = "pong: " + incoming_text
 
     # Build TwiML response
     resp = MessagingResponse()
