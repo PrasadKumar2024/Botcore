@@ -254,7 +254,95 @@ async def health_check():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"status": "unhealthy", "error": str(e)}
         )
-
+        
+@router.post("/api/whatsapp/chat/{client_id}")
+async def whatsapp_chat_endpoint(
+    client_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Simplified chat endpoint for WhatsApp
+    Accepts just {"message": "text"}
+    """
+    try:
+        data = await request.json()
+        message = data.get("message", "").strip()
+        
+        if not message:
+            return {"status": "error", "response": "Empty message"}
+        
+        # Get client
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return {"status": "error", "response": "Client not found"}
+        
+        # Check subscription
+        web_subscription = db.query(Subscription).filter(
+            Subscription.client_id == client_id,
+            Subscription.bot_type == BotType.WEB
+        ).first()
+        
+        if not web_subscription or not check_subscription_active(web_subscription.expiry_date):
+            return {"status": "error", "response": "Subscription inactive"}
+        
+        from app.services.cohere_service import cohere_service
+        
+        # Rewrite query
+        search_query = gemini_service.rewrite_query(message, [])
+        
+        # Search Pinecone
+        raw_results = await pinecone_service.search_similar_chunks(
+            client_id=str(client_id),
+            query=search_query,
+            top_k=15,
+            min_score=-1.0
+        )
+        
+        # Get candidate docs
+        candidate_docs = [match['chunk_text'] for match in raw_results if 'chunk_text' in match]
+        
+        # Rerank
+        final_chunks = []
+        if candidate_docs:
+            try:
+                reranked_results = await cohere_service.rerank_documents(
+                    query=search_query,
+                    documents=candidate_docs,
+                    top_n=3
+                )
+                
+                if reranked_results:
+                    final_chunks = [res.get('text') for res in reranked_results[:3] if res.get('text')]
+                else:
+                    final_chunks = candidate_docs[:3]
+            except Exception as e:
+                logger.error(f"Reranker error: {e}")
+                final_chunks = candidate_docs[:3]
+        
+        # Generate response
+        if final_chunks:
+            context_text = "\n\n".join(final_chunks)
+            response_text = gemini_service.generate_contextual_response(
+                context=context_text,
+                query=message,
+                business_name=client.business_name,
+                conversation_history=[]
+            )
+        else:
+            response_text = f"I don't have specific information about that. Please contact {client.business_name} directly."
+        
+        return {
+            "status": "success",
+            "response": response_text
+        }
+        
+    except Exception as e:
+        logger.error(f"WhatsApp chat error: {e}")
+        return {
+            "status": "error",
+            "response": "I'm having trouble right now. Please try again."
+        }
 @router.post("/api/clients/{client_id}/generate-embed-code")
 async def generate_embed_code(client_id: str, db: Session = Depends(get_db)):
     """Generate embed code for web chat widget"""
