@@ -23,6 +23,7 @@ from app.services.gemini_service import GeminiService
 from app.services.document_service import DocumentService
 from app.routes.chat import router as chat_router
 from app.routes.twilio_webhook import router as twilio_router
+from app.routes.twilio_voice import router as twilio_voice_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -36,6 +37,7 @@ gemini_service = GeminiService()
 document_service = DocumentService()
 app.include_router(chat_router)
 app.include_router(twilio_router)
+app.include_router(twilio_voice_router, prefix="/twilio/voice", tags=["twilio-voice"])
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
