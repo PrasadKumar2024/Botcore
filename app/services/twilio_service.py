@@ -78,27 +78,38 @@ def build_twiml_response(text: str) -> str:
     resp = MessagingResponse()
     resp.message(text)
     return str(resp)
-
-
+    
 def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 25.0) -> Optional[str]:
     """
-    Synchronously call your internal chat endpoint /api/chat/{client_id}.
-    Expects JSON response that contains 'response' or 'answer' or 'message'.
+    Synchronously call your WhatsApp chat endpoint /api/whatsapp/chat/{client_id}
+    Expects JSON response with 'response' field.
     Returns reply string or None on failure.
     """
     if not LOCAL_API_BASE:
         logging.warning("LOCAL_API_BASE not configured; cannot call internal chat API.")
         return None
-
-    url = f"{LOCAL_API_BASE.rstrip('/')}/api/chat/{client_id}"
+    
+    # Use the new WhatsApp-specific endpoint
+    url = f"{LOCAL_API_BASE.rstrip('/')}/api/whatsapp/chat/{client_id}"
+    
     try:
         with httpx.Client(timeout=timeout) as http:
             r = http.post(url, json={"message": message})
+            
             if r.status_code != 200:
-                logging.warning("Internal chat API returned status %s: %s", r.status_code, r.text)
+                logging.warning("WhatsApp chat API returned status %s: %s", r.status_code, r.text)
                 return None
+            
             j = r.json()
-            return j.get("response") or j.get("answer") or j.get("message")
+            
+            # Check status field
+            if j.get("status") == "error":
+                logging.error("WhatsApp chat API error: %s", j.get("response"))
+                return None
+            
+            # Return the response
+            return j.get("response")
+            
     except Exception as e:
-        logging.exception("Error calling internal chat API: %s", e)
+        logging.exception("Error calling WhatsApp chat API: %s", e)
         return None
