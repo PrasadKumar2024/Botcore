@@ -1,85 +1,104 @@
-# ownbot/app/routes/twilio_webhook.py
+# ownbot/app/services/twilio_service.py
+"""
+Twilio helpers: parse sender, send WhatsApp messages, build TwiML, call internal chat API.
+Synchronous implementations so they can be used in FastAPI BackgroundTasks.
+"""
+
 import os
+import re
 import logging
-from fastapi import APIRouter, Request, BackgroundTasks, Response
+from typing import List, Optional
+
+from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client as TwilioClient
 import httpx
-from app.services.twilio_service import parse_sender_number
 
-router = APIRouter()
+# ENV
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")  # e.g. "whatsapp:+14155238886"
+LOCAL_API_BASE = os.getenv("LOCAL_API_BASE")              # e.g. "https://botcore-0n2z.onrender.com"
 
-TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM")  # e.g. "whatsapp:+1415..."
-LOCAL_API_BASE = os.getenv("LOCAL_API_BASE")  # e.g. https://botcore-0n2z.onrender.com
+# lazy client
+_tw_client: Optional[Client] = None
 
-twilio_client = None
-if TWILIO_SID and TWILIO_TOKEN:
-    try:
-        twilio_client = TwilioClient(TWILIO_SID, TWILIO_TOKEN)
-    except Exception as e:
-        logging.error("Twilio client init failed: %s", e)
 
-async def _bg_handle_and_reply(from_number: str, incoming_text: str):
+def _get_twilio_client() -> Client:
+    global _tw_client
+    if _tw_client is None:
+        if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+            raise RuntimeError("Twilio credentials missing: set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
+        _tw_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    return _tw_client
+
+
+def parse_sender_number(twilio_from: str) -> str:
     """
-    Background job:
-      1) call internal chat API: /api/chat/{client_id}
-      2) send reply back via Twilio REST API (WhatsApp)
+    Convert 'whatsapp:+9199...' -> '+9199...'
     """
-    try:
-        client_id = parse_sender_number(from_number)
-    except Exception:
-        client_id = None
+    if not twilio_from:
+        return ""
+    return re.sub(r'^(whatsapp:)?', '', twilio_from).strip()
 
-    # call internal chat endpoint
-    reply_text = None
+
+def to_whatsapp_format(number: str) -> str:
+    """
+    Ensure number format 'whatsapp:+<country><number>'
+    """
+    if not number:
+        raise ValueError("Empty number")
+    n = number.strip()
+    if n.startswith("whatsapp:"):
+        return n
+    if n.startswith("+"):
+        return f"whatsapp:{n}"
+    return f"whatsapp:+{n}"
+
+
+def send_whatsapp_message(to_number: str, body: str, media_urls: Optional[List[str]] = None) -> str:
+    """
+    Send WhatsApp via Twilio REST. to_number can be 'whatsapp:+91...' or '+91...'
+    Returns message SID.
+    """
+    client = _get_twilio_client()
+    to = to_number if to_number.startswith("whatsapp:") else to_whatsapp_format(to_number)
+    payload = {"from_": TWILIO_WHATSAPP_FROM, "to": to, "body": body}
+    if media_urls:
+        payload["media_url"] = media_urls
+    logging.info("Twilio send: from=%s to=%s len(body)=%d media=%s", TWILIO_WHATSAPP_FROM, to, len(body), bool(media_urls))
+    msg = client.messages.create(**payload)
+    logging.info("Twilio sent SID=%s", msg.sid)
+    return msg.sid
+
+
+def build_twiml_response(text: str) -> str:
+    """
+    Build TwiML XML string for immediate webhook response.
+    """
+    resp = MessagingResponse()
+    resp.message(text)
+    return str(resp)
+
+
+def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 25.0) -> Optional[str]:
+    """
+    Synchronously call your internal chat endpoint /api/chat/{client_id}.
+    Expects JSON response that contains 'response' or 'answer' or 'message'.
+    Returns reply string or None on failure.
+    """
+    if not LOCAL_API_BASE:
+        logging.warning("LOCAL_API_BASE not configured; cannot call internal chat API.")
+        return None
+
+    url = f"{LOCAL_API_BASE.rstrip('/')}/api/chat/{client_id}"
     try:
-        if LOCAL_API_BASE and client_id:
-            url = f"{LOCAL_API_BASE}/api/chat/{client_id}"
-            async with httpx.AsyncClient(timeout=30.0) as http:
-                resp = await http.post(url, json={"message": incoming_text})
-            if resp.status_code == 200:
-                data = resp.json()
-                reply_text = data.get("response") or data.get("answer") or data.get("message")
-        else:
-            logging.warning("LOCAL_API_BASE or client_id missing; skipping internal chat call.")
+        with httpx.Client(timeout=timeout) as http:
+            r = http.post(url, json={"message": message})
+            if r.status_code != 200:
+                logging.warning("Internal chat API returned status %s: %s", r.status_code, r.text)
+                return None
+            j = r.json()
+            return j.get("response") or j.get("answer") or j.get("message")
     except Exception as e:
         logging.exception("Error calling internal chat API: %s", e)
-
-    # fallback simple echo if no reply_text
-    if not reply_text:
-        reply_text = f"pong: {incoming_text}"
-
-    # send via Twilio REST
-    try:
-        if twilio_client and TWILIO_WHATSAPP_FROM:
-            twilio_client.messages.create(
-                body=reply_text,
-                from_=TWILIO_WHATSAPP_FROM,
-                to=from_number
-            )
-            logging.info("Sent WhatsApp reply to %s", from_number)
-        else:
-            logging.warning("Twilio client or TWILIO_WHATSAPP_FROM not configured.")
-    except Exception as e:
-        logging.exception("Failed sending Twilio WhatsApp message: %s", e)
-
-
-@router.post("/twilio/whatsapp/webhook")
-async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
-    # Twilio posts form-data x-www-form-urlencoded
-    form = await request.form()
-    incoming_text = (form.get("Body") or "").strip()
-    from_number = form.get("From") or ""  # "whatsapp:+91..."
-
-    logging.info("Webhook received from=%s body=%s", from_number, incoming_text)
-
-    # Respond immediately so Twilio sees 200 (prevents retries/timeouts)
-    resp = MessagingResponse()
-    resp.message("Processing your request...")  # optional immediate ack
-
-    # Start background job that will call chat API and send final reply
-    background_tasks.add_task(_bg_handle_and_reply, from_number, incoming_text)
-
-    return Response(content=str(resp), media_type="application/xml")
+        return None
