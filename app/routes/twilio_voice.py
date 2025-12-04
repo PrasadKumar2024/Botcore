@@ -17,7 +17,7 @@ TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 # This is the US Number you bought (Sender)
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "+12542846845") 
 # This is YOUR Indian Number (Receiver) - Verify this in Twilio Console!
-YOUR_PERSONAL_NUMBER = "+919876543210" # <--- 🔴 CHANGE THIS TO YOUR NUMBER!
+YOUR_PERSONAL_NUMBER = "+919938349076" # <--- 🔴 CHANGE THIS TO YOUR NUMBER!
 
 # --- HELPER FUNCTIONS ---
 def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 20.0) -> Optional[str]:
