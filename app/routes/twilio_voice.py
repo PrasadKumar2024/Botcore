@@ -15,7 +15,7 @@ LOCAL_API_BASE = os.getenv("LOCAL_API_BASE", "https://botcore-0n2z.onrender.com"
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "+12542846845")
-YOUR_PERSONAL_NUMBER = "+91 98279 45290"
+YOUR_PERSONAL_NUMBER = "+919827945290"
 
 def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 20.0) -> Optional[str]:
     """Call internal chat API and return response"""
