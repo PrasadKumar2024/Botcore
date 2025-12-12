@@ -5,7 +5,9 @@ from typing import Optional
 import logging
 from twilio.rest import Client
 from app.database import SessionLocal
-from app.services.gemini_service import GeminiService_gemini = GeminiService()
+from app.services.gemini_service import GeminiService
+
+_gemini = GeminiService()
 
 router = APIRouter()
 
