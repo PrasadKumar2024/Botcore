@@ -17,7 +17,7 @@ TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "+12542846845")
 YOUR_PERSONAL_NUMBER = "+919938349076"
 
-def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 20.0) -> Optional[str]:
+def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 45.0) -> Optional[str]:
     """Call internal chat API and return response"""
     if not LOCAL_API_BASE:
         logging.warning("LOCAL_API_BASE not configured")
