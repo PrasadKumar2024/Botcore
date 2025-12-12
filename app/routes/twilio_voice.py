@@ -4,6 +4,8 @@ import os
 from typing import Optional
 import logging
 from twilio.rest import Client
+from app.database import SessionLocal
+from app.services.gemini_service import GeminiService_gemini = GeminiService()
 
 router = APIRouter()
 
@@ -69,6 +71,34 @@ async def trigger_outbound_call():
         return {"status": "error", "message": str(e)}
 
 # Route 2: Initial webhook when call is answered
+async def call_internal_chat_local(client_id: str, message: str) -> Optional[str]:
+    """Local RAG + Gemini call (no httpx)."""
+    db = SessionLocal()
+    try:
+        import time
+        t0 = time.time()
+        # import inside to avoid circular imports
+        from app.services.pinecone_service import pinecone_service
+        # fast semantic search (tune top_k)
+        results = await pinecone_service.search_similar_chunks(client_id=str(client_id), query=message, top_k=2, min_score=0.0)
+        context = "\n\n".join([r["chunk_text"] for r in results]) if results else ""
+        t1 = time.time(); logging.info(f"[timing] context {round(t1-t0,2)}s")
+        t2 = time.time()
+        ai_response = await _gemini.generate_response(
+            user_message=message,
+            context=context,
+            client_info={"business_name":"voice","business_type":"voice"},
+            conversation_history=[]
+        )
+        t3 = time.time(); logging.info(f"[timing] gemini {round(t3-t2,2)}s total {round(t3-t0,2)}s")
+        return ai_response
+    except Exception as e:
+        logging.exception("Local chat call failed: %s", e)
+        return None
+    finally:
+        try: db.close()
+        except: pass
+            
 @router.post("/incoming", response_class=Response)
 async def voice_incoming_webhook():
     """Handle incoming call - provide initial greeting"""
@@ -103,7 +133,7 @@ async def voice_handle_speech(
         return Response(content=twiml, media_type="application/xml")
     
     # Get answer from knowledge base
-    answer = call_internal_chat_api_sync(DEFAULT_KB_CLIENT_ID, user_text)
+    answer = await call_internal_chat_local(DEFAULT_KB_CLIENT_ID, user_text)
     
     if not answer:
         speak_text = "I apologize, but I am having trouble finding that information. Please try asking about our timings, location, or services."
