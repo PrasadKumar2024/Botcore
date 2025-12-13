@@ -74,32 +74,51 @@ async def trigger_outbound_call():
 
 # Route 2: Initial webhook when call is answered
 async def call_internal_chat_local(client_id: str, message: str) -> Optional[str]:
-    """Local RAG + Gemini call (no httpx)."""
+    """Run local RAG + Gemini in-process (no httpx)."""
     db = SessionLocal()
     try:
         import time
         t0 = time.time()
-        # import inside to avoid circular imports
+        
+        # Get context from Pinecone
         from app.services.pinecone_service import pinecone_service
-        # fast semantic search (tune top_k)
-        results = await pinecone_service.search_similar_chunks(client_id=str(client_id), query=message, top_k=2, min_score=0.0)
-        context = "\n\n".join([r["chunk_text"] for r in results]) if results else ""
-        t1 = time.time(); logging.info(f"[timing] context {round(t1-t0,2)}s")
-        t2 = time.time()
-        ai_response = await _gemini.generate_response(
-            user_message=message,
-            context=context,
-            client_info={"business_name":"voice","business_type":"voice"},
-            conversation_history=[]
+        results = await pinecone_service.search_similar_chunks(
+            client_id=str(client_id), 
+            query=message, 
+            top_k=2
         )
-        t3 = time.time(); logging.info(f"[timing] gemini {round(t3-t2,2)}s total {round(t3-t0,2)}s")
+        context = "\n\n".join([r.get("chunk_text","") for r in results]) if results else ""
+        logging.info(f"[timing] context fetch {round(time.time()-t0,2)}s")
+        
+        t1 = time.time()
+        
+        # Build prompt with context
+        system_message = "You are a helpful assistant for BrightCare Mini Health Service. Answer questions based on the context provided."
+        
+        if context:
+            full_prompt = f"Context from documents:\n{context}\n\nUser question: {message}\n\nProvide a clear, concise answer based on the context above."
+        else:
+            full_prompt = f"User question: {message}\n\nProvide a helpful answer about BrightCare Mini Health Service."
+        
+        # Call Gemini with correct parameters
+        ai_response = _gemini.generate_response(
+            prompt=full_prompt,
+            temperature=0.7,
+            max_tokens=600,  # Shorter for voice
+            system_message=system_message
+        )
+        
+        logging.info(f"[timing] gemini {round(time.time()-t1,2)}s total {round(time.time()-t0,2)}s")
         return ai_response
+        
     except Exception as e:
         logging.exception("Local chat call failed: %s", e)
         return None
     finally:
-        try: db.close()
-        except: pass
+        try: 
+            db.close()
+        except: 
+            pass
             
 @router.post("/incoming", response_class=Response)
 async def voice_incoming_webhook():
