@@ -22,7 +22,7 @@ class GeminiService:
     def __init__(self):
         """Initialize Gemini AI with comprehensive configuration"""
         self.api_key = os.getenv("GEMINI_API_KEY")
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self.embedding_model = "models/embedding-001"  # Keep Gemini embedding model r
         self.max_retries = 3
         self.request_timeout = 30
