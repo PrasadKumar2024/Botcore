@@ -198,7 +198,7 @@ class GeminiService:
         self, 
         prompt: str, 
         temperature: float = 0.7,
-        max_tokens: int = 1024,
+        max_tokens: int = 700,
         system_message: Optional[str] = None
     ) -> str:
         """
