@@ -13,8 +13,7 @@ router = APIRouter()
 
 # Configuration
 DEFAULT_KB_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "9b7881dd-3215-4d1e-a533-4857ba29653c")
-LOCAL_API_BASE = os.getenv("LOCAL_API_BASE", "https://botcore-0n2z.onrender.com").rstrip("/")
-
+RENDER_PUBLIC_URL = os.getenv("RENDER_PUBLIC_URL", "botcore-0n2z.onrender.com")
 # Twilio Credentials
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -51,7 +50,7 @@ def call_internal_chat_api_sync(client_id: str, message: str, timeout: float = 4
 # Route 1: Trigger outbound call
 @router.get("/test-call-me")
 async def trigger_outbound_call():
-    """Trigger an outbound call to your number"""
+    """Trigger outbound call for testing"""
     if not TWILIO_SID or not TWILIO_TOKEN:
         return {"status": "error", "message": "Twilio credentials missing"}
     
@@ -60,16 +59,17 @@ async def trigger_outbound_call():
         call = client.calls.create(
             to=YOUR_PERSONAL_NUMBER,
             from_=TWILIO_PHONE_NUMBER,
-            url=f"{LOCAL_API_BASE}/twilio/voice/incoming",
+            url=f"https://{RENDER_PUBLIC_URL}/twilio/voice/incoming",
             method="POST"
         )
+        logger.info(f"📞 Calling {YOUR_PERSONAL_NUMBER}")
         return {
             "status": "success",
             "message": f"Calling {YOUR_PERSONAL_NUMBER}",
             "call_sid": call.sid
         }
     except Exception as e:
-        logging.exception(f"Failed to initiate call: {e}")
+        logger.exception(f"Failed to initiate call: {e}")
         return {"status": "error", "message": str(e)}
 
 # Route 2: Initial webhook when call is answered
@@ -122,15 +122,19 @@ async def call_internal_chat_local(client_id: str, message: str) -> Optional[str
             
 @router.post("/incoming", response_class=Response)
 async def voice_incoming_webhook():
-    """Handle incoming call - provide initial greeting"""
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+    """
+    Initial webhook - Returns TwiML to connect call to WebSocket stream
+    """
+    ws_url = f"wss://{RENDER_PUBLIC_URL}/media-stream"
+    
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Hello! I am your BrightCare Mini Health Service assistant. You can ask me about our timings, location, or services.</Say>
-    <Gather input="speech" action="/twilio/voice/process-speech" timeout="5" speechTimeout="auto">
-        <Say voice="alice">Please ask your question.</Say>
-    </Gather>
-    <Say voice="alice">I did not hear anything. Goodbye.</Say>
+    <Connect>
+        <Stream url="{ws_url}" />
+    </Connect>
 </Response>"""
+    
+    logger.info(f"🔌 Connecting call to WebSocket: {ws_url}")
     return Response(content=twiml, media_type="application/xml")
 
 # Route 3: Process speech input
