@@ -10,6 +10,7 @@ from app.services.gemini_service import GeminiService
 _gemini = GeminiService()
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Configuration
 DEFAULT_KB_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "9b7881dd-3215-4d1e-a533-4857ba29653c")
