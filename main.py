@@ -12,7 +12,13 @@ import random
 import shutil
 from pathlib import Path
 import json
+import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 # Import database and models FIRST to avoid circular imports
 from app.database import get_db, engine, Base, SessionLocal
 from app import models
@@ -24,6 +30,7 @@ from app.services.document_service import DocumentService
 from app.routes.chat import router as chat_router
 from app.routes.twilio_webhook import router as twilio_router
 from app.routes.twilio_voice import router as twilio_voice_router
+from app.routes.websocket_handler import router as websocket_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -38,6 +45,7 @@ document_service = DocumentService()
 app.include_router(chat_router)
 app.include_router(twilio_router)
 app.include_router(twilio_voice_router, prefix="/twilio/voice", tags=["twilio-voice"])
+app.include_router(websocket_router, prefix="", tags=["websocket"])
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
