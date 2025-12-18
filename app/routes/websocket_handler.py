@@ -1,6 +1,7 @@
 """
 Real-time WebSocket handler for multilingual voice AI
 Handles: Twilio Media Streams → Google STT → Gemini → Google TTS → Twilio
+Patched: run_in_executor for blocking calls, larger queue, drop-oldest behavior.
 """
 import os
 import json
@@ -8,6 +9,8 @@ import asyncio
 import logging
 import base64
 import threading
+import functools
+import audioop
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.cloud import speech_v1 as speech
@@ -16,11 +19,23 @@ from google.oauth2 import service_account
 
 from app.services.gemini_service import GeminiService
 from app.database import SessionLocal
-import base64
-import audioop
 
-# === AUDIO UTILITY FUNCTIONS (Inline) ===
+# ====== Config & logging ======
+logger = logging.getLogger(__name__)
+router = APIRouter()
 
+# Sanitize public URL (harmless if unused here; recommended to mirror in twilio_voice.py)
+RENDER_PUBLIC_URL = os.getenv("RENDER_PUBLIC_URL", "").replace("https://", "").replace("http://", "").rstrip("/")
+
+# Tuning (env overrideable)
+MAX_AUDIO_QUEUE = int(os.getenv("MAX_AUDIO_QUEUE", "300"))      # number of audio chunks to buffer
+EXECUTOR_WORKERS = int(os.getenv("EXECUTOR_WORKERS", "8"))      # threads for TTS/LLM
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))           # seconds
+TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "12.0"))           # seconds
+
+executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
+
+# ====== Inline audio utilities (no external dependency) ======
 LANGUAGE_VOICE_MAP = {
     "en-US": {"name": "en-US-Neural2-A", "gender": "FEMALE"},
     "en-IN": {"name": "en-IN-Neural2-C", "gender": "FEMALE"},
@@ -33,249 +48,214 @@ LANGUAGE_VOICE_MAP = {
     "gu-IN": {"name": "gu-IN-Wavenet-A", "gender": "FEMALE"},
     "mr-IN": {"name": "mr-IN-Wavenet-A", "gender": "FEMALE"},
 }
-
 LANGUAGE_FALLBACK = {
     "en": "en-IN", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "bn": "bn-IN", "ml": "ml-IN", "kn": "kn-IN", "gu": "gu-IN", "mr": "mr-IN",
 }
 
 def get_best_voice(language_code: str) -> tuple:
-    """Returns (language_code, voice_name, gender) for TTS"""
+    """Return (language_code, voice_name, gender) for TTS selection."""
+    if not language_code:
+        return ("en-IN", LANGUAGE_VOICE_MAP["en-IN"]["name"], LANGUAGE_VOICE_MAP["en-IN"]["gender"])
     if language_code in LANGUAGE_VOICE_MAP:
-        voice = LANGUAGE_VOICE_MAP[language_code]
-        return (language_code, voice["name"], voice["gender"])
-    
-    base_lang = language_code.split("-")[0] if "-" in language_code else language_code
-    if base_lang in LANGUAGE_FALLBACK:
-        fallback_lang = LANGUAGE_FALLBACK[base_lang]
-        voice = LANGUAGE_VOICE_MAP[fallback_lang]
-        return (fallback_lang, voice["name"], voice["gender"])
-    
-    voice = LANGUAGE_VOICE_MAP["en-IN"]
-    logger.warning(f"No voice for {language_code}, using en-IN")
-    return ("en-IN", voice["name"], voice["gender"])
+        v = LANGUAGE_VOICE_MAP[language_code]
+        return (language_code, v["name"], v["gender"])
+    base = language_code.split("-")[0] if "-" in language_code else language_code
+    if base in LANGUAGE_FALLBACK:
+        fallback = LANGUAGE_FALLBACK[base]
+        v = LANGUAGE_VOICE_MAP[fallback]
+        return (fallback, v["name"], v["gender"])
+    v = LANGUAGE_VOICE_MAP["en-IN"]
+    logger.warning("No voice for %s, using en-IN", language_code)
+    return ("en-IN", v["name"], v["gender"])
 
 def twilio_payload_to_linear16(mu_law_b64: str) -> bytes:
-    """Convert Twilio mu-law base64 to LINEAR16"""
+    """Convert Twilio mu-law base64 to 16-bit PCM (LINEAR16) bytes."""
     try:
         mu_bytes = base64.b64decode(mu_law_b64)
-        linear16 = audioop.ulaw2lin(mu_bytes, 2)
+        linear16 = audioop.ulaw2lin(mu_bytes, 2)  # width=2 (16-bit)
         return linear16
     except Exception as e:
-        logger.error(f"Audio conversion error: {e}")
+        logger.exception("Audio conversion error: %s", e)
         return b""
-        
-router = APIRouter()
-logger = logging.getLogger(__name__)
 
-# Initialize services
+# ====== Initialize AI & Google clients ======
 _gemini = GeminiService()
-executor = ThreadPoolExecutor(max_workers=5)
 
-# Load Google credentials
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if not GOOGLE_CREDS_JSON:
-    raise RuntimeError("❌ Missing GOOGLE_CREDENTIALS_JSON environment variable")
+    raise RuntimeError("Missing GOOGLE_CREDENTIALS_JSON environment variable")
 
 try:
     _gcreds = service_account.Credentials.from_service_account_info(json.loads(GOOGLE_CREDS_JSON))
     _speech_client = speech.SpeechClient(credentials=_gcreds)
     _tts_client = tts.TextToSpeechClient(credentials=_gcreds)
-    logger.info("✅ Google Cloud Speech services initialized")
+    logger.info("Google Cloud Speech/TTS clients initialized")
 except Exception as e:
-    logger.error(f"❌ Failed to initialize Google services: {e}")
+    logger.exception("Failed to initialize Google clients: %s", e)
     raise
 
-# Supported Indian languages (priority order for auto-detection)
+# Preferred languages for recognition (tweak as needed)
 ALTERNATIVE_LANGUAGES = [
-    "en-IN",  # Indian English
-    "hi-IN",  # Hindi
-    "te-IN",  # Telugu
-    "ta-IN",  # Tamil
-    "bn-IN",  # Bengali
-    "ml-IN",  # Malayalam
-    "kn-IN",  # Kannada
-    "gu-IN",  # Gujarati
-    "mr-IN",  # Marathi
+    "en-IN", "hi-IN", "te-IN", "ta-IN", "bn-IN", "ml-IN", "kn-IN", "gu-IN", "mr-IN"
 ]
-
-DEFAULT_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "9b7881dd-3215-4d1e-a533-4857ba29653c")
-MAX_AUDIO_QUEUE = 100
+DEFAULT_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "DEFAULT_CLIENT")
 
 def make_recognition_config():
-    """Configure Google STT for multilingual recognition"""
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=8000,
-        language_code="en-US",  # Primary (will be overridden by auto-detect)
+        language_code="en-US",
         alternative_language_codes=ALTERNATIVE_LANGUAGES,
         enable_automatic_punctuation=True,
-        model="phone_call",  # Optimized for phone calls
-        use_enhanced=True,    # Better quality
+        model="phone_call",
+        use_enhanced=True,
     )
     streaming_config = speech.StreamingRecognitionConfig(
         config=config,
         interim_results=True,
-        single_utterance=False,  # Continuous listening
+        single_utterance=False
     )
     return streaming_config
 
+# ====== STT worker thread (unchanged pattern, feeds transcripts to async queue) ======
+def grpc_stt_worker(loop, audio_queue: asyncio.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event):
+    def gen_requests():
+        streaming_config = make_recognition_config()
+        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+        while not stop_event.is_set():
+            try:
+                chunk = asyncio.run_coroutine_threadsafe(audio_queue.get(), loop).result(timeout=0.5)
+                if chunk is None:
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except Exception:
+                if stop_event.is_set():
+                    break
+                continue
+
+    try:
+        logger.info("Starting STT gRPC streaming worker")
+        responses = _speech_client.streaming_recognize(requests=gen_requests())
+        for resp in responses:
+            if stop_event.is_set():
+                break
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(resp), loop)
+    except Exception as e:
+        logger.exception("STT worker error: %s", e)
+    finally:
+        try:
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
+        except Exception:
+            pass
+        logger.info("STT worker exiting")
+
+# ====== Non-blocking LLM (Gemini) call ======
 async def get_ai_response(transcript: str, language_code: str) -> str:
-    """Get AI response using RAG + Gemini"""
+    """Get AI response using RAG + Gemini without blocking the event loop."""
     db = SessionLocal()
     try:
-        # Get context from knowledge base
-        from app.services.pinecone_service import pinecone_service
-        results = await pinecone_service.search_similar_chunks(
-            client_id=DEFAULT_CLIENT_ID,
-            query=transcript,
-            top_k=2
-        )
-        context = "\n\n".join([r.get("chunk_text", "") for r in results]) if results else ""
-        
-        # Build prompt
-        system_msg = f"You are a helpful voice assistant for BrightCare Mini Health Service. Respond in {language_code} language. Keep responses concise for voice (under 100 words)."
-        
+        # Get RAG context asynchronously (pinecone_service is async)
+        try:
+            from app.services.pinecone_service import pinecone_service
+            results = await pinecone_service.search_similar_chunks(
+                client_id=DEFAULT_CLIENT_ID,
+                query=transcript,
+                top_k=2
+            )
+            context = "\n\n".join([r.get("chunk_text", "") for r in results]) if results else ""
+        except Exception as e:
+            logger.debug("Pinecone context fetch failed: %s", e)
+            context = ""
+
+        system_msg = f"You are a helpful voice assistant. Respond in {language_code}. Keep responses concise for voice."
         if context:
             prompt = f"Context:\n{context}\n\nUser ({language_code}): {transcript}\n\nRespond naturally in {language_code}:"
         else:
-            prompt = f"User ({language_code}): {transcript}\n\nRespond about BrightCare Mini Health Service in {language_code}:"
-        
-        # Generate response
-        response = _gemini.generate_response(
+            prompt = f"User ({language_code}): {transcript}\n\nRespond in {language_code}:"
+
+        loop = asyncio.get_running_loop()
+        llm_partial = functools.partial(
+            _gemini.generate_response,
             prompt=prompt,
             temperature=0.7,
-            max_tokens=200,  # Short for voice
+            max_tokens=200,
             system_message=system_msg
         )
-        
-        return response if response else "I apologize, I couldn't process that request."
-        
-    except Exception as e:
-        logger.exception(f"AI response error: {e}")
-        return "Sorry, I'm having trouble right now. Please try again."
+
+        try:
+            response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
+            return response or "I apologize, I couldn't process that request."
+        except asyncio.TimeoutError:
+            logger.warning("LLM call timed out")
+            return "Sorry, I'm taking too long to think. Please try again."
+        except Exception as e:
+            logger.exception("LLM execution error: %s", e)
+            return "Sorry, I'm having trouble right now. Please try again."
     finally:
         db.close()
 
+# ====== Non-blocking TTS (Google) and streaming to Twilio ======
 async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
-    """Convert text to speech and send to Twilio"""
+    """Convert text to speech (in executor) and send mu-law base64 to Twilio via WS."""
+    if not text:
+        return
     try:
-        # Get best voice for language
         lang_code, voice_name, gender = get_best_voice(language_code)
-        
-        logger.info(f"🔊 TTS: {text[:50]}... (lang: {lang_code}, voice: {voice_name})")
-        
-        # Configure TTS
+        logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:60])
+
         synthesis_input = tts.SynthesisInput(text=text)
         voice = tts.VoiceSelectionParams(
             language_code=lang_code,
             name=voice_name,
             ssml_gender=getattr(tts.SsmlVoiceGender, gender)
         )
-        audio_config = tts.AudioConfig(
-            audio_encoding=tts.AudioEncoding.MULAW,
-            sample_rate_hertz=8000,
-            speaking_rate=1.0,
-            pitch=0.0
-        )
-        
-        # Synthesize
-        response = _tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config
-        )
-        
-        # Send to Twilio
-        mulaw_b64 = base64.b64encode(response.audio_content).decode("ascii")
-        
-        # Clear any queued audio first (barge-in protection)
-        await ws.send_json({"event": "clear"})
-        
-        # Send audio
-        await ws.send_json({
-            "event": "media",
-            "media": {"payload": mulaw_b64}
-        })
-        
-        # Mark end of speech
-        await ws.send_json({"event": "mark", "streamSid": "tts_end"})
-        
-        logger.info("✅ Audio sent to Twilio")
-        
-    except Exception as e:
-        logger.exception(f"TTS error: {e}")
+        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.MULAW, sample_rate_hertz=8000)
 
-def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
-    """
-    Background thread for Google STT streaming.
-    Runs blocking gRPC call in separate thread.
-    """
-    def gen_requests():
-        # First request: config
-        streaming_config = make_recognition_config()
-        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
-        
-        # Stream audio chunks
-        while not stop_event.is_set():
-            try:
-                chunk = asyncio.run_coroutine_threadsafe(
-                    audio_queue.get(), loop
-                ).result(timeout=0.5)
-                
-                if chunk is None:
-                    break
-                    
-                yield speech.StreamingRecognizeRequest(audio_content=chunk)
-            except Exception:
-                if stop_event.is_set():
-                    break
-                continue
-    
-    try:
-        logger.info("🎤 Starting STT stream")
-        responses = _speech_client.streaming_recognize(requests=gen_requests())
-        
-        for response in responses:
-            if stop_event.is_set():
-                break
-            
-            # Push response to async queue
-            asyncio.run_coroutine_threadsafe(
-                transcripts_queue.put(response), loop
-            )
-            
-    except Exception as e:
-        logger.exception(f"STT worker error: {e}")
-    finally:
-        # Signal end
+        def tts_call():
+            return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
+
+        loop = asyncio.get_running_loop()
         try:
-            asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
-        except:
-            pass
-        logger.info("🎤 STT stream ended")
+            resp = await asyncio.wait_for(loop.run_in_executor(executor, tts_call), timeout=TTS_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("TTS timed out")
+            return
+        except Exception as e:
+            logger.exception("TTS exec error: %s", e)
+            return
 
+        mulaw_b64 = base64.b64encode(resp.audio_content).decode("ascii")
+
+        # Barge-in protection: clear playing audio first
+        try:
+            await ws.send_json({"event": "clear"})
+        except Exception:
+            logger.debug("Failed to send clear event (non-fatal)")
+
+        await ws.send_json({"event": "media", "media": {"payload": mulaw_b64}})
+        await ws.send_json({"event": "mark", "streamSid": "tts_end"})
+        logger.info("TTS audio sent to Twilio (len=%d bytes)", len(resp.audio_content))
+
+    except Exception as e:
+        logger.exception("synthesize_and_send error: %s", e)
+
+# ====== WebSocket handler ======
 @router.websocket("/media-stream")
 async def handle_media_stream(ws: WebSocket):
-    """
-    Main WebSocket handler for real-time voice AI.
-    Manages: Audio input → STT → AI → TTS → Audio output
-    """
     await ws.accept()
     call_sid = "unknown"
-    logger.info("🔌 WebSocket connected")
-    
-    # Per-call state
+    logger.info("WebSocket accepted")
+
     audio_queue = asyncio.Queue(maxsize=MAX_AUDIO_QUEUE)
     transcripts_queue = asyncio.Queue()
     stop_event = threading.Event()
     stt_thread = None
-    
+
     is_bot_speaking = False
-    detected_language = "en-IN"  # Default
-    
+    detected_language = "en-IN"
+
     try:
-        # Start STT worker thread
         loop = asyncio.get_event_loop()
         stt_thread = threading.Thread(
             target=grpc_stt_worker,
@@ -283,128 +263,114 @@ async def handle_media_stream(ws: WebSocket):
             daemon=True
         )
         stt_thread.start()
-        
-        # Task: Process STT transcripts
+
         async def process_transcripts():
             nonlocal is_bot_speaking, detected_language
-            
             while True:
-                response = await transcripts_queue.get()
-                
-                if response is None:
+                resp = await transcripts_queue.get()
+                if resp is None:
                     break
-                
-                # Process STT results
-                for result in response.results:
+                for result in resp.results:
                     if not result.alternatives:
                         continue
-                    
                     alt = result.alternatives[0]
                     transcript = alt.transcript.strip()
                     is_final = result.is_final
-                    
-                    # Extract detected language
                     lang = getattr(result, "language_code", None) or detected_language
-                    
-                    logger.info(f"🎤 {'FINAL' if is_final else 'interim'}: '{transcript}' (lang: {lang})")
-                    
-                    # BARGE-IN: If user speaks while bot is speaking
-                    if not is_final and is_bot_speaking and len(transcript) > 5:
-                        logger.info("⚡ Barge-in detected - stopping bot")
-                        await ws.send_json({"event": "clear"})
+
+                    logger.info("%s transcript (lang=%s): %s", "FINAL" if is_final else "interim", lang, transcript[:120])
+
+                    # Barge-in: if interim user speech while bot speaking -> interrupt bot
+                    if not is_final and is_bot_speaking and len(transcript) > 3:
+                        logger.info("Barge-in detected, clearing playback")
+                        try:
+                            await ws.send_json({"event": "clear"})
+                        except Exception:
+                            logger.debug("Failed to send clear event during barge-in")
                         is_bot_speaking = False
-                    
-                    # FINAL TRANSCRIPT: Generate response
-                    if is_final and len(transcript) > 3:
+
+                    if is_final and len(transcript) > 0:
                         detected_language = lang
-                        logger.info(f"💬 Processing: '{transcript}' in {detected_language}")
-                        
-                        # Get AI response
-                        ai_response = await get_ai_response(transcript, detected_language)
-                        
-                        # Synthesize and send
+                        logger.info("Processing final transcript (lang=%s): %s", detected_language, transcript[:200])
                         is_bot_speaking = True
                         try:
-                            await synthesize_and_send(ws, ai_response, detected_language)
+                            ai_resp = await get_ai_response(transcript, detected_language)
+                            await synthesize_and_send(ws, ai_resp, detected_language)
                         finally:
                             is_bot_speaking = False
-        
-        # Start transcript processing
+
         transcript_task = asyncio.create_task(process_transcripts())
-        
-        # Main loop: Receive Twilio messages
+
+        # receive loop
         while True:
             try:
                 msg = await ws.receive_text()
                 data = json.loads(msg)
                 event = data.get("event")
-                
+
                 if event == "start":
                     call_sid = data.get("start", {}).get("callSid", "unknown")
-                    logger.info(f"📞 Call started: {call_sid}")
-                    
+                    logger.info("Call started: %s", call_sid)
+
                 elif event == "media":
-                    # Inbound audio from Twilio
                     payload = data.get("media", {}).get("payload")
                     if not payload:
                         continue
-                    
-                    # Convert to LINEAR16
                     linear16 = twilio_payload_to_linear16(payload)
                     if not linear16:
                         continue
-                    
-                    # Push to STT queue
+
+                    # Robust enqueue: drop oldest when full to keep pipeline moving
                     try:
                         audio_queue.put_nowait(linear16)
                     except asyncio.QueueFull:
-                        logger.warning("⚠️ Audio queue full, dropping chunk")
-                
+                        logger.warning("Audio queue full - dropping oldest chunk and enqueueing new chunk")
+                        try:
+                            audio_queue.get_nowait()  # drop oldest
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            audio_queue.put_nowait(linear16)
+                        except asyncio.QueueFull:
+                            logger.warning("Audio queue still full after drop; dropping incoming chunk")
+
                 elif event == "stop":
-                    logger.info(f"📴 Call ended: {call_sid}")
+                    logger.info("Call ended: %s", call_sid)
                     break
-                
+
                 elif event == "mark":
-                    # Audio playback finished
+                    # Twilio mark (playback ended)
                     is_bot_speaking = False
-                    
+
             except WebSocketDisconnect:
-                logger.info(f"🔌 WebSocket disconnected: {call_sid}")
+                logger.info("WebSocket disconnected: %s", call_sid)
                 break
             except Exception as e:
-                logger.error(f"❌ Message processing error: {e}")
+                logger.exception("WS receive loop error: %s", e)
                 break
-    
+
     except Exception as e:
-        logger.exception(f"❌ WebSocket error: {e}")
-    
+        logger.exception("Websocket handler top-level error: %s", e)
+
     finally:
-        # Cleanup
-        logger.info(f"🧹 Cleaning up call: {call_sid}")
-        
+        logger.info("Cleaning up call: %s", call_sid)
         stop_event.set()
-        
         try:
             await audio_queue.put(None)
-        except:
+        except Exception:
             pass
-        
         try:
             await transcripts_queue.put(None)
-        except:
+        except Exception:
             pass
-        
         if stt_thread:
             stt_thread.join(timeout=3.0)
-        
         try:
             transcript_task.cancel()
-        except:
+        except Exception:
             pass
-        
         try:
             await ws.close()
-        except:
+        except Exception:
             pass
-        
-        logger.info(f"✅ Cleanup complete: {call_sid}")
+        logger.info("Cleanup complete for call: %s", call_sid)
