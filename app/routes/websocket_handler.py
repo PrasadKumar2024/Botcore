@@ -1,7 +1,8 @@
 """
 Real-time WebSocket handler for multilingual voice AI
 Handles: Twilio Media Streams → Google STT → Gemini → Google TTS → Twilio
-Patched: run_in_executor for blocking calls, larger queue, drop-oldest behavior.
+Patched: queue.Queue for raw audio, synchronous STT consumer, aggregation option,
+run_in_executor for blocking LLM/TTS, drop-oldest behavior when buffer full.
 """
 import os
 import json
@@ -11,6 +12,7 @@ import base64
 import threading
 import functools
 import audioop
+import queue                        # <-- ADDED
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.cloud import speech_v1 as speech
@@ -32,6 +34,7 @@ MAX_AUDIO_QUEUE = int(os.getenv("MAX_AUDIO_QUEUE", "300"))      # number of audi
 EXECUTOR_WORKERS = int(os.getenv("EXECUTOR_WORKERS", "8"))      # threads for TTS/LLM
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))           # seconds
 TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "12.0"))           # seconds
+AGGREGATE_FRAMES = int(os.getenv("AGGREGATE_FRAMES", "1"))      # frames to aggregate before enqueue
 
 executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
 
@@ -118,37 +121,54 @@ def make_recognition_config():
     )
     return streaming_config
 
-# ====== STT worker thread (unchanged pattern, feeds transcripts to async queue) ======
-def grpc_stt_worker(loop, audio_queue: asyncio.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event):
+# ====== STT worker thread (pulls from queue.Queue synchronously) ======
+def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
+    """
+    STT worker runs in a thread and pulls chunks synchronously from a
+    thread-safe queue.Queue (audio_queue). It sends StreamingRecognizeRequest
+    objects to Google STT and pushes responses back to the asyncio loop.
+    """
     def gen_requests():
         streaming_config = make_recognition_config()
+        # first request: config
         yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+
+        # synchronous pull from queue.Queue (low overhead)
         while not stop_event.is_set():
             try:
-                chunk = asyncio.run_coroutine_threadsafe(audio_queue.get(), loop).result(timeout=0.5)
+                # blocking get with timeout so we can respect stop_event
+                chunk = audio_queue.get(timeout=0.5)  # raises queue.Empty when no data
+                # None is termination sentinel
                 if chunk is None:
                     break
+                # yield audio to gRPC stream
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
-            except Exception:
+            except queue.Empty:
+                # no audio available right now — re-check stop_event
+                continue
+            except Exception as e:
+                logger.exception("Error pulling audio chunk in STT worker: %s", e)
                 if stop_event.is_set():
                     break
                 continue
 
     try:
-        logger.info("Starting STT gRPC streaming worker")
+        logger.info("🎤 Starting STT stream (thread)")
         responses = _speech_client.streaming_recognize(requests=gen_requests())
-        for resp in responses:
+        for response in responses:
             if stop_event.is_set():
                 break
-            asyncio.run_coroutine_threadsafe(transcripts_queue.put(resp), loop)
+            # push response into asyncio transcripts_queue
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
     except Exception as e:
         logger.exception("STT worker error: %s", e)
     finally:
+        # signal async side that worker ended
         try:
             asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
         except Exception:
             pass
-        logger.info("STT worker exiting")
+        logger.info("🎤 STT stream ended")
 
 # ====== Non-blocking LLM (Gemini) call ======
 async def get_ai_response(transcript: str, language_code: str) -> str:
@@ -247,7 +267,8 @@ async def handle_media_stream(ws: WebSocket):
     call_sid = "unknown"
     logger.info("WebSocket accepted")
 
-    audio_queue = asyncio.Queue(maxsize=MAX_AUDIO_QUEUE)
+    # thread-safe queue for raw audio chunks (fast cross-thread)
+    audio_queue = queue.Queue(maxsize=MAX_AUDIO_QUEUE)
     transcripts_queue = asyncio.Queue()
     stop_event = threading.Event()
     stt_thread = None
@@ -320,18 +341,34 @@ async def handle_media_stream(ws: WebSocket):
                     if not linear16:
                         continue
 
-                    # Robust enqueue: drop oldest when full to keep pipeline moving
+                    # Aggregation: collect a few frames before enqueue to reduce rate
+                    if not hasattr(ws, "_agg_acc"):
+                        ws._agg_acc = bytearray()
+                        ws._agg_cnt = 0
+
+                    ws._agg_acc.extend(linear16)
+                    ws._agg_cnt += 1
+
+                    if ws._agg_cnt < AGGREGATE_FRAMES:
+                        # wait until we have enough frames
+                        continue
+
+                    chunk_to_enqueue = bytes(ws._agg_acc)
+                    ws._agg_acc.clear()
+                    ws._agg_cnt = 0
+
+                    # Enqueue to thread-safe queue.Queue quickly. If full, drop oldest and retry.
                     try:
-                        audio_queue.put_nowait(linear16)
-                    except asyncio.QueueFull:
-                        logger.warning("Audio queue full - dropping oldest chunk and enqueueing new chunk")
+                        audio_queue.put_nowait(chunk_to_enqueue)
+                    except queue.Full:
+                        logger.warning("Audio queue full - dropping oldest chunk and enqueueing new chunk (qsize=%s)", audio_queue.qsize())
                         try:
                             audio_queue.get_nowait()  # drop oldest
-                        except asyncio.QueueEmpty:
+                        except queue.Empty:
                             pass
                         try:
-                            audio_queue.put_nowait(linear16)
-                        except asyncio.QueueFull:
+                            audio_queue.put_nowait(chunk_to_enqueue)
+                        except queue.Full:
                             logger.warning("Audio queue still full after drop; dropping incoming chunk")
 
                 elif event == "stop":
@@ -355,14 +392,26 @@ async def handle_media_stream(ws: WebSocket):
     finally:
         logger.info("Cleaning up call: %s", call_sid)
         stop_event.set()
+
+        # Signal STT thread to finish — use non-blocking put of sentinel None
         try:
-            await audio_queue.put(None)
-        except Exception:
-            pass
+            audio_queue.put_nowait(None)
+        except queue.Full:
+            # if full, drop oldest then put sentinel
+            try:
+                audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                audio_queue.put_nowait(None)
+            except Exception:
+                pass
+
         try:
             await transcripts_queue.put(None)
         except Exception:
             pass
+
         if stt_thread:
             stt_thread.join(timeout=3.0)
         try:
