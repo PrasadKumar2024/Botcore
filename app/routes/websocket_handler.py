@@ -13,10 +13,58 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.cloud import speech_v1 as speech
 from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
-from app.utils.audio import twilio_payload_to_linear16, get_best_voice
+
 from app.services.gemini_service import GeminiService
 from app.database import SessionLocal
+import base64
+import audioop
 
+# === AUDIO UTILITY FUNCTIONS (Inline) ===
+
+LANGUAGE_VOICE_MAP = {
+    "en-US": {"name": "en-US-Neural2-A", "gender": "FEMALE"},
+    "en-IN": {"name": "en-IN-Neural2-C", "gender": "FEMALE"},
+    "hi-IN": {"name": "hi-IN-Neural2-A", "gender": "FEMALE"},
+    "te-IN": {"name": "te-IN-Standard-A", "gender": "FEMALE"},
+    "ta-IN": {"name": "ta-IN-Wavenet-A", "gender": "FEMALE"},
+    "bn-IN": {"name": "bn-IN-Wavenet-A", "gender": "FEMALE"},
+    "ml-IN": {"name": "ml-IN-Wavenet-A", "gender": "FEMALE"},
+    "kn-IN": {"name": "kn-IN-Wavenet-A", "gender": "FEMALE"},
+    "gu-IN": {"name": "gu-IN-Wavenet-A", "gender": "FEMALE"},
+    "mr-IN": {"name": "mr-IN-Wavenet-A", "gender": "FEMALE"},
+}
+
+LANGUAGE_FALLBACK = {
+    "en": "en-IN", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
+    "bn": "bn-IN", "ml": "ml-IN", "kn": "kn-IN", "gu": "gu-IN", "mr": "mr-IN",
+}
+
+def get_best_voice(language_code: str) -> tuple:
+    """Returns (language_code, voice_name, gender) for TTS"""
+    if language_code in LANGUAGE_VOICE_MAP:
+        voice = LANGUAGE_VOICE_MAP[language_code]
+        return (language_code, voice["name"], voice["gender"])
+    
+    base_lang = language_code.split("-")[0] if "-" in language_code else language_code
+    if base_lang in LANGUAGE_FALLBACK:
+        fallback_lang = LANGUAGE_FALLBACK[base_lang]
+        voice = LANGUAGE_VOICE_MAP[fallback_lang]
+        return (fallback_lang, voice["name"], voice["gender"])
+    
+    voice = LANGUAGE_VOICE_MAP["en-IN"]
+    logger.warning(f"No voice for {language_code}, using en-IN")
+    return ("en-IN", voice["name"], voice["gender"])
+
+def twilio_payload_to_linear16(mu_law_b64: str) -> bytes:
+    """Convert Twilio mu-law base64 to LINEAR16"""
+    try:
+        mu_bytes = base64.b64decode(mu_law_b64)
+        linear16 = audioop.ulaw2lin(mu_bytes, 2)
+        return linear16
+    except Exception as e:
+        logger.error(f"Audio conversion error: {e}")
+        return b""
+        
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
