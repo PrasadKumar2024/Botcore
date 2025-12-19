@@ -1,3 +1,4 @@
+
 """
 Real-time WebSocket handler for multilingual voice AI
 Handles: Twilio Media Streams → Google STT → Gemini → Google TTS → Twilio
@@ -12,7 +13,7 @@ import base64
 import threading
 import functools
 import audioop
-import queue                        # <-- ADDED
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.cloud import speech_v1 as speech
@@ -26,15 +27,15 @@ from app.database import SessionLocal
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Sanitize public URL (harmless if unused here; recommended to mirror in twilio_voice.py)
+# Sanitize public URL
 RENDER_PUBLIC_URL = os.getenv("RENDER_PUBLIC_URL", "").replace("https://", "").replace("http://", "").rstrip("/")
 
-# Tuning (env overrideable)
-MAX_AUDIO_QUEUE = int(os.getenv("MAX_AUDIO_QUEUE", "300"))      # number of audio chunks to buffer
-EXECUTOR_WORKERS = int(os.getenv("EXECUTOR_WORKERS", "8"))      # threads for TTS/LLM
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))           # seconds
-TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "12.0"))           # seconds
-AGGREGATE_FRAMES = int(os.getenv("AGGREGATE_FRAMES", "1"))      # frames to aggregate before enqueue
+# Tuning (UPDATED DEFAULTS)
+MAX_AUDIO_QUEUE = int(os.getenv("MAX_AUDIO_QUEUE", "50"))      # Reduced to 50 for low latency
+EXECUTOR_WORKERS = int(os.getenv("EXECUTOR_WORKERS", "8"))
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "15.0"))
+TTS_TIMEOUT = float(os.getenv("TTS_TIMEOUT", "12.0"))
+AGGREGATE_FRAMES = int(os.getenv("AGGREGATE_FRAMES", "4"))      # Increased to 4 for stability
 
 executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
 
@@ -76,7 +77,7 @@ def twilio_payload_to_linear16(mu_law_b64: str) -> bytes:
     """Convert Twilio mu-law base64 to 16-bit PCM (LINEAR16) bytes."""
     try:
         mu_bytes = base64.b64decode(mu_law_b64)
-        linear16 = audioop.ulaw2lin(mu_bytes, 2)  # width=2 (16-bit)
+        linear16 = audioop.ulaw2lin(mu_bytes, 2)
         return linear16
     except Exception as e:
         logger.exception("Audio conversion error: %s", e)
@@ -98,7 +99,6 @@ except Exception as e:
     logger.exception("Failed to initialize Google clients: %s", e)
     raise
 
-# Preferred languages for recognition (tweak as needed)
 ALTERNATIVE_LANGUAGES = [
     "en-IN", "hi-IN", "te-IN", "ta-IN", "bn-IN", "ml-IN", "kn-IN", "gu-IN", "mr-IN"
 ]
@@ -121,30 +121,19 @@ def make_recognition_config():
     )
     return streaming_config
 
-# ====== STT worker thread (pulls from queue.Queue synchronously) ======
+# ====== STT worker thread ======
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
-    """
-    STT worker runs in a thread and pulls chunks synchronously from a
-    thread-safe queue.Queue (audio_queue). It sends StreamingRecognizeRequest
-    objects to Google STT and pushes responses back to the asyncio loop.
-    """
     def gen_requests():
         streaming_config = make_recognition_config()
-        # first request: config
         yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
 
-        # synchronous pull from queue.Queue (low overhead)
         while not stop_event.is_set():
             try:
-                # blocking get with timeout so we can respect stop_event
-                chunk = audio_queue.get(timeout=0.5)  # raises queue.Empty when no data
-                # None is termination sentinel
+                chunk = audio_queue.get(timeout=0.5)
                 if chunk is None:
                     break
-                # yield audio to gRPC stream
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
             except queue.Empty:
-                # no audio available right now — re-check stop_event
                 continue
             except Exception as e:
                 logger.exception("Error pulling audio chunk in STT worker: %s", e)
@@ -158,24 +147,19 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         for response in responses:
             if stop_event.is_set():
                 break
-            # push response into asyncio transcripts_queue
             asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
     except Exception as e:
         logger.exception("STT worker error: %s", e)
     finally:
-        # signal async side that worker ended
         try:
             asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
         except Exception:
             pass
         logger.info("🎤 STT stream ended")
 
-# ====== Non-blocking LLM (Gemini) call ======
 async def get_ai_response(transcript: str, language_code: str) -> str:
-    """Get AI response using RAG + Gemini without blocking the event loop."""
     db = SessionLocal()
     try:
-        # Get RAG context asynchronously (pinecone_service is async)
         try:
             from app.services.pinecone_service import pinecone_service
             results = await pinecone_service.search_similar_chunks(
@@ -215,9 +199,7 @@ async def get_ai_response(transcript: str, language_code: str) -> str:
     finally:
         db.close()
 
-# ====== Non-blocking TTS (Google) and streaming to Twilio ======
 async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
-    """Convert text to speech (in executor) and send mu-law base64 to Twilio via WS."""
     if not text:
         return
     try:
@@ -247,18 +229,30 @@ async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
 
         mulaw_b64 = base64.b64encode(resp.audio_content).decode("ascii")
 
-        # Barge-in protection: clear playing audio first
         try:
             await ws.send_json({"event": "clear"})
         except Exception:
-            logger.debug("Failed to send clear event (non-fatal)")
+            logger.debug("Failed to send clear event")
 
         await ws.send_json({"event": "media", "media": {"payload": mulaw_b64}})
         await ws.send_json({"event": "mark", "streamSid": "tts_end"})
-        logger.info("TTS audio sent to Twilio (len=%d bytes)", len(resp.audio_content))
+        logger.info("TTS audio sent to Twilio")
 
     except Exception as e:
         logger.exception("synthesize_and_send error: %s", e)
+
+# ====== Adaptive Rate Limiter Class (ADDED) ======
+class AdaptiveRateLimiter:
+    """Skip audio chunks when queue is filling up"""
+    def __init__(self, queue, threshold=0.6):
+        self.queue = queue
+        self.threshold = threshold
+
+    def should_enqueue(self) -> bool:
+        try:
+            return (self.queue.qsize() / self.queue.maxsize) < self.threshold
+        except:
+            return True
 
 # ====== WebSocket handler ======
 @router.websocket("/media-stream")
@@ -267,7 +261,6 @@ async def handle_media_stream(ws: WebSocket):
     call_sid = "unknown"
     logger.info("WebSocket accepted")
 
-    # thread-safe queue for raw audio chunks (fast cross-thread)
     audio_queue = queue.Queue(maxsize=MAX_AUDIO_QUEUE)
     transcripts_queue = asyncio.Queue()
     stop_event = threading.Event()
@@ -301,13 +294,12 @@ async def handle_media_stream(ws: WebSocket):
 
                     logger.info("%s transcript (lang=%s): %s", "FINAL" if is_final else "interim", lang, transcript[:120])
 
-                    # Barge-in: if interim user speech while bot speaking -> interrupt bot
                     if not is_final and is_bot_speaking and len(transcript) > 3:
                         logger.info("Barge-in detected, clearing playback")
                         try:
                             await ws.send_json({"event": "clear"})
                         except Exception:
-                            logger.debug("Failed to send clear event during barge-in")
+                            pass
                         is_bot_speaking = False
 
                     if is_final and len(transcript) > 0:
@@ -322,7 +314,6 @@ async def handle_media_stream(ws: WebSocket):
 
         transcript_task = asyncio.create_task(process_transcripts())
 
-        # receive loop
         while True:
             try:
                 msg = await ws.receive_text()
@@ -337,11 +328,20 @@ async def handle_media_stream(ws: WebSocket):
                     payload = data.get("media", {}).get("payload")
                     if not payload:
                         continue
+
                     linear16 = twilio_payload_to_linear16(payload)
                     if not linear16:
                         continue
 
-                    # Aggregation: collect a few frames before enqueue to reduce rate
+                    # init rate limiter once
+                    if not hasattr(ws, "_rate_limiter"):
+                        ws._rate_limiter = AdaptiveRateLimiter(audio_queue)
+
+                    # skip audio if queue is filling up
+                    if not ws._rate_limiter.should_enqueue():
+                        continue
+
+                    # aggregation
                     if not hasattr(ws, "_agg_acc"):
                         ws._agg_acc = bytearray()
                         ws._agg_cnt = 0
@@ -350,33 +350,22 @@ async def handle_media_stream(ws: WebSocket):
                     ws._agg_cnt += 1
 
                     if ws._agg_cnt < AGGREGATE_FRAMES:
-                        # wait until we have enough frames
                         continue
 
-                    chunk_to_enqueue = bytes(ws._agg_acc)
+                    chunk = bytes(ws._agg_acc)
                     ws._agg_acc.clear()
                     ws._agg_cnt = 0
 
-                    # Enqueue to thread-safe queue.Queue quickly. If full, drop oldest and retry.
                     try:
-                        audio_queue.put_nowait(chunk_to_enqueue)
+                        audio_queue.put_nowait(chunk)
                     except queue.Full:
-                        logger.warning("Audio queue full - dropping oldest chunk and enqueueing new chunk (qsize=%s)", audio_queue.qsize())
-                        try:
-                            audio_queue.get_nowait()  # drop oldest
-                        except queue.Empty:
-                            pass
-                        try:
-                            audio_queue.put_nowait(chunk_to_enqueue)
-                        except queue.Full:
-                            logger.warning("Audio queue still full after drop; dropping incoming chunk")
+                        pass  # silently drop
 
                 elif event == "stop":
                     logger.info("Call ended: %s", call_sid)
                     break
 
                 elif event == "mark":
-                    # Twilio mark (playback ended)
                     is_bot_speaking = False
 
             except WebSocketDisconnect:
@@ -392,26 +381,14 @@ async def handle_media_stream(ws: WebSocket):
     finally:
         logger.info("Cleaning up call: %s", call_sid)
         stop_event.set()
-
-        # Signal STT thread to finish — use non-blocking put of sentinel None
         try:
             audio_queue.put_nowait(None)
-        except queue.Full:
-            # if full, drop oldest then put sentinel
-            try:
-                audio_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                audio_queue.put_nowait(None)
-            except Exception:
-                pass
-
+        except Exception:
+            pass
         try:
             await transcripts_queue.put(None)
         except Exception:
             pass
-
         if stt_thread:
             stt_thread.join(timeout=3.0)
         try:
