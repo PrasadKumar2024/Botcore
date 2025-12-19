@@ -135,14 +135,16 @@ def make_recognition_config(allow_alternatives: bool = True):
 # ====== STT worker thread ======
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     """
-    STT worker runs in a thread and pulls chunks synchronously from a
-    thread-safe queue.Queue (audio_queue). It sends StreamingRecognizeRequest
-    objects to Google STT and pushes responses back to the asyncio loop.
-
-    This version will retry without alternative_language_codes if the model
-    rejects that field (common with some phone_call models).
+    STT worker that handles Google Speech-to-Text streaming recognition.
+    Automatically retries without alternative_language_codes if model doesn't support it.
     """
-    def gen_requests():
+    
+    def gen_requests(config):
+        """Generator that yields streaming requests: config first, then audio chunks"""
+        # First request contains the configuration
+        yield speech.StreamingRecognizeRequest(streaming_config=config)
+        
+        # Subsequent requests contain audio data
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -152,44 +154,14 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.exception("Error pulling audio chunk in STT worker: %s", e)
+                logger.exception("Error pulling audio chunk: %s", e)
                 if stop_event.is_set():
                     break
                 continue
-
+    
     try:
         logger.info("🎤 Starting STT stream (thread)")
 
-        # First try: include alternative_language_codes (if any)
-        streaming_config = make_recognition_config(allow_alternatives=True)
-        try:
-            responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
-        except google_exceptions.InvalidArgument as e:
-            # detect the specific rejection about alternative_language_codes
-            msg = str(e)
-            if "alternative_language_codes" in msg:
-                logger.warning("Model rejected alternative_language_codes; retrying without them")
-                # rebuild config without alternatives and retry
-                streaming_config = make_recognition_config(allow_alternatives=False)
-                responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
-            else:
-                # re-raise other InvalidArgument errors
-                raise
-
-        # consume responses
-        for response in responses:
-            if stop_event.is_set():
-                break
-            asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
-
-    except Exception as e:
-        logger.exception("STT worker error: %s", e)
-    finally:
-        try:
-            asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
-        except Exception:
-            pass
-        logger.info("🎤 STT stream ended")
 async def get_ai_response(transcript: str, language_code: str) -> str:
     db = SessionLocal()
     try:
