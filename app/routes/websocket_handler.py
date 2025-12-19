@@ -123,10 +123,17 @@ def make_recognition_config():
 
 # ====== STT worker thread ======
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
-    def gen_requests():
-        streaming_config = make_recognition_config()
-        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+    """
+    STT worker runs in a thread and pulls chunks synchronously from a
+    thread-safe queue.Queue (audio_queue). It sends StreamingRecognizeRequest
+    objects to Google STT and pushes responses back to the asyncio loop.
+    """
 
+    # create config once
+    streaming_config = make_recognition_config()
+
+    def gen_requests():
+        # NOTE: do NOT yield the config here — pass it as the first arg below
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -143,7 +150,8 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
 
     try:
         logger.info("🎤 Starting STT stream (thread)")
-        responses = _speech_client.streaming_recognize(requests=gen_requests())
+        # pass config as first argument to match installed client signature
+        responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
         for response in responses:
             if stop_event.is_set():
                 break
@@ -156,7 +164,6 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         except Exception:
             pass
         logger.info("🎤 STT stream ended")
-
 async def get_ai_response(transcript: str, language_code: str) -> str:
     db = SessionLocal()
     try:
