@@ -136,15 +136,12 @@ def make_recognition_config(allow_alternatives: bool = True):
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     """
     STT worker that handles Google Speech-to-Text streaming recognition.
-    Automatically retries without alternative_language_codes if model doesn't support it.
     """
     
     def gen_requests(config):
-        """Generator that yields streaming requests: config first, then audio chunks"""
-        # First request contains the configuration
+        """Generator that yields streaming requests"""
         yield speech.StreamingRecognizeRequest(streaming_config=config)
         
-        # Subsequent requests contain audio data
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -161,6 +158,32 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     
     try:
         logger.info("🎤 Starting STT stream (thread)")
+        streaming_config = make_recognition_config(allow_alternatives=True)
+        
+        try:
+            responses = _speech_client.streaming_recognize(gen_requests(streaming_config))
+        except google_exceptions.InvalidArgument as e:
+            error_msg = str(e)
+            if "alternative_language_codes" in error_msg:
+                logger.warning("⚠️ Retrying without alternative_language_codes...")
+                streaming_config = make_recognition_config(allow_alternatives=False)
+                responses = _speech_client.streaming_recognize(gen_requests(streaming_config))
+            else:
+                raise
+
+        for response in responses:
+            if stop_event.is_set():
+                break
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
+
+    except Exception as e:
+        logger.exception("❌ STT worker error: %s", e)
+    finally:
+        try:
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(None), loop)
+        except Exception:
+            pass
+        logger.info("🎤 STT stream ended")
 
 async def get_ai_response(transcript: str, language_code: str) -> str:
     db = SessionLocal()
