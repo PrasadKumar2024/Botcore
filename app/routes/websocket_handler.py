@@ -19,6 +19,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from google.cloud import speech_v1 as speech
 from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
+from google.api_core import exceptions as google_exceptions   # <-- ADDED
 
 from app.services.gemini_service import GeminiService
 from app.database import SessionLocal
@@ -104,16 +105,26 @@ ALTERNATIVE_LANGUAGES = [
 ]
 DEFAULT_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "DEFAULT_CLIENT")
 
-def make_recognition_config():
-    config = speech.RecognitionConfig(
+def make_recognition_config(allow_alternatives: bool = True):
+    """
+    Build RecognitionConfig + StreamingRecognitionConfig.
+    If allow_alternatives is False, don't include alternative_language_codes
+    (some Google models reject that field).
+    """
+    kwargs = dict(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
         sample_rate_hertz=8000,
         language_code="en-US",
-        alternative_language_codes=ALTERNATIVE_LANGUAGES,
         enable_automatic_punctuation=True,
         model="phone_call",
         use_enhanced=True,
     )
+
+    if allow_alternatives and ALTERNATIVE_LANGUAGES:
+        # only set if allowed
+        kwargs["alternative_language_codes"] = ALTERNATIVE_LANGUAGES
+
+    config = speech.RecognitionConfig(**kwargs)
     streaming_config = speech.StreamingRecognitionConfig(
         config=config,
         interim_results=True,
@@ -127,13 +138,11 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     STT worker runs in a thread and pulls chunks synchronously from a
     thread-safe queue.Queue (audio_queue). It sends StreamingRecognizeRequest
     objects to Google STT and pushes responses back to the asyncio loop.
+
+    This version will retry without alternative_language_codes if the model
+    rejects that field (common with some phone_call models).
     """
-
-    # create config once
-    streaming_config = make_recognition_config()
-
     def gen_requests():
-        # NOTE: do NOT yield the config here — pass it as the first arg below
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -150,12 +159,29 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
 
     try:
         logger.info("🎤 Starting STT stream (thread)")
-        # pass config as first argument to match installed client signature
-        responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
+
+        # First try: include alternative_language_codes (if any)
+        streaming_config = make_recognition_config(allow_alternatives=True)
+        try:
+            responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
+        except google_exceptions.InvalidArgument as e:
+            # detect the specific rejection about alternative_language_codes
+            msg = str(e)
+            if "alternative_language_codes" in msg:
+                logger.warning("Model rejected alternative_language_codes; retrying without them")
+                # rebuild config without alternatives and retry
+                streaming_config = make_recognition_config(allow_alternatives=False)
+                responses = _speech_client.streaming_recognize(streaming_config, gen_requests())
+            else:
+                # re-raise other InvalidArgument errors
+                raise
+
+        # consume responses
         for response in responses:
             if stop_event.is_set():
                 break
             asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
+
     except Exception as e:
         logger.exception("STT worker error: %s", e)
     finally:
