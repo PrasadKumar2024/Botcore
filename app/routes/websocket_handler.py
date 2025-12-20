@@ -136,12 +136,13 @@ def make_recognition_config(allow_alternatives: bool = True):
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     """
     STT worker that handles Google Speech-to-Text streaming recognition.
+    Works with either the raw SpeechClient or a SpeechHelpers wrapper.
+    Retries without alternative_language_codes if model rejects it.
     """
-    
-    def gen_requests(config):
-        """Generator that yields streaming requests"""
+
+    def gen_requests_with_config(config):
+        # yields first request containing the streaming config, then audio chunks
         yield speech.StreamingRecognizeRequest(streaming_config=config)
-        
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -151,26 +152,65 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.exception("Error pulling audio chunk: %s", e)
+                logger.exception("Error pulling audio chunk in STT worker: %s", e)
                 if stop_event.is_set():
                     break
                 continue
-    
+
+    def gen_requests_audio_only():
+        # yields audio chunks only (useful if wrapper expects config separately)
+        while not stop_event.is_set():
+            try:
+                chunk = audio_queue.get(timeout=0.5)
+                if chunk is None:
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.exception("Error pulling audio chunk in STT worker: %s", e)
+                if stop_event.is_set():
+                    break
+                continue
+
+    def call_streaming_recognize_with_fallback(streaming_config):
+        """
+        Try the 'config-first-inside-generator' style (standard client).
+        If that raises a TypeError indicating the wrapper wants (config, requests),
+        call wrapper with (config, requests-generator).
+        Returns the iterator 'responses'.
+        """
+        try:
+            return _speech_client.streaming_recognize(gen_requests_with_config(streaming_config))
+        except TypeError as e:
+            # wrapper likely expects two args: streaming_recognize(config, requests)
+            msg = str(e).lower()
+            if "missing" in msg and ("requests" in msg or "request" in msg):
+                logger.info("Detected SpeechHelpers signature; calling streaming_recognize(config, requests)")
+                return _speech_client.streaming_recognize(streaming_config, gen_requests_audio_only())
+            else:
+                # not the signature problem - re-raise
+                raise
+
     try:
         logger.info("🎤 Starting STT stream (thread)")
+
+        # First attempt: include alternative languages if available
         streaming_config = make_recognition_config(allow_alternatives=True)
-        
+
         try:
-            responses = _speech_client.streaming_recognize(gen_requests(streaming_config))
+            responses = call_streaming_recognize_with_fallback(streaming_config)
         except google_exceptions.InvalidArgument as e:
-            error_msg = str(e)
-            if "alternative_language_codes" in error_msg:
-                logger.warning("⚠️ Retrying without alternative_language_codes...")
+            # If the model rejected alternative_language_codes -> retry without them
+            err = str(e)
+            if "alternative_language_codes" in err:
+                logger.warning("Model rejected alternative_language_codes; retrying without them")
                 streaming_config = make_recognition_config(allow_alternatives=False)
-                responses = _speech_client.streaming_recognize(gen_requests(streaming_config))
+                responses = call_streaming_recognize_with_fallback(streaming_config)
             else:
                 raise
 
+        # Consume responses and push to async queue
         for response in responses:
             if stop_event.is_set():
                 break
