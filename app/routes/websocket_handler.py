@@ -136,12 +136,12 @@ def make_recognition_config(allow_alternatives: bool = True):
 def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
     """
     STT worker that handles Google Speech-to-Text streaming recognition.
-    Works with either the raw SpeechClient or a SpeechHelpers wrapper.
-    Retries without alternative_language_codes if model rejects it.
+    Works with SpeechClient or SpeechHelpers and retries once without
+    alternative_language_codes if the model rejects it (error occurs during iteration).
     """
 
     def gen_requests_with_config(config):
-        # yields first request containing the streaming config, then audio chunks
+        # first request contains the streaming config, then audio chunks
         yield speech.StreamingRecognizeRequest(streaming_config=config)
         while not stop_event.is_set():
             try:
@@ -158,7 +158,7 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
                 continue
 
     def gen_requests_audio_only():
-        # yields audio chunks only (useful if wrapper expects config separately)
+        # for wrappers expecting (config, requests) signature: yield audio only
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -174,48 +174,42 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
                 continue
 
     def call_streaming_recognize_with_fallback(streaming_config):
-        """
-        Try the 'config-first-inside-generator' style (standard client).
-        If that raises a TypeError indicating the wrapper wants (config, requests),
-        call wrapper with (config, requests-generator).
-        Returns the iterator 'responses'.
-        """
+        # Try standard Google client (generator includes config), fallback to wrapper signature
         try:
             return _speech_client.streaming_recognize(gen_requests_with_config(streaming_config))
         except TypeError as e:
-            # wrapper likely expects two args: streaming_recognize(config, requests)
             msg = str(e).lower()
             if "missing" in msg and ("requests" in msg or "request" in msg):
                 logger.info("Detected SpeechHelpers signature; calling streaming_recognize(config, requests)")
                 return _speech_client.streaming_recognize(streaming_config, gen_requests_audio_only())
+            raise
+
+    def consume_responses_with_retry(streaming_config, allow_alternatives=True):
+        """
+        Call streaming_recognize and consume responses.
+        If InvalidArgument about alternative_language_codes appears during iteration,
+        retry once with allow_alternatives=False.
+        """
+        try:
+            responses = call_streaming_recognize_with_fallback(streaming_config)
+            for response in responses:
+                if stop_event.is_set():
+                    break
+                asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
+        except google_exceptions.InvalidArgument as e:
+            err = str(e)
+            if "alternative_language_codes" in err and allow_alternatives:
+                logger.warning("Model rejected alternative_language_codes during streaming; retrying without them...")
+                new_config = make_recognition_config(allow_alternatives=False)
+                # Retry once without alternatives
+                consume_responses_with_retry(new_config, allow_alternatives=False)
             else:
-                # not the signature problem - re-raise
                 raise
 
     try:
         logger.info("🎤 Starting STT stream (thread)")
-
-        # First attempt: include alternative languages if available
-        streaming_config = make_recognition_config(allow_alternatives=True)
-
-        try:
-            responses = call_streaming_recognize_with_fallback(streaming_config)
-        except google_exceptions.InvalidArgument as e:
-            # If the model rejected alternative_language_codes -> retry without them
-            err = str(e)
-            if "alternative_language_codes" in err:
-                logger.warning("Model rejected alternative_language_codes; retrying without them")
-                streaming_config = make_recognition_config(allow_alternatives=False)
-                responses = call_streaming_recognize_with_fallback(streaming_config)
-            else:
-                raise
-
-        # Consume responses and push to async queue
-        for response in responses:
-            if stop_event.is_set():
-                break
-            asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
-
+        starting_config = make_recognition_config(allow_alternatives=True)
+        consume_responses_with_retry(starting_config, allow_alternatives=True)
     except Exception as e:
         logger.exception("❌ STT worker error: %s", e)
     finally:
@@ -224,7 +218,6 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         except Exception:
             pass
         logger.info("🎤 STT stream ended")
-
 async def get_ai_response(transcript: str, language_code: str) -> str:
     db = SessionLocal()
     try:
@@ -255,15 +248,21 @@ async def get_ai_response(transcript: str, language_code: str) -> str:
             system_message=system_msg
         )
 
+        # Optional: short-circuit Gemini during tests (set USE_GEMINI=false in env)
+        if os.getenv("USE_GEMINI", "true").lower() != "true":
+            return f"I heard: {transcript}"
+
         try:
             response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
-            return response or "I apologize, I couldn't process that request."
+            if response:
+                return response
+            # empty response -> fallback
         except asyncio.TimeoutError:
             logger.warning("LLM call timed out")
             return "Sorry, I'm taking too long to think. Please try again."
         except Exception as e:
-            logger.exception("LLM execution error: %s", e)
-            return "Sorry, I'm having trouble right now. Please try again."
+            logger.warning("Primary LLM failed: %s — falling back to simple reply", e)
+            return f"I heard: {transcript}"
     finally:
         db.close()
 
