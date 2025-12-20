@@ -14,7 +14,7 @@ TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "+12542846845")
 YOUR_PERSONAL_NUMBER = os.getenv("YOUR_PERSONAL_NUMBER", "+919938349076")
-RENDER_PUBLIC_URL = os.getenv("RENDER_PUBLIC_URL", "botcore-0n2z.onrender.com")
+RENDER_PUBLIC_URL = os.getenv("RENDER_PUBLIC_URL", "botcore-z6j0.onrender.com")
 
 @router.get("/test-call-me")
 async def trigger_outbound_call():
