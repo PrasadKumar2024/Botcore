@@ -59,20 +59,47 @@ LANGUAGE_FALLBACK = {
 }
 
 def get_best_voice(language_code: str) -> tuple:
-    """Return (language_code, voice_name, gender) for TTS selection."""
+    """
+    Return (language_code, voice_name, gender_or_none).
+    gender_or_none should be one of 'MALE', 'FEMALE' or None.
+    If unknown, return None so we don't pass ssml_gender to Google.
+    """
+    # map voice name to its actual gender (adjust if you know a different mapping)
+    LANGUAGE_VOICE_MAP = {
+        "en-US": {"name": "en-US-Neural2-A", "gender": "FEMALE"},
+        "en-IN": {"name": "en-IN-Neural2-C", "gender": "MALE"},   # <- NOTE: this voice is MALE
+        "hi-IN": {"name": "hi-IN-Neural2-A", "gender": "FEMALE"},
+        "te-IN": {"name": "te-IN-Standard-A", "gender": "FEMALE"},
+        "ta-IN": {"name": "ta-IN-Wavenet-A", "gender": "FEMALE"},
+        "bn-IN": {"name": "bn-IN-Wavenet-A", "gender": "FEMALE"},
+        "ml-IN": {"name": "ml-IN-Wavenet-A", "gender": "FEMALE"},
+        "kn-IN": {"name": "kn-IN-Wavenet-A", "gender": "FEMALE"},
+        "gu-IN": {"name": "gu-IN-Wavenet-A", "gender": "FEMALE"},
+        "mr-IN": {"name": "mr-IN-Wavenet-A", "gender": "FEMALE"},
+    }
+
+    LANGUAGE_FALLBACK = {
+        "en": "en-IN", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
+        "bn": "bn-IN", "ml": "ml-IN", "kn": "kn-IN", "gu": "gu-IN", "mr": "mr-IN",
+    }
+
     if not language_code:
-        return ("en-IN", LANGUAGE_VOICE_MAP["en-IN"]["name"], LANGUAGE_VOICE_MAP["en-IN"]["gender"])
+        v = LANGUAGE_VOICE_MAP["en-IN"]
+        return ("en-IN", v["name"], v.get("gender"))
+
     if language_code in LANGUAGE_VOICE_MAP:
         v = LANGUAGE_VOICE_MAP[language_code]
-        return (language_code, v["name"], v["gender"])
+        return (language_code, v["name"], v.get("gender"))
+
     base = language_code.split("-")[0] if "-" in language_code else language_code
     if base in LANGUAGE_FALLBACK:
         fallback = LANGUAGE_FALLBACK[base]
-        v = LANGUAGE_VOICE_MAP[fallback]
-        return (fallback, v["name"], v["gender"])
+        v = LANGUAGE_VOICE_MAP.get(fallback, LANGUAGE_VOICE_MAP["en-IN"])
+        return (fallback, v["name"], v.get("gender"))
+
     v = LANGUAGE_VOICE_MAP["en-IN"]
     logger.warning("No voice for %s, using en-IN", language_code)
-    return ("en-IN", v["name"], v["gender"])
+    return ("en-IN", v["name"], v.get("gender"))
 
 def twilio_payload_to_linear16(mu_law_b64: str) -> bytes:
     """Convert Twilio mu-law base64 to 16-bit PCM (LINEAR16) bytes."""
