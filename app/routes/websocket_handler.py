@@ -301,25 +301,37 @@ async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
         logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:60])
 
         synthesis_input = tts.SynthesisInput(text=text)
-        voice = tts.VoiceSelectionParams(
-            language_code=lang_code,
-            name=voice_name,
-            ssml_gender=getattr(tts.SsmlVoiceGender, gender)
-        )
+
+        # Build voice params — only include ssml_gender if we have a trusted value.
+        voice_kwargs = {"language_code": lang_code, "name": voice_name}
+        if gender in ("FEMALE", "MALE"):
+            # Only pass ssml_gender when it's known and correct
+            voice_kwargs["ssml_gender"] = getattr(tts.SsmlVoiceGender, gender)
+
+        voice = tts.VoiceSelectionParams(**voice_kwargs)
         audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.MULAW, sample_rate_hertz=8000)
 
-        def tts_call():
+        def tts_call(use_no_gender=False):
+            # If use_no_gender True, call without ssml_gender (rebuild voice)
+            if use_no_gender and "ssml_gender" in voice_kwargs:
+                vkw = {k: v for k, v in voice_kwargs.items() if k != "ssml_gender"}
+                v = tts.VoiceSelectionParams(**vkw)
+                return _tts_client.synthesize_speech(input=synthesis_input, voice=v, audio_config=audio_config)
             return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
 
         loop = asyncio.get_running_loop()
         try:
-            resp = await asyncio.wait_for(loop.run_in_executor(executor, tts_call), timeout=TTS_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning("TTS timed out")
-            return
+            # First attempt: normal call (may include ssml_gender)
+            resp = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(tts_call, False)), timeout=TTS_TIMEOUT)
         except Exception as e:
-            logger.exception("TTS exec error: %s", e)
-            return
+            # If voice/gender mismatch or other InvalidArgument occurs, retry without ssml_gender
+            err_msg = str(e)
+            logger.warning("TTS exec error (first attempt): %s. Retrying without ssml_gender.", err_msg)
+            try:
+                resp = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(tts_call, True)), timeout=TTS_TIMEOUT)
+            except Exception as e2:
+                logger.exception("TTS failed even after retry without gender: %s", e2)
+                return
 
         mulaw_b64 = base64.b64encode(resp.audio_content).decode("ascii")
 
