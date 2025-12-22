@@ -295,24 +295,25 @@ async def get_ai_response(transcript: str, language_code: str) -> str:
     finally:
         db.close()
 
-async def synthesize_and_send(ws: WebSocket, text: str, language_code: str, call_sid: str = None):
+async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
     """
-    Generate LINEAR16 TTS from Google, convert to μ-law@8k, chunk and send to Twilio media stream.
-    Pass call_sid (optional) if you want to enable Twilio Play fallback later.
+    Generate Google TTS (LINEAR16) -> convert to μ-law 8k -> chunk and send to Twilio Media Stream.
+    Requires that ws._twilio_stream_sid was set from the incoming 'start' event.
     """
     if not text:
         return
+
     try:
         lang_code, voice_name, gender = get_best_voice(language_code)
         logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:60])
 
-        # Prepare Google TTS request (force LINEAR16 so we know the format)
         synthesis_input = tts.SynthesisInput(text=text)
         voice = tts.VoiceSelectionParams(
             language_code=lang_code,
-            name=voice_name
+            name=voice_name,
+            ssml_gender=getattr(tts.SsmlVoiceGender, gender)
         )
-        # Request LINEAR16 at 24000 Hz (explicit)
+        # Request LINEAR16 so we can convert precisely
         audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16, sample_rate_hertz=24000)
 
         def tts_call():
@@ -328,76 +329,90 @@ async def synthesize_and_send(ws: WebSocket, text: str, language_code: str, call
             logger.exception("TTS exec error: %s", e)
             return
 
-        pcm16_bytes = resp.audio_content  # LINEAR16 signed 16-bit PCM, little-endian
+        linear16 = resp.audio_content  # bytes of LINEAR16 (likely 24000 Hz or 24000 as asked)
 
-        # Optional DEBUG: save received LINEAR16 to file to verify locally
+        # --- Debug: save raw LINEAR16 for offline inspection (optional) ---
         try:
-            dbg_fname = f"/tmp/tts_linear16_{int(time.time()*1000)}.raw"
-            with open(dbg_fname, "wb") as f:
-                f.write(pcm16_bytes)
-            logger.info("Saved debug raw LINEAR16 to %s (for local inspection)", dbg_fname)
+            import tempfile, os
+            tmp = f"/tmp/tts_linear16_{int(time.time()*1000)}.raw"
+            with open(tmp, "wb") as f:
+                f.write(linear16)
+            logger.info("Saved debug raw LINEAR16 to %s (for local inspection)", tmp)
         except Exception:
             pass
 
-        # Resample from 24000 -> 8000 (input width=2, channels=1)
+        # Resample if needed: convert sample rate -> 8000Hz and convert to 16-bit PCM if necessary.
+        # We assume incoming is 16-bit linear (sample width = 2).
         try:
-            audio_8k = audioop.ratecv(pcm16_bytes, 2, 1, 24000, 8000, None)[0]
+            # Try to resample from 24000 -> 8000. If your TTS uses a different sample rate, adjust.
+            input_rate = 24000
+            output_rate = 8000
+            # audioop.ratecv takes (input, width, channels, inrate, outrate, state)
+            pcm_8k = audioop.ratecv(linear16, 2, 1, input_rate, output_rate, None)[0]
         except Exception as e:
-            logger.exception("Resample failed (ratecv): %s", e)
-            # If resample fails, try assuming already at 8000
-            audio_8k = pcm16_bytes
+            logger.warning("Rate conversion failed, attempting to assume 8000Hz input: %s", e)
+            pcm_8k = linear16
 
-        # Convert signed 16-bit PCM -> mu-law (8-bit)
+        # Convert PCM 16-bit -> μ-law bytes
         try:
-            mulaw_audio = audioop.lin2ulaw(audio_8k, 2)
+            mulaw_audio = audioop.lin2ulaw(pcm_8k, 2)
         except Exception as e:
             logger.exception("lin2ulaw conversion failed: %s", e)
             return
 
-        # Optional: save a playable WAV converted from μ-law so you can listen locally
+        # Save a local WAV derived from μ-law for quick sanity check (optional)
         try:
-            wav_path = f"/tmp/tts_mulaw_to_wav_{int(time.time()*1000)}.wav"
-            pcm_from_mulaw = audioop.ulaw2lin(mulaw_audio, 2)
-            with wave.open(wav_path, "wb") as w:
-                w.setnchannels(1)
-                w.setsampwidth(2)
-                w.setframerate(8000)
-                w.writeframes(pcm_from_mulaw)
-            logger.info("Saved debug WAV (from μ-law) to %s", wav_path)
+            # Convert μ-law back to linear to write WAV—this is only for local debug
+            lin_from_ulaw = audioop.ulaw2lin(mulaw_audio, 2)
+            wav_tmp = f"/tmp/tts_mulaw_to_wav_{int(time.time()*1000)}.wav"
+            import wave
+            with wave.open(wav_tmp, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(8000)
+                wf.writeframes(lin_from_ulaw)
+            logger.info("Saved debug WAV (from μ-law) to %s", wav_tmp)
         except Exception:
             pass
 
-        # Chunking: 20ms frames => 160 bytes per frame at 8000Hz μ-law (1 byte/sample)
-        CHUNK_BYTES = 160
+        # --- Send to Twilio in 20ms μ-law frames ---
+        stream_sid = getattr(ws, "_twilio_stream_sid", None)
+        if not stream_sid:
+            logger.warning("No Twilio streamSid known; outbound TTS may not be played by Twilio.")
+        CHUNK_BYTES = 160  # 20 ms at 8000 Hz, μ-law is 1 byte per sample => 8000*0.02 = 160 bytes
 
-        # Send "clear" marker before playing to stop any current playback
         try:
-            await ws.send_json({"event": "clear"})
-        except Exception:
-            logger.debug("Failed to send clear event")
-
-        # Send media frames
-        for i in range(0, len(mulaw_audio), CHUNK_BYTES):
-            chunk = mulaw_audio[i:i + CHUNK_BYTES]
-            if not chunk:
-                break
-            mulaw_b64 = base64.b64encode(chunk).decode("ascii")
-            # Twilio Media Streams expects event: media with payload
+            # Send a 'clear' before playback to stop any current playback on Twilio side
             try:
-                await ws.send_json({"event": "media", "media": {"payload": mulaw_b64}})
-            except Exception as e:
-                logger.exception("Failed sending media chunk to Twilio WS: %s", e)
-                break
-            # pace the chunks ~20ms so Twilio plays smoothly
-            await asyncio.sleep(0.02)
+                await ws.send_json({"event": "clear", "streamSid": stream_sid} if stream_sid else {"event": "clear"})
+            except Exception:
+                pass
 
-        # send mark to indicate end of TTS sequence (optional, useful for tracking)
-        try:
-            await ws.send_json({"event": "mark", "streamSid": "tts_end"})
-        except Exception:
-            pass
+            # Send chunks with pacing
+            import base64, time
+            for i in range(0, len(mulaw_audio), CHUNK_BYTES):
+                chunk = mulaw_audio[i:i + CHUNK_BYTES]
+                if not chunk:
+                    continue
+                payload = base64.b64encode(chunk).decode("ascii")
+                msg = {"event": "media", "media": {"payload": payload}}
+                # include streamSid at top-level if we have it (Twilio expects this for playback)
+                if stream_sid:
+                    msg["streamSid"] = stream_sid
+                await ws.send_json(msg)
+                # pace as real-time (20ms)
+                await asyncio.sleep(0.020)
 
-        logger.info("✅ TTS audio sent to Twilio (stream)")
+            # Send a mark indicating end of TTS playback (helps Twilio finalize)
+            try:
+                mark = {"event": "mark", "streamSid": stream_sid or "tts_end"}
+                await ws.send_json(mark)
+            except Exception:
+                pass
+
+            logger.info("✅ TTS audio sent to Twilio (stream)")
+        except Exception as e:
+            logger.exception("Error sending TTS to Twilio stream: %s", e)
 
     except Exception as e:
         logger.exception("synthesize_and_send error: %s", e)
@@ -482,9 +497,11 @@ async def handle_media_stream(ws: WebSocket):
                 event = data.get("event")
 
                 if event == "start":
-                    call_sid = data.get("start", {}).get("callSid", "unknown")
-                    logger.info("Call started: %s", call_sid)
-
+                    call_info = data.get("start", {}) or {}
+                    call_sid = call_info.get("callSid", "unknown")
+    # Twilio start event also contains streamSid — save it for outbound media
+                    ws._twilio_stream_sid = call_info.get("streamSid") or call_info.get("stream_sid") or None
+                    logger.info("Call started: %s streamSid=%s", call_sid, getattr(ws, "_twilio_stream_sid", None))
                 elif event == "media":
                     payload = data.get("media", {}).get("payload")
                     if not payload:
