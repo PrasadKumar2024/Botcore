@@ -13,6 +13,8 @@ import base64
 import threading
 import functools
 import audioop
+import time
+import wave
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -293,56 +295,109 @@ async def get_ai_response(transcript: str, language_code: str) -> str:
     finally:
         db.close()
 
-async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
+async def synthesize_and_send(ws: WebSocket, text: str, language_code: str, call_sid: str = None):
+    """
+    Generate LINEAR16 TTS from Google, convert to μ-law@8k, chunk and send to Twilio media stream.
+    Pass call_sid (optional) if you want to enable Twilio Play fallback later.
+    """
     if not text:
         return
     try:
         lang_code, voice_name, gender = get_best_voice(language_code)
         logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:60])
 
+        # Prepare Google TTS request (force LINEAR16 so we know the format)
         synthesis_input = tts.SynthesisInput(text=text)
+        voice = tts.VoiceSelectionParams(
+            language_code=lang_code,
+            name=voice_name
+        )
+        # Request LINEAR16 at 24000 Hz (explicit)
+        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16, sample_rate_hertz=24000)
 
-        # Build voice params — only include ssml_gender if we have a trusted value.
-        voice_kwargs = {"language_code": lang_code, "name": voice_name}
-        if gender in ("FEMALE", "MALE"):
-            # Only pass ssml_gender when it's known and correct
-            voice_kwargs["ssml_gender"] = getattr(tts.SsmlVoiceGender, gender)
-
-        voice = tts.VoiceSelectionParams(**voice_kwargs)
-        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.MULAW, sample_rate_hertz=8000)
-
-        def tts_call(use_no_gender=False):
-            # If use_no_gender True, call without ssml_gender (rebuild voice)
-            if use_no_gender and "ssml_gender" in voice_kwargs:
-                vkw = {k: v for k, v in voice_kwargs.items() if k != "ssml_gender"}
-                v = tts.VoiceSelectionParams(**vkw)
-                return _tts_client.synthesize_speech(input=synthesis_input, voice=v, audio_config=audio_config)
+        def tts_call():
             return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
 
         loop = asyncio.get_running_loop()
         try:
-            # First attempt: normal call (may include ssml_gender)
-            resp = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(tts_call, False)), timeout=TTS_TIMEOUT)
+            resp = await asyncio.wait_for(loop.run_in_executor(executor, tts_call), timeout=TTS_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("TTS timed out")
+            return
         except Exception as e:
-            # If voice/gender mismatch or other InvalidArgument occurs, retry without ssml_gender
-            err_msg = str(e)
-            logger.warning("TTS exec error (first attempt): %s. Retrying without ssml_gender.", err_msg)
-            try:
-                resp = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(tts_call, True)), timeout=TTS_TIMEOUT)
-            except Exception as e2:
-                logger.exception("TTS failed even after retry without gender: %s", e2)
-                return
+            logger.exception("TTS exec error: %s", e)
+            return
 
-        mulaw_b64 = base64.b64encode(resp.audio_content).decode("ascii")
+        pcm16_bytes = resp.audio_content  # LINEAR16 signed 16-bit PCM, little-endian
 
+        # Optional DEBUG: save received LINEAR16 to file to verify locally
+        try:
+            dbg_fname = f"/tmp/tts_linear16_{int(time.time()*1000)}.raw"
+            with open(dbg_fname, "wb") as f:
+                f.write(pcm16_bytes)
+            logger.info("Saved debug raw LINEAR16 to %s (for local inspection)", dbg_fname)
+        except Exception:
+            pass
+
+        # Resample from 24000 -> 8000 (input width=2, channels=1)
+        try:
+            audio_8k = audioop.ratecv(pcm16_bytes, 2, 1, 24000, 8000, None)[0]
+        except Exception as e:
+            logger.exception("Resample failed (ratecv): %s", e)
+            # If resample fails, try assuming already at 8000
+            audio_8k = pcm16_bytes
+
+        # Convert signed 16-bit PCM -> mu-law (8-bit)
+        try:
+            mulaw_audio = audioop.lin2ulaw(audio_8k, 2)
+        except Exception as e:
+            logger.exception("lin2ulaw conversion failed: %s", e)
+            return
+
+        # Optional: save a playable WAV converted from μ-law so you can listen locally
+        try:
+            wav_path = f"/tmp/tts_mulaw_to_wav_{int(time.time()*1000)}.wav"
+            pcm_from_mulaw = audioop.ulaw2lin(mulaw_audio, 2)
+            with wave.open(wav_path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(8000)
+                w.writeframes(pcm_from_mulaw)
+            logger.info("Saved debug WAV (from μ-law) to %s", wav_path)
+        except Exception:
+            pass
+
+        # Chunking: 20ms frames => 160 bytes per frame at 8000Hz μ-law (1 byte/sample)
+        CHUNK_BYTES = 160
+
+        # Send "clear" marker before playing to stop any current playback
         try:
             await ws.send_json({"event": "clear"})
         except Exception:
             logger.debug("Failed to send clear event")
 
-        await ws.send_json({"event": "media", "media": {"payload": mulaw_b64}})
-        await ws.send_json({"event": "mark", "streamSid": "tts_end"})
-        logger.info("TTS audio sent to Twilio")
+        # Send media frames
+        for i in range(0, len(mulaw_audio), CHUNK_BYTES):
+            chunk = mulaw_audio[i:i + CHUNK_BYTES]
+            if not chunk:
+                break
+            mulaw_b64 = base64.b64encode(chunk).decode("ascii")
+            # Twilio Media Streams expects event: media with payload
+            try:
+                await ws.send_json({"event": "media", "media": {"payload": mulaw_b64}})
+            except Exception as e:
+                logger.exception("Failed sending media chunk to Twilio WS: %s", e)
+                break
+            # pace the chunks ~20ms so Twilio plays smoothly
+            await asyncio.sleep(0.02)
+
+        # send mark to indicate end of TTS sequence (optional, useful for tracking)
+        try:
+            await ws.send_json({"event": "mark", "streamSid": "tts_end"})
+        except Exception:
+            pass
+
+        logger.info("✅ TTS audio sent to Twilio (stream)")
 
     except Exception as e:
         logger.exception("synthesize_and_send error: %s", e)
