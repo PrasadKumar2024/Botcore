@@ -132,7 +132,8 @@ except Exception as e:
 ALTERNATIVE_LANGUAGES = [
     "en-IN", "hi-IN", "te-IN", "ta-IN", "bn-IN", "ml-IN", "kn-IN", "gu-IN", "mr-IN"
 ]
-DEFAULT_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "DEFAULT_CLIENT")
+# Use explicit known default client id if env not provided
+DEFAULT_CLIENT_ID = os.getenv("DEFAULT_KB_CLIENT_ID", "9b7881dd-3215-4d1e-a533-4857ba29653c")
 
 def make_recognition_config(allow_alternatives: bool = True):
     """
@@ -248,50 +249,106 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
             pass
         logger.info("🎤 STT stream ended")
 async def get_ai_response(transcript: str, language_code: str) -> str:
+    """
+    RAG-driven response: search the KB (Pinecone) for PDF chunks belonging to DEFAULT_CLIENT_ID,
+    then ask the LLM to answer using ONLY those chunks. If insufficient evidence, reply 'I don't know'.
+    """
     db = SessionLocal()
     try:
+        # 1) Query Pinecone for the client's PDF chunks (try to pass a filter if wrapper supports it)
         try:
             from app.services.pinecone_service import pinecone_service
-            results = await pinecone_service.search_similar_chunks(
-                client_id=DEFAULT_CLIENT_ID,
-                query=transcript,
-                top_k=2
-            )
-            context = "\n\n".join([r.get("chunk_text", "") for r in results]) if results else ""
+            try:
+                results = await pinecone_service.search_similar_chunks(
+                    client_id=DEFAULT_CLIENT_ID,
+                    query=transcript,
+                    top_k=6,
+                    # If your wrapper supports a filter param this will narrow to PDFs only.
+                    filter={"client_id": DEFAULT_CLIENT_ID, "source_type": "pdf"}
+                )
+            except TypeError:
+                # Fallback if wrapper doesn't accept `filter`
+                results = await pinecone_service.search_similar_chunks(
+                    client_id=DEFAULT_CLIENT_ID,
+                    query=transcript,
+                    top_k=6
+                )
         except Exception as e:
             logger.debug("Pinecone context fetch failed: %s", e)
-            context = ""
+            results = []
 
-        system_msg = f"You are a helpful voice assistant. Respond in {language_code}. Keep responses concise for voice."
-        if context:
-            prompt = f"Context:\n{context}\n\nUser ({language_code}): {transcript}\n\nRespond naturally in {language_code}:"
+        # 2) Build context blocks with bracketed source labels for citations
+        context_blocks = []
+        sources = []
+        for r in results or []:
+            text = r.get("chunk_text") or r.get("text") or ""
+            md = r.get("metadata", {}) if isinstance(r, dict) else {}
+            src = md.get("source_filename") or md.get("source") or md.get("file")
+            page = md.get("page") or md.get("page_number") or md.get("page_no")
+            if src and page:
+                label = f"{src}:pg{page}"
+            elif src:
+                label = f"{src}"
+            else:
+                label = "pdf"
+            if text:
+                context_blocks.append(f"[{label}]\n{text.strip()}")
+                sources.append(label)
+
+        # 3) Build the system + user prompt forcing the LLM to use only given context
+        system_msg = (
+            "You are a concise voice assistant that must answer using ONLY the provided PDF context. "
+            "If the context doesn't contain enough information to answer, say \"I don't know\" or ask for clarification. "
+            "Keep answers short for voice (1-2 sentences). Add citation(s) using the bracketed labels like [file.pdf:pg3] when referencing the document."
+        )
+
+        if context_blocks:
+            context_text = "\n\n".join(context_blocks[:6])  # limit size
+            user_prompt = (
+                f"Context (from client's PDF(s)):\n{context_text}\n\n"
+                f"User ({language_code}): {transcript}\n\n"
+                f"Answer succinctly in {language_code} using ONLY the context above. Do not invent facts. "
+                f"Add citations using the bracketed labels above where applicable."
+            )
         else:
-            prompt = f"User ({language_code}): {transcript}\n\nRespond in {language_code}:"
+            user_prompt = (
+                f"No PDF context was found for this client. User ({language_code}): {transcript}\n\n"
+                f"Respond concisely in {language_code}. If you cannot answer, say 'I don't know'."
+            )
 
+        # 4) Call LLM (offload to executor)
         loop = asyncio.get_running_loop()
         llm_partial = functools.partial(
             _gemini.generate_response,
-            prompt=prompt,
-            temperature=0.7,
-            max_tokens=200,
+            prompt=user_prompt,
+            temperature=0.0,   # deterministic factual answers
+            max_tokens=300,
             system_message=system_msg
         )
 
-        # Optional: short-circuit Gemini during tests (set USE_GEMINI=false in env)
         if os.getenv("USE_GEMINI", "true").lower() != "true":
-            return f"I heard: {transcript}"
+            # test shortcut: echo + sources
+            src_str = f" Sources: {', '.join(dict.fromkeys(sources))}" if sources else ""
+            return f"I heard: {transcript}.{src_str}"
 
         try:
             response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
-            if response:
-                return response
-            # empty response -> fallback
         except asyncio.TimeoutError:
             logger.warning("LLM call timed out")
             return "Sorry, I'm taking too long to think. Please try again."
         except Exception as e:
-            logger.warning("Primary LLM failed: %s — falling back to simple reply", e)
+            logger.warning("Primary LLM failed: %s — falling back", e)
             return f"I heard: {transcript}"
+
+        # 5) Ensure we include sources if none present
+        final_text = (response or "").strip()
+        # If LLM didn't include [bracket] style citations, append a compact source list
+        if context_blocks and "[" not in final_text:
+            src_list = ", ".join(dict.fromkeys(sources)) if sources else ""
+            if src_list:
+                final_text = f"{final_text}\n\nSources: {src_list}"
+
+        return final_text or f"I heard: {transcript}"
     finally:
         db.close()
 
