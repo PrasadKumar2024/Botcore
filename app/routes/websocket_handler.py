@@ -250,107 +250,72 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         logger.info("🎤 STT stream ended")
 async def get_ai_response(transcript: str, language_code: str) -> str:
     """
-    RAG-driven response: search the KB (Pinecone) for PDF chunks belonging to DEFAULT_CLIENT_ID,
-    then ask the LLM to answer using ONLY those chunks. If insufficient evidence, reply 'I don't know'.
+    FIXED RAG: Optimized to ensure PDF context is found and used.
     """
     db = SessionLocal()
+    # USE THE EXACT ID YOU PROVIDED
+    TARGET_CLIENT_ID = "9b7881dd-3215-4d1e-a533-4857ba29653c"
+    
     try:
-        # 1) Query Pinecone for the client's PDF chunks (try to pass a filter if wrapper supports it)
+        from app.services.pinecone_service import pinecone_service
+        
+        # 1) Attempt a broader search first to ensure we get results
         try:
-            from app.services.pinecone_service import pinecone_service
-            try:
-                results = await pinecone_service.search_similar_chunks(
-                    client_id=DEFAULT_CLIENT_ID,
-                    query=transcript,
-                    top_k=6,
-                    # If your wrapper supports a filter param this will narrow to PDFs only.
-                    filter={"client_id": DEFAULT_CLIENT_ID, "source_type": "pdf"}
-                )
-            except TypeError:
-                # Fallback if wrapper doesn't accept `filter`
-                results = await pinecone_service.search_similar_chunks(
-                    client_id=DEFAULT_CLIENT_ID,
-                    query=transcript,
-                    top_k=6
-                )
+            # We remove the strict 'source_type' filter temporarily to see if data exists
+            results = await pinecone_service.search_similar_chunks(
+                client_id=TARGET_CLIENT_ID,
+                query=transcript,
+                top_k=5
+            )
+            logger.info(f"🔍 Pinecone search for {TARGET_CLIENT_ID} returned {len(results)} chunks")
         except Exception as e:
-            logger.debug("Pinecone context fetch failed: %s", e)
+            logger.error(f"❌ Pinecone critical failure: {e}")
             results = []
 
-        # 2) Build context blocks with bracketed source labels for citations
+        # 2) Extract text and metadata
         context_blocks = []
-        sources = []
-        for r in results or []:
-            text = r.get("chunk_text") or r.get("text") or ""
-            md = r.get("metadata", {}) if isinstance(r, dict) else {}
-            src = md.get("source_filename") or md.get("source") or md.get("file")
-            page = md.get("page") or md.get("page_number") or md.get("page_no")
-            if src and page:
-                label = f"{src}:pg{page}"
-            elif src:
-                label = f"{src}"
-            else:
-                label = "pdf"
-            if text:
-                context_blocks.append(f"[{label}]\n{text.strip()}")
-                sources.append(label)
+        for r in results:
+            content = r.get("chunk_text") or r.get("text") or ""
+            # Capture filename for the bot to mention it
+            meta = r.get("metadata", {})
+            source_file = meta.get("source_filename") or "the provided document"
+            if content:
+                context_blocks.append(f"--- START CHUNK FROM {source_file} ---\n{content}\n--- END CHUNK ---")
 
-        # 3) Build the system + user prompt forcing the LLM to use only given context
+        # 3) The "Knowledge Base" System Prompt
         system_msg = (
-            "You are a concise voice assistant that must answer using ONLY the provided PDF context. "
-            "If the context doesn't contain enough information to answer, say \"I don't know\" or ask for clarification. "
-            "Keep answers short for voice (1-2 sentences). Add citation(s) using the bracketed labels like [file.pdf:pg3] when referencing the document."
+            "You are a professional AI assistant. Your ONLY source of truth is the provided context. "
+            "If the answer is not in the context, say: 'I am sorry, but I don't have that information in my records.' "
+            "Keep your response to 1 or 2 sentences max. Speak directly to the caller."
         )
 
         if context_blocks:
-            context_text = "\n\n".join(context_blocks[:6])  # limit size
+            context_text = "\n\n".join(context_blocks)
             user_prompt = (
-                f"Context (from client's PDF(s)):\n{context_text}\n\n"
-                f"User ({language_code}): {transcript}\n\n"
-                f"Answer succinctly in {language_code} using ONLY the context above. Do not invent facts. "
-                f"Add citations using the bracketed labels above where applicable."
+                f"CONTEXT FROM PDF:\n{context_text}\n\n"
+                f"USER QUESTION: {transcript}\n\n"
+                f"INSTRUCTION: Answer the question using the PDF context above. Be concise."
             )
         else:
-            user_prompt = (
-                f"No PDF context was found for this client. User ({language_code}): {transcript}\n\n"
-                f"Respond concisely in {language_code}. If you cannot answer, say 'I don't know'."
-            )
+            # Fallback if Knowledge Base is empty
+            user_prompt = f"The user said '{transcript}', but no relevant PDF data was found. Tell them you can only answer questions related to your specific documents."
 
-        # 4) Call LLM (offload to executor)
+        # 4) Execute Gemini with 0.0 Temperature for Accuracy
         loop = asyncio.get_running_loop()
         llm_partial = functools.partial(
             _gemini.generate_response,
             prompt=user_prompt,
-            temperature=0.0,   # deterministic factual answers
-            max_tokens=300,
+            temperature=0.0, # CRITICAL: No creativity, just facts
+            max_tokens=150,
             system_message=system_msg
         )
 
-        if os.getenv("USE_GEMINI", "true").lower() != "true":
-            # test shortcut: echo + sources
-            src_str = f" Sources: {', '.join(dict.fromkeys(sources))}" if sources else ""
-            return f"I heard: {transcript}.{src_str}"
+        response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
+        return response.strip() if response else "I'm sorry, I'm having trouble accessing my files."
 
-        try:
-            response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning("LLM call timed out")
-            return "Sorry, I'm taking too long to think. Please try again."
-        except Exception as e:
-            logger.warning("Primary LLM failed: %s — falling back", e)
-            return f"I heard: {transcript}"
-
-        # 5) Ensure we include sources if none present
-        final_text = (response or "").strip()
-        # If LLM didn't include [bracket] style citations, append a compact source list
-        if context_blocks and "[" not in final_text:
-            src_list = ", ".join(dict.fromkeys(sources)) if sources else ""
-            if src_list:
-                final_text = f"{final_text}\n\nSources: {src_list}"
-
-        return final_text or f"I heard: {transcript}"
     finally:
         db.close()
+
 
 async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
     """
