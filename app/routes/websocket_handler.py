@@ -250,71 +250,56 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         logger.info("🎤 STT stream ended")
 async def get_ai_response(transcript: str, language_code: str) -> str:
     """
-    FIXED RAG: Optimized to ensure PDF context is found and used.
+    FIXED RAG: Ensures we use the correct service and ID mapping.
     """
-    db = SessionLocal()
-    # USE THE EXACT ID YOU PROVIDED
+    # 1. Use the EXACT same ID that exists in your Pinecone Console
     TARGET_CLIENT_ID = "9b7881dd-3215-4d1e-a533-4857ba29653c"
     
     try:
         from app.services.pinecone_service import pinecone_service
         
-        # 1) Attempt a broader search first to ensure we get results
-        try:
-            # We remove the strict 'source_type' filter temporarily to see if data exists
-            results = await pinecone_service.search_similar_chunks(
-                client_id=TARGET_CLIENT_ID,
-                query=transcript,
-                top_k=5
-            )
-            logger.info(f"🔍 Pinecone search for {TARGET_CLIENT_ID} returned {len(results)} chunks")
-        except Exception as e:
-            logger.error(f"❌ Pinecone critical failure: {e}")
-            results = []
+        # 2. CRITICAL: search_similar_chunks handles the embedding internally via Cohere.
+        # We MUST ensure it's not returning 0 results.
+        logger.info(f"RAG START: Querying Pinecone for {TARGET_CLIENT_ID} with text: {transcript}")
+        
+        results = await pinecone_service.search_similar_chunks(
+            client_id=TARGET_CLIENT_ID,
+            query=transcript,
+            top_k=3,
+            min_score=-1.0 # Keep this -1.0 until we prove data is flowing
+        )
 
-        # 2) Extract text and metadata
-        context_blocks = []
-        for r in results:
-            content = r.get("chunk_text") or r.get("text") or ""
-            # Capture filename for the bot to mention it
-            meta = r.get("metadata", {})
-            source_file = meta.get("source_filename") or "the provided document"
-            if content:
-                context_blocks.append(f"--- START CHUNK FROM {source_file} ---\n{content}\n--- END CHUNK ---")
+        if not results:
+            logger.warning(f"❌ ZERO results found for Client {TARGET_CLIENT_ID}. Check if data is indexed under this exact ID.")
+            return "I'm sorry, I don't have access to those specific records right now."
 
-        # 3) The "Knowledge Base" System Prompt
+        # 3. Build the Context
+        context_text = "\n".join([r.get("chunk_text", "") for r in results])
+        
+        # 4. Prompt Engineering for Voice
+        # We need to tell Gemini it is on a PHONE CALL so it stays brief.
         system_msg = (
-            "You are a professional AI assistant. Your ONLY source of truth is the provided context. "
-            "If the answer is not in the context, say: 'I am sorry, but I don't have that information in my records.' "
-            "Keep your response to 1 or 2 sentences max. Speak directly to the caller."
+            "You are a helpful clinic assistant. Use the provided context to answer. "
+            "Keep answers extremely short (under 20 words) for voice clarity. "
+            "If the answer isn't in the context, say you don't know."
         )
+        
+        user_prompt = f"CONTEXT:\n{context_text}\n\nUSER QUESTION: {transcript}"
 
-        if context_blocks:
-            context_text = "\n\n".join(context_blocks)
-            user_prompt = (
-                f"CONTEXT FROM PDF:\n{context_text}\n\n"
-                f"USER QUESTION: {transcript}\n\n"
-                f"INSTRUCTION: Answer the question using the PDF context above. Be concise."
-            )
-        else:
-            # Fallback if Knowledge Base is empty
-            user_prompt = f"The user said '{transcript}', but no relevant PDF data was found. Tell them you can only answer questions related to your specific documents."
-
-        # 4) Execute Gemini with 0.0 Temperature for Accuracy
+        # 5. Generate Response
+        # Note: Using run_in_executor because GeminiService might be sync
         loop = asyncio.get_running_loop()
-        llm_partial = functools.partial(
-            _gemini.generate_response,
-            prompt=user_prompt,
-            temperature=0.0, # CRITICAL: No creativity, just facts
-            max_tokens=150,
-            system_message=system_msg
+        response = await loop.run_in_executor(
+            executor, 
+            functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg)
         )
+        
+        return response.strip()
 
-        response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
-        return response.strip() if response else "I'm sorry, I'm having trouble accessing my files."
+    except Exception as e:
+        logger.error(f"❌ RAG Failure: {str(e)}")
+        return "I'm sorry, I'm having trouble connecting to my database."
 
-    finally:
-        db.close()
 
 
 async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
