@@ -15,6 +15,9 @@ import functools
 import audioop
 import time
 import wave
+import shutil
+import subprocess
+import tempfile
 import queue
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
