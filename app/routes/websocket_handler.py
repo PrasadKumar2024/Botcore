@@ -59,7 +59,46 @@ LANGUAGE_FALLBACK = {
     "en": "en-IN", "hi": "hi-IN", "te": "te-IN", "ta": "ta-IN",
     "bn": "bn-IN", "ml": "ml-IN", "kn": "kn-IN", "gu": "gu-IN", "mr": "mr-IN",
 }
+def normalize_and_expand_query(transcript: str) -> str:
+    """
+    Normalize noisy, colloquial speech into richer query terms for KB matching.
+    """
+    if not transcript:
+        return ""
 
+    s = transcript.lower().strip()
+
+    # de-duplicate immediate repeats: "what's what's your" -> "what's your"
+    toks = s.split()
+    dedup = [toks[0]] if toks else []
+    for i in range(1, len(toks)):
+        if toks[i] != toks[i-1]:
+            dedup.append(toks[i])
+    s = " ".join(dedup)
+
+    # simple map of colloquial -> formal/expanded tokens
+    mappings = {
+        "timings": "business hours operating hours schedule",
+        "timing": "business hours operating hours schedule",
+        "whats": "what are",
+        "what's": "what are",
+        "when's": "when are",
+        "where's": "where is",
+        "phone number": "contact number telephone",
+        "open": "business hours operating hours",
+        "closed": "business hours operating hours",
+        "appointment": "appointment booking consultation",
+        "doctor": "doctor physician consultant",
+        "payments": "payment methods accepted cash upi card",
+    }
+
+    out = []
+    for w in s.split():
+        out.append(w)
+        if w in mappings:
+            out.extend(mappings[w].split())
+
+    return " ".join(out)
 def get_best_voice(language_code: str) -> tuple:
     """
     Return (language_code, voice_name, gender_or_none).
@@ -250,135 +289,190 @@ def grpc_stt_worker(loop, audio_queue, transcripts_queue, stop_event):
         logger.info("🎤 STT stream ended")
 async def get_ai_response(transcript: str, language_code: str) -> str:
     """
-    FIXED RAG: Ensures we use the correct service and ID mapping.
+    RAG-first, conversation-fallback. Normalize query for better Pinecone matching.
     """
-    # 1. Use the EXACT same ID that exists in your Pinecone Console
-    TARGET_CLIENT_ID = "9b7881dd-3215-4d1e-a533-4857ba29653c"
-    
+    TARGET_CLIENT_ID = DEFAULT_CLIENT_ID  # use env default already set
+
     try:
         from app.services.pinecone_service import pinecone_service
-        
-        # 2. CRITICAL: search_similar_chunks handles the embedding internally via Cohere.
-        # We MUST ensure it's not returning 0 results.
-        logger.info(f"RAG START: Querying Pinecone for {TARGET_CLIENT_ID} with text: {transcript}")
-        
+
+        # 0) Normalize and expand noisy transcript
+        norm_query = normalize_and_expand_query(transcript)
+        logger.info("RAG START: original=%s | normalized=%s", transcript[:160], norm_query[:160])
+
+        # 1) Try KB lookup with normalized query first (get more results to filter)
         results = await pinecone_service.search_similar_chunks(
             client_id=TARGET_CLIENT_ID,
-            query=transcript,
-            top_k=3,
-            min_score=-1.0 # Keep this -1.0 until we prove data is flowing
+            query=norm_query or transcript,
+            top_k=5,
+            min_score=-1.0
         )
 
+        # 2) If we still have zero results, try raw transcript once before falling back
         if not results:
-            logger.warning(f"❌ ZERO results found for Client {TARGET_CLIENT_ID}. Check if data is indexed under this exact ID.")
-            return "I'm sorry, I don't have access to those specific records right now."
+            logger.info("No KB matches with normalized query; trying raw transcript.")
+            results = await pinecone_service.search_similar_chunks(
+                client_id=TARGET_CLIENT_ID,
+                query=transcript,
+                top_k=5,
+                min_score=-1.0
+            )
 
-        # 3. Build the Context
-        context_text = "\n".join([r.get("chunk_text", "") for r in results])
-        
-        # 4. Prompt Engineering for Voice
-        # We need to tell Gemini it is on a PHONE CALL so it stays brief.
-        system_msg = (
-            "You are a helpful clinic assistant. Use the provided context to answer. "
-            "Keep answers extremely short (under 20 words) for voice clarity. "
-            "If the answer isn't in the context, say you don't know."
+        # 3) If KB results exist -> RAG response (temperature 0.0)
+        if results:
+            context_text = "\n\n".join([f"--- START CHUNK ---\n{r.get('chunk_text','')}\n--- END CHUNK ---" for r in results[:3]])
+            system_msg = (
+                "You are a professional assistant. Use ONLY the context provided to answer. "
+                "Keep answers short and phone-friendly (1-2 sentences). If not in context, say you don't know."
+            )
+            user_prompt = f"CONTEXT:\n{context_text}\n\nUSER QUESTION: {transcript}"
+            loop = asyncio.get_running_loop()
+            llm_partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.0, max_tokens=150)
+            try:
+                response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning("LLM timed out on RAG call")
+                response = None
+            return (response.strip() if response else "I am sorry, but I don't have that information in my records.")
+
+        # 4) No KB results -> natural conversation fallback (higher temp)
+        logger.info("No KB results — using LLM conversational fallback.")
+        conv_system = (
+            "You are a friendly phone assistant. Answer conversationally and briefly. "
+            "If user asks for something you can't verify, offer to follow up rather than invent facts."
         )
-        
-        user_prompt = f"CONTEXT:\n{context_text}\n\nUSER QUESTION: {transcript}"
-
-        # 5. Generate Response
-        # Note: Using run_in_executor because GeminiService might be sync
+        user_prompt = f"User said: {transcript}\n\nRespond naturally and briefly (1-2 sentences)."
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            executor, 
-            functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg)
-        )
-        
-        return response.strip()
+        llm_partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_system, temperature=0.6, max_tokens=150)
+        try:
+            response = await asyncio.wait_for(loop.run_in_executor(executor, llm_partial), timeout=LLM_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning("LLM timed out on conversational fallback")
+            response = None
+
+        return response.strip() if response else "Sorry, I didn't catch that — can you repeat?"
 
     except Exception as e:
-        logger.error(f"❌ RAG Failure: {str(e)}")
-        return "I'm sorry, I'm having trouble connecting to my database."
+        logger.exception("❌ RAG Failure: %s", e)
+        return "I'm sorry, I'm having trouble accessing my files right now."
 
 
 
 async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
-    """
-    Generate Google TTS (LINEAR16) -> convert to μ-law 8k -> chunk and send to Twilio Media Stream.
-    Requires that ws._twilio_stream_sid was set from the incoming 'start' event.
-    """
     if not text:
         return
 
     try:
         lang_code, voice_name, gender = get_best_voice(language_code)
-        logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:60])
+        logger.info("TTS request: lang=%s voice=%s text=%s", lang_code, voice_name, text[:80])
 
-        synthesis_input = tts.SynthesisInput(text=text)
-        voice = tts.VoiceSelectionParams(
-            language_code=lang_code,
-            name=voice_name,
-            ssml_gender=getattr(tts.SsmlVoiceGender, gender)
+        # Build SSML for slightly more natural prosody
+        # Adjust rate to ~0.97 for smoother speech on phone
+        ssml = (
+            "<speak>"
+            f"<prosody rate='0.97'>{text}</prosody>"
+            "</speak>"
         )
-        # Request LINEAR16 so we can convert precisely
-        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16, sample_rate_hertz=24000)
+        synthesis_input = tts.SynthesisInput(ssml=ssml)
 
-        def tts_call():
-            return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
+        # prefer direct 8000Hz to avoid resampling if supported
+        preferred_rate = 8000
+        audio_config = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16, sample_rate_hertz=preferred_rate)
+
+        # Build voice params; only set ssml_gender if known
+        voice_params = {"language_code": lang_code, "name": voice_name}
+        if gender:
+            voice_params["ssml_gender"] = getattr(tts.SsmlVoiceGender, gender)
+
+        voice = tts.VoiceSelectionParams(**voice_params)
+
+        def do_tts_call(cfg):
+            return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=cfg)
 
         loop = asyncio.get_running_loop()
         try:
-            resp = await asyncio.wait_for(loop.run_in_executor(executor, tts_call), timeout=TTS_TIMEOUT)
-        except asyncio.TimeoutError:
-            logger.warning("TTS timed out")
-            return
+            resp = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(do_tts_call, audio_config)), timeout=TTS_TIMEOUT)
+            linear16 = resp.audio_content
+            used_rate = preferred_rate
+            logger.info("TTS succeeded at %d Hz", used_rate)
         except Exception as e:
-            logger.exception("TTS exec error: %s", e)
-            return
+            # fallback: try a safer higher sample rate (24k) and mark for resample
+            logger.warning("Preferred TTS rate failed (%s). Falling back to 24000 and will resample. Error: %s", preferred_rate, e)
+            audio_config2 = tts.AudioConfig(audio_encoding=tts.AudioEncoding.LINEAR16, sample_rate_hertz=24000)
+            try:
+                resp2 = await asyncio.wait_for(loop.run_in_executor(executor, functools.partial(do_tts_call, audio_config2)), timeout=TTS_TIMEOUT)
+                linear16 = resp2.audio_content
+                used_rate = 24000
+                logger.info("TTS produced %d Hz audio (will resample to 8000).", used_rate)
+            except Exception as e2:
+                logger.exception("TTS fallback failed: %s", e2)
+                return
 
-        linear16 = resp.audio_content  # bytes of LINEAR16 (likely 24000 Hz or 24000 as asked)
+        # Save temp linear16 raw file for possible ffmpeg resampling
+        tmp_in = tempfile.NamedTemporaryFile(delete=False)
+        tmp_in_name = tmp_in.name
+        tmp_in.write(linear16)
+        tmp_in.flush()
+        tmp_in.close()
 
-        # --- Debug: save raw LINEAR16 for offline inspection (optional) ---
+        # If rate already 8000 and linear16 is 16-bit PCM, just convert to μ-law
+        if used_rate == 8000:
+            try:
+                # linear16 is raw 16-bit LITTLE-ENDIAN PCM bytes; convert to μ-law
+                pcm_8k = linear16
+                mulaw_audio = audioop.lin2ulaw(pcm_8k, 2)
+            except Exception as e:
+                logger.exception("lin2ulaw conversion failed (8000Hz): %s", e)
+                return
+        else:
+            # Try ffmpeg to resample and produce μ-law (best quality)
+            ffmpeg_path = shutil.which("ffmpeg")
+            if ffmpeg_path:
+                tmp_out = tempfile.NamedTemporaryFile(delete=False)
+                tmp_out_name = tmp_out.name
+                tmp_out.close()
+                # ffmpeg: read raw s16le at used_rate, output mulaw at 8k
+                cmd = [
+                    ffmpeg_path,
+                    "-f", "s16le",
+                    "-ar", str(used_rate),
+                    "-ac", "1",
+                    "-i", tmp_in_name,
+                    "-ar", "8000",
+                    "-ac", "1",
+                    "-f", "mulaw",
+                    tmp_out_name
+                ]
+                try:
+                    subprocess.check_call(cmd, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL, timeout=10)
+                    mulaw_audio = open(tmp_out_name, "rb").read()
+                    os.unlink(tmp_out_name)
+                except Exception as e:
+                    logger.warning("ffmpeg resample failed: %s — falling back to audioop.ratecv", e)
+                    # fallback to audioop.chain: convert linear16->pcm_8k then to μ-law
+                    try:
+                        # read raw s16le
+                        data = open(tmp_in_name, "rb").read()
+                        pcm_8k = audioop.ratecv(data, 2, 1, used_rate, 8000, None)[0]
+                        mulaw_audio = audioop.lin2ulaw(pcm_8k, 2)
+                    except Exception as e2:
+                        logger.exception("audioop resample fallback failed: %s", e2)
+                        os.unlink(tmp_in_name)
+                        return
+            else:
+                # no ffmpeg: use audioop.ratecv (less quality)
+                try:
+                    data = open(tmp_in_name, "rb").read()
+                    pcm_8k = audioop.ratecv(data, 2, 1, used_rate, 8000, None)[0]
+                    mulaw_audio = audioop.lin2ulaw(pcm_8k, 2)
+                except Exception as e:
+                    logger.exception("audioop.ratecv conversion failed: %s", e)
+                    os.unlink(tmp_in_name)
+                    return
+
+        # remove temp input
         try:
-            import tempfile, os
-            tmp = f"/tmp/tts_linear16_{int(time.time()*1000)}.raw"
-            with open(tmp, "wb") as f:
-                f.write(linear16)
-            logger.info("Saved debug raw LINEAR16 to %s (for local inspection)", tmp)
-        except Exception:
-            pass
-
-        # Resample if needed: convert sample rate -> 8000Hz and convert to 16-bit PCM if necessary.
-        # We assume incoming is 16-bit linear (sample width = 2).
-        try:
-            # Try to resample from 24000 -> 8000. If your TTS uses a different sample rate, adjust.
-            input_rate = 24000
-            output_rate = 8000
-            # audioop.ratecv takes (input, width, channels, inrate, outrate, state)
-            pcm_8k = audioop.ratecv(linear16, 2, 1, input_rate, output_rate, None)[0]
-        except Exception as e:
-            logger.warning("Rate conversion failed, attempting to assume 8000Hz input: %s", e)
-            pcm_8k = linear16
-
-        # Convert PCM 16-bit -> μ-law bytes
-        try:
-            mulaw_audio = audioop.lin2ulaw(pcm_8k, 2)
-        except Exception as e:
-            logger.exception("lin2ulaw conversion failed: %s", e)
-            return
-
-        # Save a local WAV derived from μ-law for quick sanity check (optional)
-        try:
-            # Convert μ-law back to linear to write WAV—this is only for local debug
-            lin_from_ulaw = audioop.ulaw2lin(mulaw_audio, 2)
-            wav_tmp = f"/tmp/tts_mulaw_to_wav_{int(time.time()*1000)}.wav"
-            import wave
-            with wave.open(wav_tmp, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(8000)
-                wf.writeframes(lin_from_ulaw)
-            logger.info("Saved debug WAV (from μ-law) to %s", wav_tmp)
+            os.unlink(tmp_in_name)
         except Exception:
             pass
 
@@ -386,16 +480,14 @@ async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
         stream_sid = getattr(ws, "_twilio_stream_sid", None)
         if not stream_sid:
             logger.warning("No Twilio streamSid known; outbound TTS may not be played by Twilio.")
-        CHUNK_BYTES = 160  # 20 ms at 8000 Hz, μ-law is 1 byte per sample => 8000*0.02 = 160 bytes
 
+        CHUNK_BYTES = 160  # 20ms at 8k => 160 bytes
         try:
-            # Send a 'clear' before playback to stop any current playback on Twilio side
             try:
                 await ws.send_json({"event": "clear", "streamSid": stream_sid} if stream_sid else {"event": "clear"})
             except Exception:
                 pass
 
-            # Send chunks with pacing
             import base64, time
             for i in range(0, len(mulaw_audio), CHUNK_BYTES):
                 chunk = mulaw_audio[i:i + CHUNK_BYTES]
@@ -403,14 +495,11 @@ async def synthesize_and_send(ws: WebSocket, text: str, language_code: str):
                     continue
                 payload = base64.b64encode(chunk).decode("ascii")
                 msg = {"event": "media", "media": {"payload": payload}}
-                # include streamSid at top-level if we have it (Twilio expects this for playback)
                 if stream_sid:
                     msg["streamSid"] = stream_sid
                 await ws.send_json(msg)
-                # pace as real-time (20ms)
                 await asyncio.sleep(0.020)
 
-            # Send a mark indicating end of TTS playback (helps Twilio finalize)
             try:
                 mark = {"event": "mark", "streamSid": stream_sid or "tts_end"}
                 await ws.send_json(mark)
