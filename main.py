@@ -31,6 +31,8 @@ from app.routes.chat import router as chat_router
 from app.routes.twilio_webhook import router as twilio_router
 from app.routes.twilio_voice import router as twilio_voice_router
 from app.routes.websocket_handler import router as websocket_router
+from app.routes.hd_audio_ws import router as hd_audio_router
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -42,6 +44,7 @@ app = FastAPI(
 # Initialize AI Services
 gemini_service = GeminiService()
 document_service = DocumentService()
+app.include_router(hd_audio_router)
 app.include_router(chat_router)
 app.include_router(twilio_router)
 app.include_router(twilio_voice_router, prefix="/twilio/voice", tags=["twilio-voice"])
