@@ -1,0 +1,240 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>HD Voice Bot (Browser)</title>
+  <style>
+    body { font-family: system-ui, Arial; margin: 20px; }
+    button { padding: 10px 16px; margin-right: 8px; }
+    #log { margin-top: 12px; white-space: pre-wrap; background:#f6f6f8;padding:10px;border-radius:6px;max-height:300px;overflow:auto;}
+  </style>
+</head>
+<body>
+  <h2>HD Voice Bot (Browser)</h2>
+  <p>Click Start → Speak → Stop. Uses 48k capture -> resampled to 16k for STT, TTS played back in HD.</p>
+  <button id="startBtn">Start</button>
+  <button id="stopBtn" disabled>Stop</button>
+  <div>
+    <label>Server WS URL: <input id="wsUrl" style="width:420px" value="wss://botcore-z6j0.onrender.com/ws/hd-audio"/></label>
+  </div>
+  <div id="status">Status: Idle</div>
+  <div id="log"></div>
+
+<script>
+/*
+Frontend responsibilities:
+ - Capture mic with getUserMedia
+ - Use MediaRecorder in short timeslices to produce blobs
+ - Convert blob -> ArrayBuffer -> decodeAudioData -> resample to 16k using OfflineAudioContext
+ - Convert Float32 -> Int16 PCM and send base64 via websocket JSON {type:'audio', payload: base64}
+ - Receive server audio messages {type:'audio', audio: base64Wav} -> decode & play via AudioContext
+*/
+
+const startBtn = document.getElementById('startBtn');
+const stopBtn  = document.getElementById('stopBtn');
+const statusEl = document.getElementById('status');
+const logEl    = document.getElementById('log');
+const wsInput  = document.getElementById('wsUrl');
+
+let mediaRecorder = null;
+let ws = null;
+let audioContext = null;
+let micStream = null;
+
+function log(msg) {
+  console.log(msg);
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function ensureAudioContext() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioContext;
+}
+
+function floatTo16BitPCM(float32Array){
+  const l = float32Array.length;
+  const buffer = new ArrayBuffer(l * 2);
+  const view = new DataView(buffer);
+  let offset = 0;
+  for (let i = 0; i < l; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, float32Array[i]));
+    s = s < 0 ? s * 0x8000 : s * 0x7fff;
+    view.setInt16(offset, s, true);
+  }
+  return new Uint8Array(buffer);
+}
+
+async function resampleTo16k(audioBuffer){
+  // use OfflineAudioContext to resample to 16000Hz mono
+  const numChannels = 1;
+  const offlineCtx = new OfflineAudioContext(numChannels, Math.ceil(audioBuffer.duration * 16000), 16000);
+  const source = offlineCtx.createBufferSource();
+  // if input has multiple channels, mix down to mono
+  if (audioBuffer.numberOfChannels === 1) {
+    source.buffer = audioBuffer;
+  } else {
+    // create mono buffer and copy averaged channels
+    const mono = offlineCtx.createBuffer(1, audioBuffer.length, audioBuffer.sampleRate);
+    const ch0 = audioBuffer.getChannelData(0);
+    let out = mono.getChannelData(0);
+    for (let i=0;i<audioBuffer.length;i++){
+      let sum = 0;
+      for (let c=0;c<audioBuffer.numberOfChannels;c++){
+        sum += audioBuffer.getChannelData(c)[i] || 0;
+      }
+      out[i] = sum / audioBuffer.numberOfChannels;
+    }
+    source.buffer = mono;
+  }
+  source.connect(offlineCtx.destination);
+  source.start(0);
+  const rendered = await offlineCtx.startRendering();
+  return rendered;
+}
+
+function arrayBufferToBase64(buffer){
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64){
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function handleRemoteAudioBase64(base64Wav) {
+  try {
+    const ab = base64ToArrayBuffer(base64Wav);
+    const ctx = await ensureAudioContext();
+    const decoded = await ctx.decodeAudioData(ab);
+    const src = ctx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch (e) {
+    log('Error playing remote audio: ' + e);
+  }
+}
+
+async function startStreaming() {
+  const wsUrl = wsInput.value;
+  ws = new WebSocket(wsUrl);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    statusEl.textContent = 'Status: Connected to server';
+    log('WS connected');
+    // send start message
+    ws.send(JSON.stringify({type:'start', meta:{client:'web-client'}}));
+  };
+
+  ws.onerror = (e) => {
+    log('WS error: ' + e);
+    statusEl.textContent = 'Status: WS error';
+  };
+
+  ws.onclose = () => {
+    log('WS closed');
+    statusEl.textContent = 'Status: Disconnected';
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'transcript') {
+        log('[TRANSCRIPT] ' + msg.text);
+      } else if (msg.type === 'ai_text') {
+        log('[AI] ' + msg.text);
+      } else if (msg.type === 'audio') {
+        // base64 wav
+        handleRemoteAudioBase64(msg.audio);
+      } else if (msg.type === 'error') {
+        log('[SERVER ERROR] ' + msg.error);
+      } else {
+        log('[WS] ' + JSON.stringify(msg).slice(0,200));
+      }
+    } catch (e) {
+      log('WS message parse error: ' + e);
+    }
+  };
+
+  // capture mic with MediaRecorder (small timeslice), decode and send PCM16@16k
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = stream;
+    const mediaRecorder = new MediaRecorder(stream);
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    mediaRecorder.ondataavailable = async (evt) => {
+      if (!evt.data || evt.data.size === 0) return;
+      try {
+        const ab = await evt.data.arrayBuffer();
+        // decode Blob to AudioBuffer (gives original sample rate)
+        const decoded = await audioCtx.decodeAudioData(ab);
+        // resample to 16k
+        const rendered = await resampleTo16k(decoded);
+        const channelData = rendered.getChannelData(0);
+        const pcm16 = floatTo16BitPCM(channelData);
+        const base64 = arrayBufferToBase64(pcm16.buffer);
+        // send small audio chunk
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({type:'audio', payload: base64}));
+        }
+      } catch (e) {
+        console.error('processing chunk error', e);
+      }
+    };
+    mediaRecorder.start(250); // timeslice 250ms -> frequent small chunks
+    // keep reference so stop can call stop()
+    window._mediaRecorder = mediaRecorder;
+    statusEl.textContent = 'Status: Recording...';
+    log('Recording started (MediaRecorder 250ms)');
+  } catch (e) {
+    log('getUserMedia error: ' + e);
+  }
+}
+
+async function stopStreaming() {
+  try {
+    if (window._mediaRecorder) {
+      window._mediaRecorder.stop();
+      window._mediaRecorder = null;
+    }
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({type:'stop'}));
+      // let server finalize
+      setTimeout(()=>{ ws.close(); ws=null;}, 500);
+    }
+    statusEl.textContent = 'Status: Stopped';
+    log('Recording stopped');
+  } catch(e) {
+    log('stop error: ' + e);
+  }
+}
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  await startStreaming();
+});
+
+stopBtn.addEventListener('click', async () => {
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  await stopStreaming();
+});
+</script>
+</body>
+</html>
