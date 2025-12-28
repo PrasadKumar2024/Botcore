@@ -7,6 +7,8 @@ import base64
 import logging
 import functools
 import asyncio
+import threading
+import queue
 import audioop
 import wave
 from typing import Optional
@@ -19,49 +21,49 @@ from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
 from google.api_core import exceptions as google_exceptions
 
-# Local services in your repo
+# local services
 from app.services.pinecone_service import pinecone_service
 from app.services.gemini_service import GeminiService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ----------------- Configuration -----------------
-# environment-tunable parameters
+# -------------- Config --------------
 EXECUTOR_WORKERS = int(os.getenv("HD_WS_EXECUTOR_WORKERS", "6"))
-MAX_CONCURRENT_TTS = int(os.getenv("HD_WS_MAX_TTS", "3"))         # concurrent TTS requests globally
-STT_TIMEOUT = float(os.getenv("HD_WS_STT_TIMEOUT", "10.0"))       # seconds
-LLM_TIMEOUT = float(os.getenv("HD_WS_LLM_TIMEOUT", "12.0"))       # seconds
-TTS_TIMEOUT = float(os.getenv("HD_WS_TTS_TIMEOUT", "12.0"))       # seconds
-STT_SAMPLE_RATE = int(os.getenv("HD_WS_STT_SR", "16000"))         # Hz — frontend must send this
-CHUNK_SECONDS = float(os.getenv("HD_WS_CHUNK_SECONDS", "1.0"))    # aggregate ~1s before STT
-MAX_BUFFER_SECONDS = int(os.getenv("HD_WS_MAX_BUFFER_S", "10"))   # max queued per-connection seconds
-WEBSOCKET_API_TOKEN = os.getenv("WEBSOCKET_API_TOKEN", None)      # simple auth token (required)
+MAX_CONCURRENT_TTS = int(os.getenv("HD_WS_MAX_TTS", "3"))
+STT_TIMEOUT = float(os.getenv("HD_WS_STT_TIMEOUT", "10.0"))
+LLM_TIMEOUT = float(os.getenv("HD_WS_LLM_TIMEOUT", "12.0"))
+TTS_TIMEOUT = float(os.getenv("HD_WS_TTS_TIMEOUT", "12.0"))
 
-# derived
-BYTES_PER_SEC = STT_SAMPLE_RATE * 2   # 16-bit PCM mono
+# Must match frontend (we recommend 16000)
+STT_SAMPLE_RATE = int(os.getenv("HD_WS_STT_SR", "16000"))
+CHUNK_SECONDS = float(os.getenv("HD_WS_CHUNK_SECONDS", "0.35"))  # smaller for responsive streaming
+MAX_BUFFER_SECONDS = int(os.getenv("HD_WS_MAX_BUFFER_S", "10"))
+WEBSOCKET_API_TOKEN = os.getenv("WEBSOCKET_API_TOKEN", None)
+
+# Use the client id env var you set
+DEFAULT_CLIENT_ID = os.getenv("DEFAULT_CLIENT_ID", os.getenv("DEFAULT_KB_CLIENT_ID", "default"))
+
+BYTES_PER_SEC = STT_SAMPLE_RATE * 2
 CHUNK_BYTES = int(BYTES_PER_SEC * CHUNK_SECONDS)
 MAX_BUFFER_BYTES = int(BYTES_PER_SEC * MAX_BUFFER_SECONDS)
 
-# executor for blocking IO (STT/TTS/LLM)
 executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
-
-# optional global semaphore to prevent runaway TTS/LLM concurrency
 global_tts_semaphore = asyncio.BoundedSemaphore(MAX_CONCURRENT_TTS)
 
-# ----------------- Initialize Google Clients -----------------
+# -------------- Google clients --------------
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if not GOOGLE_CREDS_JSON:
-    raise RuntimeError("Missing GOOGLE_CREDENTIALS_JSON environment variable")
+    raise RuntimeError("Missing GOOGLE_CREDENTIALS_JSON env")
 
 _creds = service_account.Credentials.from_service_account_info(json.loads(GOOGLE_CREDS_JSON))
 _speech_client = speech.SpeechClient(credentials=_creds)
 _tts_client = tts.TextToSpeechClient(credentials=_creds)
 
-# ----------------- LLM -----------------
+# -------------- LLM --------------
 _gemini = GeminiService()
 
-# ----------------- Voice map & SSML helpers -----------------
+# -------------- Utilities: voices / ssml / wav --------------
 VOICE_MAP = {
     "en-IN": {"name": "en-IN-Neural2-C", "gender": "MALE"},
     "en-US": {"name": "en-US-Neural2-A", "gender": "FEMALE"},
@@ -76,10 +78,7 @@ def get_best_voice(language_code: Optional[str]):
         v = VOICE_MAP[language_code]
         return (language_code, v["name"], v.get("gender"))
     base = language_code.split("-")[0] if "-" in language_code else language_code
-    fallback = {
-        "en": "en-IN",
-        "hi": "hi-IN",
-    }
+    fallback = {"en": "en-IN", "hi": "hi-IN"}
     if base in fallback:
         f = fallback[base]
         v = VOICE_MAP.get(f, DEFAULT_VOICE)
@@ -87,11 +86,10 @@ def get_best_voice(language_code: Optional[str]):
     return ("en-IN", DEFAULT_VOICE["name"], DEFAULT_VOICE.get("gender"))
 
 def ssml_for_text(text: str, prosody_rate: float = 0.98) -> str:
-    # minimal escaping
     esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    esc = esc.replace(". ", ". <break time='250ms'/> ")
-    esc = esc.replace("? ", "? <break time='250ms'/> ")
-    esc = esc.replace("! ", "! <break time='250ms'/> ")
+    esc = esc.replace(". ", ". <break time='200ms'/> ")
+    esc = esc.replace("? ", "? <break time='200ms'/> ")
+    esc = esc.replace("! ", "! <break time='200ms'/> ")
     return f"<speak><prosody rate='{prosody_rate}'>{esc}</prosody></speak>"
 
 def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
@@ -103,77 +101,30 @@ def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
 
-# ----------------- Utility: simple VAD (RMS) -----------------
 def is_silence(pcm16: bytes, threshold: int = 300) -> bool:
     try:
-        rms = audioop.rms(pcm16, 2)
-        return rms < threshold
+        return audioop.rms(pcm16, 2) < threshold
     except Exception:
         return False
 
-# ----------------- Blocking service wrappers (run in executor) -----------------
-def _sync_stt_recognize_bytes(pcm16_bytes: bytes, sample_rate: int, language_code: str):
-    """
-    Blocking wrapper for Speech-to-Text 'recognize' suitable for short chunks.
-    Expects raw PCM16LE bytes.
-    """
-    audio = speech.RecognitionAudio(content=pcm16_bytes)
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-        sample_rate_hertz=sample_rate,
-        language_code=language_code,
-        enable_automatic_punctuation=True,
-        model="default",
-    )
-    return _speech_client.recognize(config=config, audio=audio, timeout=STT_TIMEOUT)
-
-async def stt_recognize_pcm16(pcm16_bytes: bytes, sample_rate: int = STT_SAMPLE_RATE, language_code: str = "en-IN") -> Optional[str]:
-    loop = asyncio.get_running_loop()
-    try:
-        # Run STT in executor with timeout guard
-        fut = loop.run_in_executor(executor, functools.partial(_sync_stt_recognize_bytes, pcm16_bytes, sample_rate, language_code))
-        resp = await asyncio.wait_for(fut, timeout=STT_TIMEOUT)
-        if not resp.results:
-            return None
-        transcripts = []
-        for r in resp.results:
-            if r.alternatives:
-                transcripts.append(r.alternatives[0].transcript)
-        return " ".join(transcripts).strip() if transcripts else None
-    except asyncio.TimeoutError:
-        logger.warning("STT timed out")
-        return None
-    except google_exceptions.GoogleAPICallError as e:
-        logger.exception("STT API error: %s", e)
-        return None
-    except Exception as e:
-        logger.exception("STT unexpected error: %s", e)
-        return None
-
+# ----------------- Blocking wrappers -----------------
 def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: Optional[str], sample_rate_hz: int = 24000):
+    # IMPORTANT: do NOT include telephony profile for browser usage
     voice = tts.VoiceSelectionParams(language_code=language_code, name=voice_name)
-    # Some client libraries accept effects_profile_id in AudioConfig; test & include only if available
     audio_cfg_kwargs = {"audio_encoding": tts.AudioEncoding.LINEAR16, "sample_rate_hertz": sample_rate_hz}
-    # effects_profile_id mostly helps telephony; safe to include for Google TTS
-    audio_cfg_kwargs["effects_profile_id"] = ["telephony-class-application"]
     audio_config = tts.AudioConfig(**audio_cfg_kwargs)
     synthesis_input = tts.SynthesisInput(ssml=ssml)
     return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
 
 async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample_rate_hz: int = 24000) -> Optional[bytes]:
-    """
-    Generate LINEAR16 PCM bytes at sample_rate_hz using Google TTS.
-    Runs TTS in executor with timeout and concurrency limit.
-    """
     ssml = ssml_for_text(text)
     lang_code, voice_name, gender = get_best_voice(language_code)
     loop = asyncio.get_running_loop()
 
-    # Acquire global TTS semaphore to avoid burst costs
     try:
         await asyncio.wait_for(global_tts_semaphore.acquire(), timeout=3.0)
     except Exception:
-        logger.warning("TTS semaphore busy; rejecting or delaying TTS")
+        logger.warning("TTS queue busy")
         return None
 
     try:
@@ -192,26 +143,114 @@ async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample
         except Exception:
             pass
 
-# ----------------- RAG + LLM wrapper -----------------
+# ----------------- Query normalization (from PSTN) -----------------
+def normalize_and_expand_query(transcript: str) -> str:
+    if not transcript:
+        return ""
+    s = transcript.lower().strip()
+    toks = s.split()
+    dedup = [toks[0]] if toks else []
+    for i in range(1, len(toks)):
+        if toks[i] != toks[i-1]:
+            dedup.append(toks[i])
+    s = " ".join(dedup)
+    mappings = {
+        "timings": "business hours operating hours schedule",
+        "timing": "business hours operating hours schedule",
+        "whats": "what are",
+        "what's": "what are",
+        "when's": "when are",
+        "where's": "where is",
+        "phone number": "contact number telephone",
+        "open": "business hours operating hours",
+        "closed": "business hours operating hours",
+        "appointment": "appointment booking consultation",
+        "doctor": "doctor physician consultant",
+        "payments": "payment methods accepted cash upi card",
+    }
+    out = []
+    for w in s.split():
+        out.append(w)
+        if w in mappings:
+            out.extend(mappings[w].split())
+    return " ".join(out)
+
+# ----------------- Streaming STT worker (thread) -----------------
+def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
+    """
+    Thread that maintains a long-lived Google streaming_recognize session.
+    Pulls raw PCM16 bytes from audio_queue and yields them to Google.
+    Puts Google responses (StreamingRecognizeResponse) into transcripts_queue.
+    IMPORTANT: this worker does NOT put a termination sentinel into transcripts_queue.
+    Main thread will handle final sentinel on overall shutdown.
+    """
+    def gen_requests():
+        # first request = config
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=STT_SAMPLE_RATE,
+            language_code=language_code,
+            enable_automatic_punctuation=True,
+            model="default",
+            use_enhanced=True
+        )
+        streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True, single_utterance=False)
+        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+        # then audio chunks
+        while not stop_event.is_set():
+            try:
+                chunk = audio_queue.get(timeout=0.5)
+                if chunk is None:
+                    # explicit stream end requested
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.exception("Error in STT gen_requests: %s", e)
+                if stop_event.is_set():
+                    break
+
+    try:
+        logger.info("Starting Google streaming STT worker (thread) language=%s", language_code)
+        responses = _speech_client.streaming_recognize(gen_requests())
+        for response in responses:
+            if stop_event.is_set():
+                break
+            # push the whole response object to async queue to be handled in event loop
+            asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
+    except Exception as e:
+        logger.exception("STT worker error: %s", e)
+    finally:
+        logger.info("STT worker exiting (language=%s)", language_code)
+        # DO NOT put None here — main controls termination to support restarts.
+
+# ----------------- RAG + LLM (uses DEFAULT_CLIENT_ID) -----------------
 async def get_ai_text_response(transcript: str, language_code: str = "en-IN") -> str:
-    """
-    Query Pinecone for KB, if found run RDF-style assistant (temp 0), else run conversational fallback (temp 0.6)
-    Runs LLM in executor with timeout.
-    """
     loop = asyncio.get_running_loop()
     try:
         q = transcript.strip()
-        # small normalization (expand common terms)
         q = q.replace("timings", "business hours").replace("timing", "business hours")
+        norm_q = normalize_and_expand_query(q)
 
+        # try normalized query first
         results = await pinecone_service.search_similar_chunks(
-            client_id=os.getenv("DEFAULT_KB_CLIENT_ID", "default"),
-            query=q,
+            client_id=DEFAULT_CLIENT_ID,
+            query=norm_q or q,
             top_k=4,
             min_score=-1.0
         )
+        if not results:
+            # try raw transcript (fallback)
+            results = await pinecone_service.search_similar_chunks(
+                client_id=DEFAULT_CLIENT_ID,
+                query=q,
+                top_k=4,
+                min_score=-1.0
+            )
 
         if results:
+            # build context and call LLM deterministically
             context_text = "\n\n".join([r.get("chunk_text", "") for r in results[:3]])
             system_msg = ("You are a helpful assistant. Use ONLY the context to answer. Keep responses brief and conversational.")
             user_prompt = f"CONTEXT:\n{context_text}\n\nQUESTION: {transcript}"
@@ -221,9 +260,10 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN") ->
                 resp = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
                 return resp.strip() if resp else "Sorry — I couldn't formulate a response from the records."
             except asyncio.TimeoutError:
-                logger.warning("LLM RAG call timed out")
+                logger.warning("LLM RAG timed out")
                 return "Sorry, I couldn't fetch details right now."
-        # fallback conversational LLM
+
+        # fallback to conversational LLM
         conv_sys = "You are a friendly assistant. Keep responses natural and brief."
         user_prompt = f"User said: {transcript}\nRespond naturally and briefly."
         partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_sys, temperature=0.6, max_tokens=160)
@@ -234,15 +274,14 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN") ->
         except asyncio.TimeoutError:
             logger.warning("LLM conversational fallback timed out")
             return "Sorry, I'm having trouble answering right now."
+
     except Exception as e:
         logger.exception("get_ai_text_response error: %s", e)
         return "I'm sorry, I can't access that information right now."
 
-# ----------------- WebSocket Handler -----------------
+# ----------------- WebSocket handler -----------------
 @router.websocket("/ws/hd-audio")
 async def hd_audio_ws(ws: WebSocket):
-    # simple query param token auth
-    # client should connect with ws://.../ws/hd-audio?token=XYZ
     token = ws.query_params.get("token")
     if WEBSOCKET_API_TOKEN:
         if not token or token != WEBSOCKET_API_TOKEN:
@@ -253,145 +292,219 @@ async def hd_audio_ws(ws: WebSocket):
             return
 
     await ws.accept()
-    logger.info("HD-WS accepted connection")
-    audio_buffer = bytearray()
+    logger.info("HD WS accepted connection")
+
+    # queue for streaming STT (thread-safe)
+    audio_queue = queue.Queue(maxsize=400)  # backpressure if client floods
+    transcripts_queue = asyncio.Queue()
+    stop_event = threading.Event()
+
     language = "en-IN"
-    client_active = True
+    stt_thread = None
 
-    # per-connection concurrency limiter: don't spawn infinite tasks
-    conn_semaphore = asyncio.BoundedSemaphore(2)
+    # VAD / silence detection settings
+    SILENCE_TIMEOUT = float(os.getenv("HD_WS_SILENCE_TIMEOUT", "0.6"))  # seconds
+    last_voice_ts = time.time()
+    restarting_lock = threading.Lock()  # avoid concurrent restarts
 
-    async def spawn_task_safe(coro):
-        try:
-            await conn_semaphore.acquire()
-            asyncio.create_task(_run_and_release(coro, conn_semaphore))
-        except Exception as e:
-            logger.exception("spawn_task_safe error: %s", e)
+    async def process_transcripts_task():
+        """
+        Consume streaming responses from Google (placed into transcripts_queue by the STT thread).
+        For each final result -> run RAG -> TTS -> send back WAV base64.
+        """
+        nonlocal language
+        while True:
+            resp = await transcripts_queue.get()
+            if resp is None:
+                logger.info("Transcript consumer received sentinel; exiting")
+                break
+            # resp is a StreamingRecognizeResponse
+            for result in resp.results:
+                if not result.alternatives:
+                    continue
+                alt = result.alternatives[0]
+                interim_text = alt.transcript.strip()
+                is_final = getattr(result, "is_final", False)
+                if interim_text:
+                    # send interim for UI
+                    try:
+                        await ws.send_text(json.dumps({"type":"transcript", "text": interim_text, "is_final": is_final}))
+                    except Exception:
+                        pass
 
-    async def _run_and_release(coro, sem):
-        try:
-            await coro
-        finally:
-            try:
-                sem.release()
-            except Exception:
-                pass
+                if is_final and interim_text:
+                    logger.info("Final transcript (lang=%s): %s", getattr(result, "language_code", language), interim_text[:200])
+                    # update language if Google provides it
+                    language = getattr(result, "language_code", language) or language
+
+                    # RAG + LLM
+                    try:
+                        ai_text = await get_ai_text_response(interim_text, language_code=language)
+                        await ws.send_text(json.dumps({"type":"ai_text", "text": ai_text}))
+                    except Exception as e:
+                        logger.exception("RAG call failed: %s", e)
+                        ai_text = "Sorry, I'm having trouble fetching information."
+
+                    # TTS -> send WAV base64
+                    try:
+                        tts_pcm = await synthesize_text_to_pcm(ai_text, language_code=language, sample_rate_hz=24000)
+                        if tts_pcm:
+                            wav_bytes = make_wav_from_pcm16(tts_pcm, sample_rate=24000)
+                            b64wav = base64.b64encode(wav_bytes).decode("ascii")
+                            await ws.send_text(json.dumps({"type":"audio", "audio": b64wav}))
+                        else:
+                            await ws.send_text(json.dumps({"type":"error", "error":"tts_failed"}))
+                    except Exception as e:
+                        logger.exception("TTS/send failed: %s", e)
+                        try:
+                            await ws.send_text(json.dumps({"type":"error", "error":"tts_failed"}))
+                        except:
+                            pass
+
+    # start transcript consumer task placeholder
+    transcript_consumer_task = None
 
     try:
-        await ws.send_text(json.dumps({"type": "ready"}))
-        last_activity = time.time()
+        # start STT thread (uses audio_queue)
+        loop = asyncio.get_event_loop()
+        stop_event.clear()
+        stt_thread = threading.Thread(target=grpc_stt_worker, args=(loop, audio_queue, transcripts_queue, stop_event, language), daemon=True)
+        stt_thread.start()
+
+        transcript_consumer_task = asyncio.create_task(process_transcripts_task())
+
+        await ws.send_text(json.dumps({"type":"ready"}))
 
         while True:
             data_text = await ws.receive_text()
-            last_activity = time.time()
             try:
                 msg = json.loads(data_text)
             except Exception:
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                await ws.send_text(json.dumps({"type":"error","error":"invalid_json"}))
                 continue
 
             mtype = msg.get("type")
             if mtype == "start":
                 meta = msg.get("meta", {}) or {}
-                language = meta.get("language", language) or language
-                await ws.send_text(json.dumps({"type": "ack", "message": "started"}))
+                new_lang = meta.get("language")
+                # If language changed, restart STT thread with new language
+                if new_lang and new_lang != language:
+                    logger.info("Language change requested: %s -> %s", language, new_lang)
+                    language = new_lang
+                    # graceful restart: signal worker to stop and wait, then start new worker
+                    with restarting_lock:
+                        try:
+                            stop_event.set()
+                            try:
+                                audio_queue.put_nowait(None)
+                            except Exception:
+                                pass
+                            if stt_thread and stt_thread.is_alive():
+                                stt_thread.join(timeout=2.0)
+                        except Exception as e:
+                            logger.exception("Error stopping STT thread for language restart: %s", e)
+                        # start new worker
+                        stop_event = threading.Event()
+                        stt_thread = threading.Thread(target=grpc_stt_worker, args=(loop, audio_queue, transcripts_queue, stop_event, language), daemon=True)
+                        stt_thread.start()
+                        logger.info("Restarted STT worker with language=%s", language)
+                await ws.send_text(json.dumps({"type":"ack","message":"started"}))
 
             elif mtype == "audio":
-                # Expect base64 of PCM16LE @ STT_SAMPLE_RATE mono
                 b64 = msg.get("payload")
                 if not b64:
                     continue
                 try:
                     pcm = base64.b64decode(b64)
                 except Exception:
-                    await ws.send_text(json.dumps({"type": "error", "error": "bad_audio_b64"}))
+                    await ws.send_text(json.dumps({"type":"error","error":"bad_audio_b64"}))
                     continue
 
-                # validate size and append
-                if len(audio_buffer) + len(pcm) > MAX_BUFFER_BYTES:
-                    # backpressure: drop oldest or reject
-                    # here we drop oldest to keep continuity
-                    drop = len(audio_buffer) + len(pcm) - MAX_BUFFER_BYTES
-                    del audio_buffer[:drop]
-                    logger.warning("Dropping %d bytes to prevent buffer overflow", drop)
+                # VAD: check if chunk is silent
+                try:
+                    silent = is_silence(pcm, threshold=int(os.getenv("HD_WS_VAD_THRESHOLD", "300")))
+                except Exception:
+                    silent = False
 
-                audio_buffer.extend(pcm)
+                now = time.time()
+                if not silent:
+                    last_voice_ts = now
 
-                # If we accumulated at least CHUNK_BYTES, process approx 1s
-                if len(audio_buffer) >= CHUNK_BYTES:
-                    chunk = bytes(audio_buffer[:CHUNK_BYTES])
-                    del audio_buffer[:CHUNK_BYTES]
+                # push chunk to audio queue (backpressure guard)
+                if audio_queue.qsize() > 350:
+                    logger.warning("Audio queue large (%d) dropping input", audio_queue.qsize())
+                    continue
+                try:
+                    audio_queue.put_nowait(pcm)
+                except queue.Full:
+                    logger.warning("Audio queue full, drop chunk")
+                    continue
 
-                    # optional VAD: skip silent chunks to save quota
-                    if is_silence(chunk, threshold=300):
-                        logger.debug("Skipping silent chunk (VAD)")
-                        continue
-
-                    # process in background, bounded per-connection by conn_semaphore
-                    await spawn_task_safe(process_audio_chunk_and_respond(ws, chunk, language))
+                # If we've seen silence for long enough, force a stream flush (end utterance)
+                if silent and (now - last_voice_ts) >= float(os.getenv("HD_WS_SILENCE_TIMEOUT", "0.6")):
+                    # perform controlled restart to force Google to finalize the previous utterance
+                    if restarting_lock.acquire(blocking=False):
+                        try:
+                            logger.info("Silence timeout reached -> flushing STT stream (language=%s)", language)
+                            stop_event.set()
+                            try:
+                                audio_queue.put_nowait(None)
+                            except Exception:
+                                pass
+                            if stt_thread and stt_thread.is_alive():
+                                stt_thread.join(timeout=2.0)
+                            # clear stop flag and start new STT worker
+                            stop_event = threading.Event()
+                            stt_thread = threading.Thread(target=grpc_stt_worker, args=(loop, audio_queue, transcripts_queue, stop_event, language), daemon=True)
+                            stt_thread.start()
+                            last_voice_ts = time.time()
+                        except Exception as e:
+                            logger.exception("Error during STT flush/restart: %s", e)
+                        finally:
+                            restarting_lock.release()
 
             elif mtype == "stop":
-                # flush remaining buffer
-                if audio_buffer:
-                    chunk = bytes(audio_buffer)
-                    audio_buffer.clear()
-                    await process_audio_chunk_and_respond(ws, chunk, language)
-                await ws.send_text(json.dumps({"type": "bye"}))
+                logger.info("Client stop received; flushing and closing")
+                # signal stream end
+                try:
+                    stop_event.set()
+                    audio_queue.put_nowait(None)
+                except Exception:
+                    pass
+                # tell consumer to exit once transcripts drained
+                await transcripts_queue.put(None)
+                await ws.send_text(json.dumps({"type":"bye"}))
                 await ws.close()
                 return
 
             else:
-                await ws.send_text(json.dumps({"type": "error", "error": "unknown_type"}))
+                await ws.send_text(json.dumps({"type":"error","error":"unknown_type"}))
 
     except WebSocketDisconnect:
         logger.info("HD WS disconnected")
     except Exception as e:
         logger.exception("WS loop error: %s", e)
     finally:
+        # cleanup
+        try:
+            stop_event.set()
+            audio_queue.put_nowait(None)
+        except Exception:
+            pass
+        # ensure transcripts consumer exits
+        try:
+            transcripts_queue.put_nowait(None)
+        except Exception:
+            pass
+        if stt_thread:
+            stt_thread.join(timeout=2.0)
+        if transcript_consumer_task:
+            try:
+                transcript_consumer_task.cancel()
+            except Exception:
+                pass
         try:
             await ws.close()
         except Exception:
             pass
         logger.info("HD WS cleanup complete")
-
-# ----------------- processing task -----------------
-async def process_audio_chunk_and_respond(ws: WebSocket, pcm_chunk: bytes, language_code: str):
-    """
-    Steps:
-     1) STT (Google recognize) on the PCM chunk
-     2) RAG-first LLM response (via pinecone + Gemini)
-     3) TTS (Google) -> LINEAR16 PCM @ 24k
-     4) Wrap WAV and send base64 to client (type 'audio')
-    """
-    try:
-        await ws.send_text(json.dumps({"type": "processing", "ts": time.time()}))
-
-        # 1) STT
-        transcript = await stt_recognize_pcm16(pcm_chunk, sample_rate=STT_SAMPLE_RATE, language_code=language_code)
-        if not transcript:
-            # nothing recognized; report partial
-            await ws.send_text(json.dumps({"type": "transcript", "text": ""}))
-            return
-        await ws.send_text(json.dumps({"type": "transcript", "text": transcript}))
-
-        # 2) Generate AI text (RAG-first + LLM fallback)
-        ai_text = await get_ai_text_response(transcript, language_code=language_code)
-        await ws.send_text(json.dumps({"type": "ai_text", "text": ai_text}))
-
-        # 3) TTS synthesize (24k)
-        tts_pcm = await synthesize_text_to_pcm(ai_text, language_code=language_code, sample_rate_hz=24000)
-        if not tts_pcm:
-            await ws.send_text(json.dumps({"type": "error", "error": "tts_failed"}))
-            return
-
-        # 4) Create WAV and send back as base64 (client will decode and play)
-        wav_bytes = make_wav_from_pcm16(tts_pcm, sample_rate=24000)
-        b64wav = base64.b64encode(wav_bytes).decode("ascii")
-        await ws.send_text(json.dumps({"type": "audio", "audio": b64wav}))
-
-    except Exception as e:
-        logger.exception("process_audio_chunk error: %s", e)
-        try:
-            await ws.send_text(json.dumps({"type": "error", "error": "processing_failed"}))
-        except Exception:
-            pass
