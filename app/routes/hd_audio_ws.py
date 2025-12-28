@@ -178,52 +178,85 @@ def normalize_and_expand_query(transcript: str) -> str:
 # ----------------- Streaming STT worker (thread) -----------------
 def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
     """
-    Thread that maintains a long-lived Google streaming_recognize session.
-    Pulls raw PCM16 bytes from audio_queue and yields them to Google.
-    Puts Google responses (StreamingRecognizeResponse) into transcripts_queue.
-    IMPORTANT: this worker does NOT put a termination sentinel into transcripts_queue.
-    Main thread will handle final sentinel on overall shutdown.
+    Robust STT worker: supports both google client signatures:
+      - streaming_recognize(requests_iterable)
+      - streaming_recognize(streaming_config, requests_iterable)
+    Does NOT inject termination sentinel (main controls lifecycle).
     """
-    def gen_requests():
-        # first request = config
-        config = speech.RecognitionConfig(
+    def gen_requests_with_config():
+        cfg = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=STT_SAMPLE_RATE,
             language_code=language_code,
             enable_automatic_punctuation=True,
             model="default",
-            use_enhanced=True
+            use_enhanced=True,
         )
-        streaming_config = speech.StreamingRecognitionConfig(config=config, interim_results=True, single_utterance=False)
-        yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
-        # then audio chunks
+        streaming_cfg = speech.StreamingRecognitionConfig(config=cfg, interim_results=True, single_utterance=False)
+        # first message is config
+        yield speech.StreamingRecognizeRequest(streaming_config=streaming_cfg)
+        # then audio content
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
                 if chunk is None:
-                    # explicit stream end requested
                     break
                 yield speech.StreamingRecognizeRequest(audio_content=chunk)
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.exception("Error in STT gen_requests: %s", e)
+                logger.exception("Error pulling audio chunk in STT worker: %s", e)
                 if stop_event.is_set():
                     break
 
+    def gen_requests_audio_only():
+        # generator that yields only audio_content (for signature that accepts (config, requests))
+        while not stop_event.is_set():
+            try:
+                chunk = audio_queue.get(timeout=0.5)
+                if chunk is None:
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.exception("Error pulling audio chunk in STT worker (audio_only): %s", e)
+                if stop_event.is_set():
+                    break
+
+    def call_streaming_recognize_with_fallback():
+        # Try the single-arg signature first; if it raises TypeError, call the two-arg signature.
+        try:
+            return _speech_client.streaming_recognize(gen_requests_with_config())
+        except TypeError as e:
+            # Look for the specific complaint and fallback
+            msg = str(e).lower()
+            if "missing" in msg and "requests" in msg:
+                logger.info("Detected SpeechHelpers signature requiring (config, requests). Using fallback call.")
+                # Create streaming_config again (generator already yields config so use audio-only generator)
+                cfg = speech.RecognitionConfig(
+                    encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=STT_SAMPLE_RATE,
+                    language_code=language_code,
+                    enable_automatic_punctuation=True,
+                    model="default",
+                    use_enhanced=True,
+                )
+                streaming_cfg = speech.StreamingRecognitionConfig(config=cfg, interim_results=True, single_utterance=False)
+                return _speech_client.streaming_recognize(streaming_cfg, gen_requests_audio_only())
+            raise
+
     try:
-        logger.info("Starting Google streaming STT worker (thread) language=%s", language_code)
-        responses = _speech_client.streaming_recognize(gen_requests())
+        logger.info("Starting STT worker (thread) language=%s", language_code)
+        responses = call_streaming_recognize_with_fallback()
         for response in responses:
             if stop_event.is_set():
                 break
-            # push the whole response object to async queue to be handled in event loop
             asyncio.run_coroutine_threadsafe(transcripts_queue.put(response), loop)
     except Exception as e:
         logger.exception("STT worker error: %s", e)
     finally:
         logger.info("STT worker exiting (language=%s)", language_code)
-        # DO NOT put None here — main controls termination to support restarts.
 
 # ----------------- RAG + LLM (uses DEFAULT_CLIENT_ID) -----------------
 async def get_ai_text_response(transcript: str, language_code: str = "en-IN") -> str:
