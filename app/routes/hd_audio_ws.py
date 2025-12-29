@@ -1,3 +1,4 @@
+
 # app/routes/hd_audio_ws.py
 import os
 import io
@@ -11,7 +12,7 @@ import threading
 import queue
 import audioop
 import wave
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 
@@ -126,8 +127,10 @@ def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: O
     synthesis_input = tts.SynthesisInput(ssml=ssml)
     return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
 
-async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample_rate_hz: int = 24000) -> Optional[bytes]:
-    ssml = ssml_for_text(text)
+async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample_rate_hz: int = 24000, prosody_rate: Optional[float] = None) -> Optional[bytes]:
+    # prosody_rate allows sentiment-driven prosody adjustments
+    rate = prosody_rate if prosody_rate is not None else 0.95
+    ssml = ssml_for_text(text, prosody_rate=rate)
     lang_code, voice_name, gender = get_best_voice(language_code)
     loop = asyncio.get_running_loop()
 
@@ -188,10 +191,7 @@ def normalize_and_expand_query(transcript: str) -> str:
 # ----------------- Streaming STT worker (thread) -----------------
 def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
     """
-    Robust STT worker: supports both google client signatures:
-      - streaming_recognize(requests_iterable)
-      - streaming_recognize(streaming_config, requests_iterable)
-    Does NOT inject termination sentinel (main controls lifecycle).
+    Robust STT worker: supports both google client signatures and yields responses into transcripts_queue.
     """
     def gen_requests_with_config():
         cfg = speech.RecognitionConfig(
@@ -220,7 +220,6 @@ def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Q
                     break
 
     def gen_requests_audio_only():
-        # generator that yields only audio_content (for signature that accepts (config, requests))
         while not stop_event.is_set():
             try:
                 chunk = audio_queue.get(timeout=0.5)
@@ -235,11 +234,10 @@ def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Q
                     break
 
     def call_streaming_recognize_with_fallback():
-        # Try the single-arg signature first; if it raises TypeError, call the two-arg signature.
+        # Try single-arg signature; if it complains about missing requests argument, call two-arg.
         try:
             return _speech_client.streaming_recognize(gen_requests_with_config())
         except TypeError as e:
-            # Look for the specific complaint and fallback
             msg = str(e).lower()
             if "missing" in msg and "requests" in msg:
                 logger.info("Detected SpeechHelpers signature requiring (config, requests). Using fallback call.")
@@ -267,11 +265,56 @@ def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Q
     finally:
         logger.info("STT worker exiting (language=%s)", language_code)
 
-# ----------------- RAG + LLM (uses DEFAULT_CLIENT_ID) -----------------
-async def get_ai_text_response(transcript: str, language_code: str = "en-IN", conversation_history: Optional[List[Tuple[str,str]]] = None) -> str:
+# ----------------- NLU + Sentiment (via LLM) -----------------
+async def analyze_nlu_and_sentiment(text: str, language_code: str = "en-IN") -> Dict[str, Any]:
     """
-    Build a prompt that includes short conversation history and RAG context (if present).
-    conversation_history: list of tuples ('user'|'assistant', text)
+    Use the LLM as a lightweight NLU + sentiment extractor.
+    Expected return dict keys:
+      - intent (str)
+      - confidence (float 0..1)
+      - entities (dict)
+      - required_slots (list of str)  # slots needed to fulfill intent
+      - sentiment (float -1..1)
+    """
+    loop = asyncio.get_running_loop()
+    system_msg = ("You are a concise NLU+Sentiment extractor. "
+                  "Given a short user utterance, return a JSON object with keys: "
+                  "intent (string), confidence (0.0-1.0), entities (object mapping names->values), "
+                  "required_slots (list of strings the intent needs), and sentiment (-1.0..1.0). "
+                  "Do NOT include extra text — output valid JSON only.")
+    user_prompt = f"Utterance: {text}\nLanguage: {language_code}\nReturn JSON like: {{\"intent\":\"...\",\"confidence\":0.98,\"entities\":{{}},\"required_slots\":[],\"sentiment\":0.1}}"
+    partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.0, max_tokens=180)
+    fut = loop.run_in_executor(executor, partial)
+    try:
+        resp = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
+        resp_text = (resp or "").strip()
+        # try to parse JSON out of it
+        try:
+            parsed = json.loads(resp_text)
+            # normalize fields
+            intent = parsed.get("intent", "unknown")
+            confidence = float(parsed.get("confidence", 0.0) or 0.0)
+            entities = parsed.get("entities", {}) or {}
+            required_slots = parsed.get("required_slots", []) or []
+            sentiment = float(parsed.get("sentiment", 0.0) or 0.0)
+            return {"intent": intent, "confidence": confidence, "entities": entities, "required_slots": required_slots, "sentiment": sentiment}
+        except Exception:
+            # fallback: try to extract heuristically (conservative defaults)
+            logger.warning("NLU JSON parse failed, returning defaults. Raw: %s", resp_text[:400])
+            return {"intent": "unknown", "confidence": 0.0, "entities": {}, "required_slots": [], "sentiment": 0.0}
+    except asyncio.TimeoutError:
+        logger.warning("NLU timed out")
+        return {"intent": "unknown", "confidence": 0.0, "entities": {}, "required_slots": [], "sentiment": 0.0}
+    except Exception as e:
+        logger.exception("NLU error: %s", e)
+        return {"intent": "unknown", "confidence": 0.0, "entities": {}, "required_slots": [], "sentiment": 0.0}
+
+# ----------------- RAG + LLM (uses DEFAULT_CLIENT_ID) -----------------
+async def get_ai_text_response(transcript: str, language_code: str = "en-IN", conversation_history: Optional[List[Dict[str,Any]]] = None, detected_intent: Optional[Dict[str,Any]] = None) -> str:
+    """
+    Build a prompt that includes short conversation history, intent/entities, sentiment and RAG context (if present).
+    conversation_history: list of dicts with keys role,text,intent,entities,sentiment,ts
+    detected_intent: optional NLU dict for current utterance
     """
     loop = asyncio.get_running_loop()
     try:
@@ -294,23 +337,31 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN", co
                 min_score=-1.0
             )
 
-        # create conversation prefix text
+        # create conversation prefix text (human-readable)
         convo_pref = ""
         if conversation_history:
             lines = []
-            for role, txt in conversation_history[-6:]:
-                if role == "user":
-                    lines.append(f"User: {txt}")
+            for entry in conversation_history[-8:]:
+                role = entry.get("role", "user")
+                txt = entry.get("text", "")
+                senti = entry.get("sentiment", None)
+                if senti is not None:
+                    lines.append(f"{role.capitalize()}: {txt} (sentiment={senti:+.2f})")
                 else:
-                    lines.append(f"Assistant: {txt}")
+                    lines.append(f"{role.capitalize()}: {txt}")
             convo_pref = "\n".join(lines) + "\n\n"
+
+        # append detected_intent snippet
+        intent_block = ""
+        if detected_intent:
+            intent_block = f"Detected intent: {detected_intent.get('intent')} (conf={detected_intent.get('confidence')})\nEntities: {json.dumps(detected_intent.get('entities', {}))}\nSentiment: {detected_intent.get('sentiment')}\n\n"
 
         if results:
             context_text = "\n\n".join([r.get("chunk_text", "") for r in results[:3]])
             system_msg = ("You are a helpful, friendly voice assistant. Use ONLY the provided context to answer the question. "
                           "Answer in a warm, conversational tone appropriate for a phone assistant. Keep responses brief but natural.")
-            user_prompt = f"{convo_pref}CONTEXT:\n{context_text}\n\nQUESTION: {transcript}"
-            partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.0, max_tokens=200)
+            user_prompt = f"{convo_pref}{intent_block}CONTEXT:\n{context_text}\n\nQUESTION: {transcript}"
+            partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.0, max_tokens=260)
             fut = loop.run_in_executor(executor, partial)
             try:
                 resp = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
@@ -320,9 +371,9 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN", co
                 return "Sorry, I couldn't fetch details right now."
 
         # no RAG hits: conversational fallback (use short convo history and warmer temperature)
-        conv_sys = "You are a friendly voice assistant. Use the conversation history to respond naturally and helpfully."
-        user_prompt = f"{convo_pref}User said: {transcript}\nRespond naturally and briefly."
-        partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_sys, temperature=0.7, max_tokens=220)
+        conv_sys = "You are a friendly voice assistant. Use the conversation history to respond naturally and helpfully. Adapt tone to sentiment indicated."
+        user_prompt = f"{convo_pref}{intent_block}User said: {transcript}\nRespond naturally and briefly."
+        partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_sys, temperature=0.72, max_tokens=280)
         fut = loop.run_in_executor(executor, partial)
         try:
             conv = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
@@ -358,14 +409,17 @@ async def hd_audio_ws(ws: WebSocket):
     language = "en-IN"
     stt_thread = None
 
-    # conversation state
-    conversation = deque(maxlen=6)  # tuples: (role, text)
+    # conversation state: store rich dict entries
+    conversation = deque(maxlen=12)  # each item: {role,text,intent,entities,sentiment,ts}
     utterance_buffer: List[str] = []
     pending_debounce_task: Optional[asyncio.Task] = None
 
+    # slot/dialog tracking
+    active_task: Optional[Dict[str, Any]] = None  # e.g. {"intent":"book_apt", "slots": {"date": None, "time": None}}
+
     # VAD / silence detection state
     last_voice_ts = time.time()
-    restarting_lock = threading.Lock()  # used only around language restarts
+    restarting_lock = threading.Lock()  # used around language restarts
     last_restart_ts = 0.0
 
     # TTS playback state (simple)
@@ -382,11 +436,29 @@ async def hd_audio_ws(ws: WebSocket):
         "good evening": "Good evening! How can I assist?",
     }
 
-    async def send_tts_and_audio(ai_text: str, language_code: str):
+    def map_sentiment_to_prosody(sentiment: float) -> float:
+        # sentiment ranges -1..1. Map to prosody rates (smaller -> slower)
+        if sentiment <= -0.4:
+            return 0.90
+        if sentiment <= -0.1:
+            return 0.93
+        if sentiment >= 0.5:
+            return 1.03
+        return 0.95
+
+    async def send_tts_and_audio(ai_text: str, language_code: str, sentiment: Optional[float] = None):
         nonlocal is_bot_speaking
         try:
             is_bot_speaking = True
-            tts_pcm = await synthesize_text_to_pcm(ai_text, language_code=language_code, sample_rate_hz=24000)
+            # adapt TTS by sentiment
+            prosody = map_sentiment_to_prosody(sentiment if sentiment is not None else 0.0)
+            # add small empathetic preface for negative sentiment
+            text_to_speak = ai_text
+            if sentiment is not None and sentiment <= -0.35:
+                text_to_speak = "I'm sorry to hear that. " + text_to_speak
+            if sentiment is not None and sentiment >= 0.6:
+                text_to_speak = "Great! " + text_to_speak
+            tts_pcm = await synthesize_text_to_pcm(text_to_speak, language_code=language_code, sample_rate_hz=24000, prosody_rate=prosody)
             if tts_pcm:
                 wav_bytes = make_wav_from_pcm16(tts_pcm, sample_rate=24000)
                 b64wav = base64.b64encode(wav_bytes).decode("ascii")
@@ -406,38 +478,80 @@ async def hd_audio_ws(ws: WebSocket):
     async def handle_final_utterance(text: str):
         """
         Called when debounce decides the user finished an utterance.
-        Adds to conversation history, calls RAG/LLM, sends ai_text and TTS.
+        Run NLU+sentiment, update conversation, check slots, call RAG/LLM, send TTS.
         """
-        nonlocal conversation
+        nonlocal conversation, active_task
+
         user_text = text.strip()
         if not user_text:
             return
 
-        # add to conversation
-        conversation.append(("user", user_text))
+        # Run NLU + sentiment
+        nlu = await analyze_nlu_and_sentiment(user_text, language_code=language)
+        logger.info("NLU result: %s", nlu)
+
+        # build conversation entry
+        entry = {
+            "role": "user",
+            "text": user_text,
+            "intent": nlu.get("intent"),
+            "confidence": nlu.get("confidence", 0.0),
+            "entities": nlu.get("entities", {}) or {},
+            "required_slots": nlu.get("required_slots", []) or [],
+            "sentiment": nlu.get("sentiment", 0.0),
+            "ts": time.time()
+        }
+        conversation.append(entry)
 
         # tiny transcript shortcuts
         t_low = user_text.lower().strip()
         if len(t_low.split()) < 3 and t_low in CANNED:
             ai_text = CANNED[t_low]
-            conversation.append(("assistant", ai_text))
+            conversation.append({"role": "assistant", "text": ai_text, "ts": time.time(), "sentiment": 0.0})
             try:
                 await ws.send_text(json.dumps({"type":"ai_text", "text": ai_text}))
             except:
                 pass
-            await send_tts_and_audio(ai_text, language_code=language)
+            await send_tts_and_audio(ai_text, language_code=language, sentiment=0.0)
             return
 
-        # call RAG/LLM with conversation context
+        # slot / dialog tracking: check required slots
+        required_slots = entry.get("required_slots", []) or []
+        entities = entry.get("entities", {}) or {}
+        missing_slots = [s for s in required_slots if not entities.get(s)]
+        if missing_slots and entry.get("confidence", 0.0) >= 0.2:
+            # ask for first missing slot
+            slot = missing_slots[0]
+            # Create a clarifying question. Could use LLM to craft better question based on slot type.
+            q_map = {
+                "date": "Which date would you like?",
+                "time": "What time works for you?",
+                "location": "Which location do you mean?",
+                "name": "Can I get your name please?",
+                "phone": "Could you give a phone number I can reach?"
+            }
+            clar_q = q_map.get(slot, f"Could you provide {slot}?")
+            # Set active_task to remember required slots
+            active_task = {"intent": entry.get("intent"), "required_slots": required_slots, "collected": dict(entities)}
+            # record assistant question in conversation
+            conversation.append({"role":"assistant", "text": clar_q, "ts": time.time(), "sentiment": 0.0})
+            try:
+                await ws.send_text(json.dumps({"type":"ai_text", "text": clar_q}))
+            except:
+                pass
+            await send_tts_and_audio(clar_q, language_code=language, sentiment=entry.get("sentiment", 0.0))
+            return
+
+        # all required slots present OR no required slots -> go to RAG/LLM
         try:
-            ai_text = await get_ai_text_response(user_text, language_code=language, conversation_history=list(conversation))
-            conversation.append(("assistant", ai_text))
+            ai_text = await get_ai_text_response(user_text, language_code=language, conversation_history=list(conversation), detected_intent=nlu)
+            conversation.append({"role":"assistant", "text": ai_text, "ts": time.time(), "sentiment": 0.0})
             try:
                 await ws.send_text(json.dumps({"type":"ai_text", "text": ai_text}))
             except:
                 pass
             # TTS playback (barge-in handling: client should stop playback if user speaks)
-            await send_tts_and_audio(ai_text, language_code=language)
+            await send_tts_and_audio(ai_text, language_code=language, sentiment=nlu.get("sentiment", 0.0))
         except Exception as e:
             logger.exception("Error in handle_final_utterance: %s", e)
             try:
@@ -466,7 +580,7 @@ async def hd_audio_ws(ws: WebSocket):
     async def process_transcripts_task():
         """
         Consume streaming responses from Google (placed into transcripts_queue by the STT thread).
-        For each final result -> append to buffer and schedule debounce which will call RAG once.
+        For each final result -> append to buffer and schedule debounce which will call NLU + RAG once.
         """
         nonlocal language, utterance_buffer, pending_debounce_task, is_bot_speaking
         while True:
