@@ -158,25 +158,38 @@ async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample
         except Exception:
             pass
 
-# ----------------- Query normalization -----------------
+# ----------------- Query normalization (fixed) -----------------
+_CONTRACTIONS = {
+    r"\bwhat's\b": "what are",
+    r"\bwhats\b": "what are",
+    r"\bwhere's\b": "where is",
+    r"\bwhen's\b": "when are",
+    r"\bdon't\b": "do not",
+    r"\bcan't\b": "cannot",
+}
+
 def normalize_and_expand_query(transcript: str) -> str:
     if not transcript:
         return ""
     s = transcript.lower().strip()
+    # expand contractions first (regex)
+    for patt, repl in _CONTRACTIONS.items():
+        s = re.sub(patt, repl, s)
     toks = s.split()
-    dedup = [toks[0]] if toks else []
-    for i in range(1, len(toks)):
-        if toks[i] != toks[i-1]:
-            dedup.append(toks[i])
-    s = " ".join(dedup)
+    # dedupe consecutive tokens only
+    dedup = []
+    prev = None
+    for t in toks:
+        if t != prev:
+            dedup.append(t)
+        prev = t
+    # mapping with 2-word check
     mappings = {
         "timings": "business hours operating hours schedule",
         "timing": "business hours operating hours schedule",
+        "phone number": "contact number telephone",
         "whats": "what are",
         "what's": "what are",
-        "when's": "when are",
-        "where's": "where is",
-        "phone number": "contact number telephone",
         "open": "business hours operating hours",
         "closed": "business hours operating hours",
         "appointment": "appointment booking consultation",
@@ -184,10 +197,18 @@ def normalize_and_expand_query(transcript: str) -> str:
         "payments": "payment methods accepted cash upi card",
     }
     out = []
-    for w in s.split():
+    i = 0
+    while i < len(dedup):
+        two = " ".join(dedup[i:i+2]) if i+1 < len(dedup) else None
+        if two and two in mappings:
+            out.extend(mappings[two].split())
+            i += 2
+            continue
+        w = dedup[i]
         out.append(w)
         if w in mappings:
             out.extend(mappings[w].split())
+        i += 1
     return " ".join(out)
 
 # ----------------- STT worker (unchanged robustness) -----------------
@@ -266,6 +287,7 @@ METRICS = {
     "requests": 0,
     "intent_counts": defaultdict(int),
     "sentiments": [],
+    "confidences": [],
     "avg_response_ms": [],
 }
 
@@ -277,10 +299,13 @@ def record_metric_intent(intent: str):
 def record_metric_sentiment(s: float):
     METRICS["sentiments"].append(s)
 
+def record_metric_confidence(c: float):
+    METRICS["confidences"].append(c)
+
 def record_latency(ms: float):
     METRICS["avg_response_ms"].append(ms)
 
-# ----------------- Regex fast-path (ultra-fast) -----------------
+# ----------------- Regex fast-path (persona aware) -----------------
 FAST_PATTERNS = [
     (re.compile(r"\b(hours|open|close|opening|closing|timings)\b", re.I), "business_hours"),
     (re.compile(r"\b(phone|contact|call|number)\b", re.I), "contact_number"),
@@ -289,10 +314,10 @@ FAST_PATTERNS = [
 ]
 
 FAST_RESPONSES = {
-    "business_hours": "Our business hours are Monday to Friday, 9 AM to 6 PM.",
-    "contact_number": "You can reach us at +1-800-555-0123.",
-    "appointment": "To book an appointment, I can transfer you to booking or take a preferred date. Which do you prefer?",
-    "greeting": "Hello! How can I help you today?",
+    "business_hours": "Hi — thanks for calling BrightCare. We’re open Monday to Friday, 10 AM to 6 PM. Would you like to book an appointment or get directions?",
+    "contact_number": "You can reach BrightCare at +1-800-555-0123. Would you like me to connect you or send this number by SMS?",
+    "appointment": "I can help with that. Would you like to book an in-person appointment or a remote consultation?",
+    "greeting": "Hello — welcome to BrightCare. How can I help you today?",
 }
 
 def fast_intent_match(text: str) -> Optional[Tuple[str, str]]:
@@ -315,26 +340,44 @@ def quick_sentiment_score(text: str) -> float:
     score = (pos - neg) / max(1, pos + neg)
     return max(-1.0, min(1.0, score))
 
-# ----------------- RAG + LLM (existing deterministic function) -----------------
+# ----------------- Helper: robust JSON parsing from model text -----------------
+def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
+    if not s:
+        return None
+    # find first "{" and last "}"
+    start = s.find("{")
+    end = s.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    json_blob = s[start:end+1]
+    try:
+        return json.loads(json_blob)
+    except Exception:
+        # attempt a safe tweak: replace single quotes -> double, remove weird prefixes
+        try:
+            safe = json_blob.replace("\n", " ").replace("'", '"')
+            return json.loads(safe)
+        except Exception:
+            return None
+
+# ----------------- RAG + LLM (deterministic with persona) -----------------
 async def get_ai_text_response(transcript: str, language_code: str = "en-IN", conversation_history: Optional[List[Tuple[str,str]]] = None) -> str:
+    """
+    Lightweight fallback used when RAG branch can't produce structured JSON.
+    Keep persona in system prompt so this still returns natural spoken text.
+    """
     loop = asyncio.get_running_loop()
     try:
         q = transcript.strip()
         q = q.replace("timings", "business hours").replace("timing", "business hours")
         norm_q = normalize_and_expand_query(q)
+        # conservative RAG search for fallback
         results = await pinecone_service.search_similar_chunks(
             client_id=DEFAULT_CLIENT_ID,
             query=norm_q or q,
-            top_k=4,
+            top_k=6,
             min_score=-1.0
         )
-        if not results:
-            results = await pinecone_service.search_similar_chunks(
-                client_id=DEFAULT_CLIENT_ID,
-                query=q,
-                top_k=4,
-                min_score=-1.0
-            )
         convo_pref = ""
         if conversation_history:
             lines = []
@@ -345,11 +388,13 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN", co
                     lines.append(f"Assistant: {txt}")
             convo_pref = "\n".join(lines) + "\n\n"
         if results:
-            context_text = "\n\n".join([r.get("chunk_text", "") for r in results[:3]])
-            system_msg = ("You are a helpful, friendly voice assistant. Use ONLY the provided context to answer the question. "
-                          "Answer in a warm, conversational tone appropriate for a phone assistant. Keep responses brief but natural.")
+            context_text = "\n\n".join([r.get("chunk_text", "") for r in results[:4]])
+            system_msg = (
+                "You are BrightCare, a warm, helpful phone assistant. Use the CONTEXT and answer naturally in 2-3 sentences. "
+                "Prefer 'we' phrasing and always offer a next step (book, directions, escalate)."
+            )
             user_prompt = f"{convo_pref}CONTEXT:\n{context_text}\n\nQUESTION: {transcript}"
-            partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.0, max_tokens=200)
+            partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.15, max_tokens=220)
             fut = loop.run_in_executor(executor, partial)
             try:
                 resp = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
@@ -357,7 +402,8 @@ async def get_ai_text_response(transcript: str, language_code: str = "en-IN", co
             except asyncio.TimeoutError:
                 logger.warning("LLM RAG timed out")
                 return "Sorry, I couldn't fetch details right now."
-        conv_sys = "You are a friendly voice assistant. Use the conversation history to respond naturally and helpfully."
+        # no RAG hits: conversational fallback 
+        conv_sys = "You are BrightCare voice assistant. Respond warmly and offer next steps."
         user_prompt = f"{convo_pref}User said: {transcript}\nRespond naturally and briefly."
         partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_sys, temperature=0.7, max_tokens=220)
         fut = loop.run_in_executor(executor, partial)
@@ -461,45 +507,36 @@ async def hd_audio_ws(ws: WebSocket):
         except asyncio.CancelledError:
             return
 
-    # ------------------ Streaming helper ------------------
+    # Streaming helper (calls GeminiService.generate_stream in a thread)
     def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue_async: asyncio.Queue, stop_evt: threading.Event):
-        """
-        Runs in a thread. Calls _gemini.generate_stream(...) (sync generator),
-        and for each chunk, schedules an asyncio put into token_queue_async.
-        """
         try:
             gen = _gemini.generate_stream(prompt=prompt, system_message=system_msg, temperature=0.6)
             for chunk in gen:
                 if stop_evt.is_set():
                     break
-                # schedule an asyncio put
                 try:
                     asyncio.run_coroutine_threadsafe(token_queue_async.put(chunk), loop_ref)
                 except Exception:
-                    # best-effort: if scheduling fails, stop
                     break
         except Exception as e:
             logger.exception("stream_writer error: %s", e)
         finally:
-            # signal end
             try:
                 asyncio.run_coroutine_threadsafe(token_queue_async.put(None), loop_ref)
             except Exception:
                 pass
 
     async def run_streaming_llm_and_tts(convo_pref: str, user_text: str, language_code: str):
-        """
-        Uses GeminiService streaming (generate_stream) to get tokens as they arrive.
-        Starts TTS as soon as the first sentence completes. Returns the final_text.
-        """
         loop = asyncio.get_running_loop()
         token_q: asyncio.Queue = asyncio.Queue()
         stop_evt = threading.Event()
 
-        system_msg = "You are a helpful, natural voice assistant. Produce a natural, phone-length reply. Stream textual output progressively."
+        system_msg = (
+            "You are BrightCare, a warm phone assistant. Stream your textual output progressively. "
+            "Keep replies natural, phone-friendly (2-3 short sentences), and offer next steps."
+        )
         user_prompt = f"{convo_pref}\n\nUser said: {user_text}\nReply in a natural, helpful tone."
 
-        # start writer thread
         writer_thread = threading.Thread(target=_stream_writer_thread, args=(loop, user_prompt, system_msg, token_q, stop_evt), daemon=True)
         writer_thread.start()
 
@@ -513,38 +550,30 @@ async def hd_audio_ws(ws: WebSocket):
                 token = await token_q.get()
                 if token is None:
                     break
-                # token might be a piece of text
                 chunk = token if isinstance(token, str) else str(token)
                 full_text += chunk
                 sentence_buffer += chunk
 
-                # detect completed sentences in sentence_buffer
+                # detect completed sentences
                 sentences = re.split(r'(?<=[.!?])\s+', sentence_buffer)
-                # if last piece may be incomplete; keep last incomplete in buffer
                 if len(sentences) > 1:
                     complete_sentences = sentences[:-1]
                     sentence_buffer = sentences[-1]
                 else:
                     complete_sentences = []
 
-                # for each complete sentence, start TTS (first sentence we await, others run in background)
-                for i, s in enumerate(complete_sentences):
+                for s in complete_sentences:
                     s = s.strip()
                     if not s:
                         continue
                     if not first_sentence_sent:
-                        # start and await: reduces perceived latency for first chunk
                         first_sentence_sent = True
                         await send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score(s))
                     else:
-                        # schedule background TTS for additional sentences
                         asyncio.create_task(send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score(s)))
-            # after streaming end, send remaining buffer if any
             remaining = sentence_buffer.strip()
             if remaining:
-                # send remaining as one chunk
                 await send_tts_and_audio(remaining, language_code=language_code, sentiment=quick_sentiment_score(remaining))
-            # quick sentiment for whole text (cheap)
             sentiment_est = quick_sentiment_score(full_text)
             return full_text, sentiment_est
         finally:
@@ -554,7 +583,7 @@ async def hd_audio_ws(ws: WebSocket):
             except Exception:
                 pass
 
-    # ---------------- Combined handler with fast-path, RAG, streaming fallback ----------------
+    # ---------------- Combined handler with persona, RAG JSON, streaming fallback ----------------
     async def handle_final_utterance(text: str):
         nonlocal conversation, is_bot_speaking, current_stream_stop_event, current_stream_thread
         METRICS["requests"] += 1
@@ -565,10 +594,9 @@ async def hd_audio_ws(ws: WebSocket):
             return
 
         ts = time.time()
-        # append raw user entry
         conversation.append(("user", user_text, None, None, 0.0, ts))
 
-        # 1) fast-path regex
+        # 1) fast-path regex (persona aware)
         fast = fast_intent_match(user_text)
         if fast:
             intent_label, reply = fast
@@ -582,33 +610,49 @@ async def hd_audio_ws(ws: WebSocket):
             record_latency(time.time() * 1000 - start_ms)
             return
 
-        # 2) RAG search to decide path
+        # 2) RAG search
         norm_q = normalize_and_expand_query(user_text)
         try:
             rag_results = await pinecone_service.search_similar_chunks(
                 client_id=DEFAULT_CLIENT_ID,
                 query=norm_q or user_text,
-                top_k=4,
+                top_k=6,
                 min_score=-1.0
             )
         except Exception as e:
             logger.exception("Pinecone search failed: %s", e)
             rag_results = None
 
-        # If we have RAG hits, prefer deterministic JSON NLU+answer (factful)
+        # compute rag confidence (average of scores available)
+        def rag_confidence(results):
+            try:
+                scores = [r.get("score", 0.0) for r in results if r.get("score") is not None]
+                if not scores:
+                    return 0.0
+                # normalize to 0..1 by min/max heuristic (Pinecone scores often small; use clamp)
+                avg = sum(scores) / len(scores)
+                # simple mapping: clamp within [0,0.5] -> scale 0..1
+                conf = max(0.0, min(1.0, (avg + 0.5)))  # heuristic
+                return conf
+            except Exception:
+                return 0.0
+
         if rag_results:
-            # Build system prompt to return JSON NLU + answer (deterministic)
             convo_lines = []
             for entry in list(conversation)[-6:]:
                 role = entry[0]; txt = entry[1]
                 prefix = "User:" if role == "user" else "Assistant:"
                 convo_lines.append(f"{prefix} {txt}")
             convo_pref = "\n".join(convo_lines)
-            context_text = "\n\n".join([r.get("chunk_text","") for r in (rag_results[:3])])
+            context_text = "\n\n".join([f"{r.get('source','')}: {r.get('chunk_text','')}" for r in rag_results[:4]])
+            confidence_est = rag_confidence(rag_results)
+            # system prompt: ask for structured JSON with persona spoken rewrite
             system_msg = (
-                "You are a high-quality NLU+assistant. Use the CONTEXT to answer. "
-                "Return ONLY JSON: {\"intent\":\"\",\"entities\":{...},\"sentiment\":<num> ,\"answer\":\"...\"}. "
-                "If slots are missing, set intent and make 'answer' a single slot question."
+                "You are BrightCare, a warm, helpful phone assistant serving BrightCare Mini Health Service. "
+                "Use only the CONTEXT to answer factual questions. Produce EXACT JSON only with keys: "
+                "{\"intent\":\"\",\"entities\":{...},\"confidence\":<0.0-1.0> ,\"sentiment\":<num -1..1>, "
+                "\"fact\":\"<short factual sentence>\", \"spoken\":\"<friendly spoken reply (2-3 short sentences)>\"}. "
+                "spoken must use 'we' for BrightCare and offer a next step (book, directions, escalate) when appropriate."
             )
             user_prompt = f"{convo_pref}\n\nCONTEXT:\n{context_text}\n\nUser utterance: {user_text}\nReturn JSON."
 
@@ -616,10 +660,11 @@ async def hd_audio_ws(ws: WebSocket):
                 _gemini.generate_response,
                 prompt=user_prompt,
                 system_message=system_msg,
-                temperature=0.0,
+                temperature=0.15,
                 max_tokens=300
             )
             loop = asyncio.get_running_loop()
+            resp_text = ""
             try:
                 fut = loop.run_in_executor(executor, partial)
                 resp_text = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
@@ -627,43 +672,55 @@ async def hd_audio_ws(ws: WebSocket):
             except asyncio.TimeoutError:
                 logger.warning("RAG NLU+LLM timed out")
                 resp_text = ""
+            except Exception as e:
+                logger.exception("RAG LLM call failed: %s", e)
+                resp_text = ""
 
-            parsed = None
-            try:
-                start = resp_text.find("{")
-                end = resp_text.rfind("}") + 1
-                if start != -1 and end != -1 and end > start:
-                    parsed = json.loads(resp_text[start:end])
-            except Exception:
-                parsed = None
-
+            parsed = extract_json_from_text(resp_text)
             if parsed:
                 intent = parsed.get("intent","") or ""
                 entities = parsed.get("entities",{}) or {}
                 sentiment = float(parsed.get("sentiment",0.0) or 0.0)
-                ai_text = (parsed.get("answer","") or "").strip()
+                fact = (parsed.get("fact","") or "").strip()
+                spoken = (parsed.get("spoken","") or "").strip()
+                confidence = float(parsed.get("confidence", confidence_est) or confidence_est)
             else:
-                # fallback to simple RAG-based textual answer via get_ai_text_response
-                ai_text = await get_ai_text_response(user_text, language_code=language, conversation_history=[(r[0],r[1]) for r in list(conversation)])
+                # fallback to textual RAG answer with persona rewrite
+                fact = ""
+                try:
+                    raw = await get_ai_text_response(user_text, language_code=language, conversation_history=[(r[0],r[1]) for r in list(conversation)])
+                except Exception:
+                    raw = "Sorry, I couldn't fetch that information right now."
+                # create a friendly spoken wrapper
+                spoken = f"Hi — thanks for asking. {raw} Would you like me to help with anything else?"
                 intent = ""
                 entities = {}
-                sentiment = quick_sentiment_score(ai_text)
+                sentiment = quick_sentiment_score(spoken)
+                confidence = confidence_est
 
-            record_metric_intent(intent)
+            # metrics and conversation store
+            record_metric_intent(intent or "rag_response")
             record_metric_sentiment(sentiment)
-            conversation.append(("assistant", ai_text, intent, entities, sentiment, time.time()))
+            record_metric_confidence(confidence)
+            conversation.append(("assistant", spoken or fact or "Sorry, I couldn't find that.", intent, entities, sentiment, time.time()))
+            # send UI: include both fact and spoken in metadata
             try:
-                await ws.send_text(json.dumps({"type":"ai_text","text":ai_text,"metadata":{"intent":intent,"entities":entities,"sentiment":sentiment}}))
+                await ws.send_text(json.dumps({
+                    "type":"ai_text",
+                    "text": spoken or fact,
+                    "metadata": {"intent": intent, "entities": entities, "confidence": confidence, "sentiment": sentiment, "fact": fact}
+                }))
             except:
                 pass
 
-            # Start TTS for full ai_text (since we have final text)
-            await send_tts_and_audio(ai_text, language_code=language, sentiment=sentiment)
+            # TTS: use spoken if present; fact only if spoken missing
+            tts_text = spoken if spoken else fact
+            # start TTS (spoken is final text)
+            await send_tts_and_audio(tts_text, language_code=language, sentiment=sentiment)
             record_latency(time.time()*1000 - start_ms)
             return
 
-        # 3) No RAG hits -> use streaming LLM fallback (if available) for low-latency natural reply
-        # Build convo prefix
+        # 3) No RAG hits -> streaming LLM fallback if supported
         convo_lines = []
         for entry in list(conversation)[-6:]:
             role = entry[0]; txt = entry[1]
@@ -671,19 +728,16 @@ async def hd_audio_ws(ws: WebSocket):
             convo_lines.append(f"{prefix} {txt}")
         convo_pref = "\n".join(convo_lines)
 
-        # If GeminiService exposes a streaming interface, use it
         if hasattr(_gemini, "generate_stream"):
             try:
-                # Cancel previous stream if any
                 if current_stream_stop_event:
                     current_stream_stop_event.set()
                 current_stream_stop_event = threading.Event()
-
-                # run streaming and TTS
                 final_text, sentiment_est = await run_streaming_llm_and_tts(convo_pref, user_text, language_code=language)
                 intent_label = "chat_fallback"
                 record_metric_intent(intent_label)
                 record_metric_sentiment(sentiment_est)
+                record_metric_confidence(0.0)
                 conversation.append(("assistant", final_text, intent_label, {}, sentiment_est, time.time()))
                 try:
                     await ws.send_text(json.dumps({"type":"ai_text","text":final_text,"metadata":{"intent":intent_label,"sentiment":sentiment_est}}))
@@ -693,8 +747,8 @@ async def hd_audio_ws(ws: WebSocket):
                 return
             except Exception as e:
                 logger.exception("Streaming fallback error: %s", e)
-                # fallback to synchronous fallback
-        # If streaming not available or failed -> synchronous fallback
+
+        # synchronous fallback
         try:
             ai_text = await get_ai_text_response(user_text, language_code=language, conversation_history=[(r[0],r[1]) for r in list(conversation)])
         except Exception as e:
@@ -704,6 +758,7 @@ async def hd_audio_ws(ws: WebSocket):
         sentiment = quick_sentiment_score(ai_text)
         record_metric_sentiment(sentiment)
         record_metric_intent("chat_fallback_sync")
+        record_metric_confidence(0.0)
         conversation.append(("assistant", ai_text, "chat_fallback_sync", {}, sentiment, time.time()))
         try:
             await ws.send_text(json.dumps({"type":"ai_text","text":ai_text,"metadata":{"sentiment":sentiment}}))
@@ -753,7 +808,6 @@ async def hd_audio_ws(ws: WebSocket):
                             current_tts_task.cancel()
                         except Exception:
                             pass
-                    # stop any running stream writer
                     if current_stream_stop_event:
                         try:
                             current_stream_stop_event.set()
@@ -861,13 +915,13 @@ async def hd_audio_ws(ws: WebSocket):
                 await ws.close()
                 return
             elif mtype == "metrics":
-                # debug: return metrics snapshot
                 try:
                     await ws.send_text(json.dumps({"type":"metrics","metrics": {
                         "requests": METRICS["requests"],
                         "intent_counts": dict(METRICS["intent_counts"]),
                         "avg_response_ms": (sum(METRICS["avg_response_ms"])/len(METRICS["avg_response_ms"])) if METRICS["avg_response_ms"] else None,
-                        "sentiment_samples": len(METRICS["sentiments"])
+                        "sentiment_samples": len(METRICS["sentiments"]),
+                        "confidence_samples": len(METRICS["confidences"])
                     }}))
                 except Exception:
                     pass
