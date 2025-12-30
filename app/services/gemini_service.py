@@ -60,6 +60,162 @@ class GeminiService:
             logger.error(f"❌ Failed to initialize Gemini AI: {e}")
             self.is_available = False
         # --- ADD THIS NEW METHOD TO GeminiService CLASS ---
+    def generate_stream(self, prompt: str, system_message: Optional[str] = None,
+                    temperature: float = 0.6, max_tokens: int = 1024) -> Generator[str, None, None]:
+    """
+    Blocking generator that yields text chunks as they become available.
+
+    - Tries provider streaming APIs (Google gemini/generativeai / genai).
+    - Normalizes common event shapes (delta, choices[].delta, output_text, content).
+    - Falls back to calling generate_response() and chunking the final text progressively.
+    """
+    client = getattr(self, "client", None) or getattr(self, "_client", None) or None
+
+    def _yield_and_return(iterable):
+        for piece in iterable:
+            if not piece:
+                continue
+            yield piece
+        return
+
+    # --- 1) Try known provider streaming methods (non-breaking checks) ---
+    try:
+        if client is not None:
+            # 1a) google.generativeai / google.genai-like streaming (common names)
+            # Attempt client.responses.stream(...) or client.responses.stream
+            # or client.stream / client.stream_create etc — be permissive
+            possible_stream_calls = [
+                ("responses", "stream"),     # genai: client.responses.stream(...)
+                ("responses", "stream_create"),
+                (None, "stream"),            # client.stream(...)
+                (None, "streaming_generate"),
+                (None, "generate_stream"),
+            ]
+            for attr_obj, method_name in possible_stream_calls:
+                try:
+                    if attr_obj:
+                        obj = getattr(client, attr_obj, None)
+                    else:
+                        obj = client
+                    if obj and hasattr(obj, method_name):
+                        stream_fn = getattr(obj, method_name)
+                        # Try calling with a few common kwarg shapes. Providers differ.
+                        # We'll attempt a few signatures defensively.
+                        call_kwargs_variants = [
+                            {"model": getattr(self, "model", None), "prompt": prompt, "system_message": system_message, "temperature": temperature, "max_tokens": max_tokens},
+                            {"model": getattr(self, "model", None), "input": prompt, "system_message": system_message, "temperature": temperature, "max_output_tokens": max_tokens},
+                            {"model": getattr(self, "model", None), "input": [{"role":"user","content":prompt}], "temperature": temperature, "max_tokens": max_tokens},
+                            {"prompt": prompt, "temperature": temperature}
+                        ]
+                        for kwargs in call_kwargs_variants:
+                            # strip None values
+                            kwargs = {k: v for k, v in kwargs.items() if v is not None}
+                            try:
+                                gen = stream_fn(**kwargs)
+                                # gen is expected to be an iterator/generator of events or strings
+                                for event in gen:
+                                    if event is None:
+                                        continue
+                                    # Normalize common event shapes to text:
+                                    text_piece = None
+                                    # 1) If event is plain str
+                                    if isinstance(event, str):
+                                        text_piece = event
+                                    # 2) Some libs return simple dicts
+                                    elif isinstance(event, dict):
+                                        # common keys: 'delta', 'choices', 'text', 'content', 'output_text'
+                                        # delta might be {'content': '...'} or {'text': '...'}
+                                        if "delta" in event:
+                                            d = event.get("delta") or {}
+                                            # nested choices delta pattern
+                                            if isinstance(d, dict):
+                                                text_piece = d.get("content") or d.get("text") or d.get("message") or None
+                                        if not text_piece:
+                                            # choices[].delta.text (OpenAI-ish shape inside dict)
+                                            choices = event.get("choices")
+                                            if choices and isinstance(choices, list) and len(choices) > 0:
+                                                ch = choices[0]
+                                                # delta may be dict or simple string
+                                                delta = ch.get("delta", {}) if isinstance(ch, dict) else {}
+                                                text_piece = delta.get("content") or delta.get("text") or ch.get("text") or ch.get("message")
+                                        if not text_piece:
+                                            text_piece = event.get("text") or event.get("content") or event.get("output_text")
+                                    else:
+                                        # 3) object with attributes (event.delta, event.text, event.choices, etc)
+                                        # use getattr defensively
+                                        delta = getattr(event, "delta", None) or getattr(event, "d", None)
+                                        if delta:
+                                            # delta can be a dict-like or object
+                                            if isinstance(delta, dict):
+                                                text_piece = delta.get("content") or delta.get("text")
+                                            else:
+                                                text_piece = getattr(delta, "text", None) or getattr(delta, "content", None)
+                                        if not text_piece:
+                                            # event.choices[0].delta.text
+                                            choices = getattr(event, "choices", None)
+                                            if choices:
+                                                try:
+                                                    first = choices[0]
+                                                    d = getattr(first, "delta", None) or (first.get("delta") if isinstance(first, dict) else None)
+                                                    if d:
+                                                        text_piece = getattr(d, "text", None) or (d.get("content") if isinstance(d, dict) else None)
+                                                    if not text_piece:
+                                                        text_piece = getattr(first, "text", None) or (first.get("text") if isinstance(first, dict) else None)
+                                                except Exception:
+                                                    pass
+                                            # fallback to event.text / event.output_text
+                                        if not text_piece:
+                                            text_piece = getattr(event, "text", None) or getattr(event, "output_text", None) or getattr(event, "content", None)
+
+                                    if text_piece:
+                                        yield text_piece
+                                # if generator finished normally, return
+                                return
+                            except TypeError:
+                                # signature mismatch — try next kwargs variant
+                                continue
+                            except Exception:
+                                # provider streaming errored — try the next method
+                                break
+                except Exception:
+                    # try next possible method
+                    continue
+    except Exception:
+        # swallow provider errors and fall through to fallback
+        pass
+
+    # --- 2) Fallback: call synchronous generate_response and stream progressively ---
+    try:
+        full = self.generate_response(prompt=prompt, system_message=system_message, temperature=temperature, max_tokens=max_tokens) or ""
+    except Exception:
+        return
+
+    full = full.strip()
+    if not full:
+        return
+
+    # First pass: yield by sentence so TTS can start on natural breaks
+    sentences = re.split(r'(?<=[.!?])\s+', full)
+    if len(sentences) > 1:
+        for s in sentences:
+            if s.strip():
+                yield s.strip()
+                time.sleep(0.02)
+        return
+
+    # Second pass: yield by small word groups
+    words = full.split()
+    chunk_size = 6
+    for i in range(0, len(words), chunk_size):
+        piece = " ".join(words[i:i + chunk_size])
+        if piece.strip():
+            yield piece
+            time.sleep(0.02)
+
+    # Third pass: char slices
+    for i in range(0, len(full), 40):
+        yield full[i:i+40]
+        time.sleep(0.015)
     def rewrite_query(self, user_query: str, conversation_history: List[Dict] = None) -> str:
         """
         Rewrites the user's query to be specific and searchable.
