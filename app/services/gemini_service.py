@@ -5,6 +5,9 @@ import time
 from typing import Optional, List, Dict, Any
 import google.generativeai as genai
 from dotenv import load_dotenv
+import re
+from typing import Generator, Optional
+
 # Add this import
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import requests
