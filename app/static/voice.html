@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html>
 <head>
@@ -11,7 +12,7 @@
 </head>
 <body>
   <h2>HD Voice Bot (Browser)</h2>
-  <p>Click Start → Speak → Stop. Captures audio directly, downsamples to 16k PCM, sends to WS, plays HD TTS from server.</p>
+  <p>Click Start → Speak → Stop. Captures audio, downsamples to 16k PCM, sends raw Int16 PCM binary frames to WS (320ms chunks). Uses throttling based on ws.bufferedAmount.</p>
   <button id="startBtn">Start</button>
   <button id="stopBtn" disabled>Stop</button>
   <div>
@@ -21,13 +22,6 @@
   <div id="log"></div>
 
 <script>
-/*
-Direct-capture frontend:
- - Use getUserMedia -> AudioContext -> ScriptProcessorNode
- - Convert Float32 -> downsample -> Int16 PCM -> base64 -> send JSON {type:'audio', payload: base64}
- - Receive server WAV base64 and play via AudioContext
-*/
-
 const startBtn = document.getElementById('startBtn');
 const stopBtn  = document.getElementById('stopBtn');
 const statusEl = document.getElementById('status');
@@ -38,28 +32,16 @@ let ws = null;
 let micStream = null;
 let playbackCtx = null;
 
+// CONFIG
+const TARGET_SR = 16000;            // server STT sample rate
+const CHUNK_MS = 320;               // send ~320ms frames
+const MAX_BUFFERED_AMOUNT = 1_000_000;  // bytes: pause sending when ws.bufferedAmount exceeds this
+const RESUME_BUFFERED_AMOUNT = 400_000; // resume threshold
+
 function log(msg) {
   console.log(msg);
   logEl.textContent += msg + '\n';
   logEl.scrollTop = logEl.scrollHeight;
-}
-
-function arrayBufferToBase64(buffer){
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64){
-  const binary = atob(base64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
 }
 
 async function ensurePlaybackContext() {
@@ -72,9 +54,9 @@ async function ensurePlaybackContext() {
 
 async function handleRemoteAudioBase64(base64Wav) {
   try {
-    const ab = base64ToArrayBuffer(base64Wav);
+    const ab = Uint8Array.from(atob(base64Wav), c => c.charCodeAt(0)).buffer;
     const ctx = await ensurePlaybackContext();
-    const decoded = await ctx.decodeAudioData(ab);
+    const decoded = await ctx.decodeAudioData(ab.slice(0)); // some browsers require copy
     const src = ctx.createBufferSource();
     src.buffer = decoded;
     src.connect(ctx.destination);
@@ -83,6 +65,20 @@ async function handleRemoteAudioBase64(base64Wav) {
   } catch (e) {
     log('Error playing remote audio: ' + e);
   }
+}
+
+function downsampleBuffer(buffer, inputRate, outputRate) {
+  if (outputRate === inputRate) {
+    return buffer;
+  }
+  const sampleRatio = inputRate / outputRate;
+  const outLength = Math.floor(buffer.length / sampleRatio);
+  const out = new Float32Array(outLength);
+  let offset = 0;
+  for (let i = 0; i < outLength; i++, offset += sampleRatio) {
+    out[i] = buffer[Math.floor(offset)] || 0;
+  }
+  return out;
 }
 
 async function startStreaming() {
@@ -95,6 +91,7 @@ async function startStreaming() {
   ws.onopen = () => {
     statusEl.textContent = 'Status: Connected to server';
     log('WS connected');
+    // send control start as text JSON
     ws.send(JSON.stringify({type:'start', meta:{client:'web-client'}}));
   };
 
@@ -110,81 +107,115 @@ async function startStreaming() {
 
   ws.onmessage = (ev) => {
     try {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'transcript') {
-        log('[TRANSCRIPT] ' + msg.text);
-      } else if (msg.type === 'ai_text') {
-        log('[AI] ' + msg.text);
-      } else if (msg.type === 'audio') {
-        handleRemoteAudioBase64(msg.audio);
-      } else if (msg.type === 'error') {
-        log('[SERVER ERROR] ' + msg.error);
+      // server sends textual JSON for control / ai_text / transcript / audio (audio base64 inside JSON)
+      const txt = typeof ev.data === 'string' ? ev.data : null;
+      if (txt) {
+        const msg = JSON.parse(txt);
+        if (msg.type === 'transcript') {
+          log('[TRANSCRIPT] ' + msg.text);
+        } else if (msg.type === 'ai_text') {
+          log('[AI] ' + msg.text);
+        } else if (msg.type === 'audio') {
+          handleRemoteAudioBase64(msg.audio);
+        } else if (msg.type === 'control' && msg.action === 'stop_playback') {
+          log('[SERVER CONTROL] stop_playback');
+        } else if (msg.type === 'error') {
+          log('[SERVER ERROR] ' + msg.error);
+        } else {
+          log('[WS] ' + JSON.stringify(msg).slice(0,200));
+        }
       } else {
-        log('[WS] ' + JSON.stringify(msg).slice(0,200));
+        // binary message from server (unlikely here because server sends base64 in JSON), but handle if needed
+        log('[WS] Received binary message length=' + (ev.data && ev.data.byteLength ? ev.data.byteLength : 0));
       }
     } catch (e) {
       log('WS message parse error: ' + e);
     }
   };
 
-  // direct capture using ScriptProcessorNode (widely supported)
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micStream = stream;
 
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    await audioCtx.resume(); // CRITICAL for many browsers
+    await audioCtx.resume();
 
     const source = audioCtx.createMediaStreamSource(stream);
-    // buffer size 4096 is a good tradeoff; can tune to 2048/8192
+
+    // We'll use ScriptProcessorNode for compatibility, but we will accumulate to larger send chunks.
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+    // Buffer for accumulation (Float32)
+    let acc = [];
+    const inputRate = audioCtx.sampleRate || 48000;
+    const samplesPerChunk = Math.ceil((CHUNK_MS / 1000) * TARGET_SR); // target number of samples at 16k
+    // Note: we'll downsample each onaudioprocess call and append
+
+    let paused = false;
 
     processor.onaudioprocess = (e) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-      // get Float32 mono input
-      const input = e.inputBuffer.getChannelData(0);
-      const inputRate = audioCtx.sampleRate || 48000;
-      const targetRate = 16000;
+      const input = e.inputBuffer.getChannelData(0); // Float32Array
+      // downsample to target rate (float)
+      const down = downsampleBuffer(input, inputRate, TARGET_SR); // Float32Array
+      // append
+      for (let i = 0; i < down.length; i++) acc.push(down[i]);
 
-      // simple downsample (nearest sample) when rates differ
-      let out;
-      if (inputRate === targetRate) {
-        out = input;
-      } else {
-        const ratio = inputRate / targetRate;
-        const outLen = Math.floor(input.length / ratio);
-        out = new Float32Array(outLen);
-        for (let i = 0, j = 0; j < outLen; j++, i += ratio) {
-          out[j] = input[Math.floor(i)] || 0;
+      // if we have enough samples to send a chunk
+      while (acc.length >= samplesPerChunk) {
+        const chunkSamples = acc.splice(0, samplesPerChunk);
+        // convert Float32 -> Int16
+        const int16 = new Int16Array(chunkSamples.length);
+        for (let i = 0; i < chunkSamples.length; i++) {
+          let s = Math.max(-1, Math.min(1, chunkSamples[i]));
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
-      }
+        const buffer = int16.buffer;
 
-      // float32 -> int16 PCM little-endian
-      const buffer = new ArrayBuffer(out.length * 2);
-      const view = new DataView(buffer);
-      for (let i = 0; i < out.length; i++) {
-        let s = Math.max(-1, Math.min(1, out[i]));
-        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      }
+        // backpressure: pause sending if websocket bufferedAmount grows too large
+        if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+          paused = true;
+          log('Pausing sends; bufferedAmount=' + ws.bufferedAmount);
+          setTimeout(() => {
+            const checkResume = setInterval(() => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) {
+                clearInterval(checkResume);
+                paused = false;
+                return;
+              }
+              if (ws.bufferedAmount <= RESUME_BUFFERED_AMOUNT) {
+                paused = false;
+                clearInterval(checkResume);
+                log('Resuming sends; bufferedAmount=' + ws.bufferedAmount);
+              }
+            }, 120);
+          }, 0);
+        }
 
-      // base64 and send
-      const b64 = arrayBufferToBase64(buffer);
-      try {
-        ws.send(JSON.stringify({type:'audio', payload: b64}));
-        log('Sent audio chunk bytes=' + buffer.byteLength + ' b64len=' + b64.length);
-      } catch (e) {
-        console.error('WS send audio failed', e);
+        if (!paused) {
+          try {
+            ws.send(buffer); // send raw ArrayBuffer (binary frame)
+            log('Sent chunk bytes=' + (int16.length*2) + ' samples=' + int16.length + ' buffered=' + ws.bufferedAmount);
+          } catch (e) {
+            console.error('WS send audio failed', e);
+          }
+        } else {
+          // if paused, re-insert chunk front so we don't lose
+          acc = chunkSamples.concat(acc);
+          break;
+        }
       }
     };
 
     source.connect(processor);
-    processor.connect(audioCtx.destination); // needed on some browsers to keep processor running
+    // connect processor to destination to keep it running in some browsers
+    processor.connect(audioCtx.destination);
 
     window._hdAudio = { source, processor, audioCtx, stream };
 
     statusEl.textContent = 'Status: Recording...';
-    log('Recording started (direct capture -> 16k PCM)');
+    log('Recording started (batched -> 16k PCM, CHUNK_MS=' + CHUNK_MS + 'ms)');
     startBtn.disabled = true;
     stopBtn.disabled = false;
   } catch (e) {
@@ -194,7 +225,6 @@ async function startStreaming() {
 
 async function stopStreaming() {
   try {
-    // stop direct-capture nodes
     if (window._hdAudio) {
       const { source, processor, audioCtx } = window._hdAudio;
       try { source.disconnect(); } catch(e){}
@@ -210,7 +240,6 @@ async function stopStreaming() {
 
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({type:'stop'}));
-      // allow server to finalize
       setTimeout(()=>{ try { ws.close(); } catch(e){} ws=null; }, 500);
     }
 
