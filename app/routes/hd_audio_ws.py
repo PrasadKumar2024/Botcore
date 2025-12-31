@@ -583,7 +583,7 @@ async def hd_audio_ws(ws: WebSocket):
             except Exception:
                 pass
 
-    # ---------------- Combined handler with persona, RAG JSON, streaming fallback ----------------
+    # ---------------- Combined handler with persona, RAG JSON, streaming collector ----------------
     async def handle_final_utterance(text: str):
         nonlocal conversation, is_bot_speaking, current_stream_stop_event, current_stream_thread
         METRICS["requests"] += 1
@@ -629,9 +629,7 @@ async def hd_audio_ws(ws: WebSocket):
                 scores = [r.get("score", 0.0) for r in results if r.get("score") is not None]
                 if not scores:
                     return 0.0
-                # normalize to 0..1 by min/max heuristic (Pinecone scores often small; use clamp)
                 avg = sum(scores) / len(scores)
-                # simple mapping: clamp within [0,0.5] -> scale 0..1
                 conf = max(0.0, min(1.0, (avg + 0.5)))  # heuristic
                 return conf
             except Exception:
@@ -656,25 +654,51 @@ async def hd_audio_ws(ws: WebSocket):
             )
             user_prompt = f"{convo_pref}\n\nCONTEXT:\n{context_text}\n\nUser utterance: {user_text}\nReturn JSON."
 
-            partial = functools.partial(
-                _gemini.generate_response,
-                prompt=user_prompt,
-                system_message=system_msg,
-                temperature=0.15,
-                max_tokens=300
-            )
-            loop = asyncio.get_running_loop()
+            # ---------- STREAMING-based collector for RAG JSON response ----------
+            token_q: asyncio.Queue = asyncio.Queue()
+            stop_evt = threading.Event()
+
+            def _rag_writer_thread(loop_ref, prompt, system_msg, token_q_ref, stop_e):
+                try:
+                    gen = _gemini.generate_stream(prompt=prompt, system_message=system_msg, temperature=0.15, max_tokens=300)
+                    for chunk in gen:
+                        if stop_e.is_set():
+                            break
+                        asyncio.run_coroutine_threadsafe(token_q_ref.put(chunk), loop_ref)
+                except Exception as e:
+                    logger.exception("RAG stream writer error: %s", e)
+                finally:
+                    try:
+                        asyncio.run_coroutine_threadsafe(token_q_ref.put(None), loop_ref)
+                    except Exception:
+                        pass
+
+            writer = threading.Thread(target=_rag_writer_thread, args=(asyncio.get_running_loop(), user_prompt, system_msg, token_q, stop_evt), daemon=True)
+            writer.start()
+
+            # assemble streamed text (with LLM_TIMEOUT as overall cap)
             resp_text = ""
             try:
-                fut = loop.run_in_executor(executor, partial)
-                resp_text = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
-                resp_text = (resp_text or "").strip()
-            except asyncio.TimeoutError:
-                logger.warning("RAG NLU+LLM timed out")
-                resp_text = ""
-            except Exception as e:
-                logger.exception("RAG LLM call failed: %s", e)
-                resp_text = ""
+                while True:
+                    try:
+                        recv = await asyncio.wait_for(token_q.get(), timeout=LLM_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning("RAG streaming timed out")
+                        break
+                    if recv is None:
+                        break
+                    piece = recv if isinstance(recv, str) else str(recv)
+                    resp_text += piece
+                    # NOTE: partial JSON extraction is risky unless model streams complete JSON lines.
+                    # We could try early parse: parsed = extract_json_from_text(resp_text); if parsed: break
+            finally:
+                stop_evt.set()
+                try:
+                    writer.join(timeout=1.0)
+                except Exception:
+                    pass
+            resp_text = (resp_text or "").strip()
+            # ---------------------------------------------------------------------
 
             parsed = extract_json_from_text(resp_text)
             if parsed:
@@ -824,8 +848,17 @@ async def hd_audio_ws(ws: WebSocket):
                 if is_final and interim_text:
                     utterance_buffer.append(interim_text)
                     language = getattr(result, "language_code", language) or language
-                    if not pending_debounce_task:
-                        pending_debounce_task = asyncio.create_task(debounce_and_handle())
+                    # immediate action on is_final: trigger handling immediately (do not wait longer)
+                    if pending_debounce_task:
+                        # cancel debounce and handle asap
+                        try:
+                            pending_debounce_task.cancel()
+                        except Exception:
+                            pass
+                        pending_debounce_task = None
+                    # handle immediately
+                    await handle_final_utterance(" ".join(utterance_buffer).strip())
+                    utterance_buffer.clear()
 
     transcript_consumer_task = None
 
@@ -839,52 +872,126 @@ async def hd_audio_ws(ws: WebSocket):
         await ws.send_text(json.dumps({"type":"ready"}))
 
         while True:
-            data_text = await ws.receive_text()
-            try:
-                msg = json.loads(data_text)
-            except Exception:
-                await ws.send_text(json.dumps({"type":"error","error":"invalid_json"}))
+            # Use ws.receive() to accept both text and binary frames
+            msg = await ws.receive()
+            # handle disconnect
+            if msg is None:
                 continue
+            # 'websocket.receive' returns dict with 'type'
+            if msg.get("type") == "websocket.disconnect":
+                logger.info("Client disconnected")
+                break
 
-            mtype = msg.get("type")
-            if mtype == "start":
-                meta = msg.get("meta", {}) or {}
-                new_lang = meta.get("language")
-                if new_lang and new_lang != language:
-                    now_ts = time.time()
-                    if now_ts - last_restart_ts < MIN_RESTART_INTERVAL:
-                        logger.info("Language restart suppressed by backoff (last_restart_ts=%s)", last_restart_ts)
-                    else:
-                        logger.info("Language change requested: %s -> %s", language, new_lang)
-                        language = new_lang
-                        with restarting_lock:
-                            try:
-                                stop_event.set()
-                                try:
-                                    audio_queue.put_nowait(None)
-                                except Exception:
-                                    pass
-                                if stt_thread and stt_thread.is_alive():
-                                    stt_thread.join(timeout=2.0)
-                            except Exception as e:
-                                logger.exception("Error stopping STT thread for language restart: %s", e)
-                            stop_event = threading.Event()
-                            stt_thread = threading.Thread(target=grpc_stt_worker, args=(loop, audio_queue, transcripts_queue, stop_event, language), daemon=True)
-                            stt_thread.start()
-                            last_restart_ts = time.time()
-                            logger.info("Restarted STT worker with language=%s", language)
-                await ws.send_text(json.dumps({"type":"ack","message":"started"}))
-
-            elif mtype == "audio":
-                b64 = msg.get("payload")
-                if not b64:
-                    continue
+            if "text" in msg and msg["text"] is not None:
+                data_text = msg["text"]
                 try:
-                    pcm = base64.b64decode(b64)
+                    msgj = json.loads(data_text)
                 except Exception:
-                    await ws.send_text(json.dumps({"type":"error","error":"bad_audio_b64"}))
+                    try:
+                        await ws.send_text(json.dumps({"type":"error","error":"invalid_json"}))
+                    except:
+                        pass
                     continue
 
+                mtype = msgj.get("type")
+                if mtype == "start":
+                    meta = msgj.get("meta", {}) or {}
+                    new_lang = meta.get("language")
+                    if new_lang and new_lang != language:
+                        now_ts = time.time()
+                        if now_ts - last_restart_ts < MIN_RESTART_INTERVAL:
+                            logger.info("Language restart suppressed by backoff (last_restart_ts=%s)", last_restart_ts)
+                        else:
+                            logger.info("Language change requested: %s -> %s", language, new_lang)
+                            language = new_lang
+                            with restarting_lock:
+                                try:
+                                    stop_event.set()
+                                    try:
+                                        audio_queue.put_nowait(None)
+                                    except Exception:
+                                        pass
+                                    if stt_thread and stt_thread.is_alive():
+                                        stt_thread.join(timeout=2.0)
+                                except Exception as e:
+                                    logger.exception("Error stopping STT thread for language restart: %s", e)
+                                stop_event = threading.Event()
+                                stt_thread = threading.Thread(target=grpc_stt_worker, args=(loop, audio_queue, transcripts_queue, stop_event, language), daemon=True)
+                                stt_thread.start()
+                                last_restart_ts = time.time()
+                                logger.info("Restarted STT worker with language=%s", language)
+                    try:
+                        await ws.send_text(json.dumps({"type":"ack","message":"started"}))
+                    except:
+                        pass
+
+                elif mtype == "audio":
+                    # backward-compatible base64 JSON path
+                    b64 = msgj.get("payload")
+                    if not b64:
+                        continue
+                    try:
+                        pcm = base64.b64decode(b64)
+                    except Exception:
+                        try:
+                            await ws.send_text(json.dumps({"type":"error","error":"bad_audio_b64"}))
+                        except:
+                            pass
+                        continue
+
+                    try:
+                        silent = is_silence(pcm)
+                    except Exception:
+                        silent = False
+
+                    now = time.time()
+                    if not silent:
+                        last_voice_ts = now
+
+                    if audio_queue.qsize() > 350:
+                        logger.warning("Audio queue large (%d) dropping input", audio_queue.qsize())
+                        continue
+                    try:
+                        audio_queue.put_nowait(pcm)
+                    except queue.Full:
+                        logger.warning("Audio queue full, drop chunk")
+                        continue
+
+                elif mtype == "stop":
+                    logger.info("Client stop received; flushing and closing")
+                    try:
+                        stop_event.set()
+                        audio_queue.put_nowait(None)
+                    except Exception:
+                        pass
+                    await transcripts_queue.put(None)
+                    try:
+                        await ws.send_text(json.dumps({"type":"bye"}))
+                    except:
+                        pass
+                    await ws.close()
+                    return
+
+                elif mtype == "metrics":
+                    try:
+                        await ws.send_text(json.dumps({"type":"metrics","metrics": {
+                            "requests": METRICS["requests"],
+                            "intent_counts": dict(METRICS["intent_counts"]),
+                            "avg_response_ms": (sum(METRICS["avg_response_ms"])/len(METRICS["avg_response_ms"])) if METRICS["avg_response_ms"] else None,
+                            "sentiment_samples": len(METRICS["sentiments"]),
+                            "confidence_samples": len(METRICS["confidences"])
+                        }}))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        await ws.send_text(json.dumps({"type":"error","error":"unknown_type"}))
+                    except:
+                        pass
+
+            elif "bytes" in msg and msg["bytes"] is not None:
+                # binary frame received -> raw Int16 PCM from client
+                pcm = msg["bytes"]
                 try:
                     silent = is_silence(pcm)
                 except Exception:
@@ -902,31 +1009,9 @@ async def hd_audio_ws(ws: WebSocket):
                 except queue.Full:
                     logger.warning("Audio queue full, drop chunk")
                     continue
-
-            elif mtype == "stop":
-                logger.info("Client stop received; flushing and closing")
-                try:
-                    stop_event.set()
-                    audio_queue.put_nowait(None)
-                except Exception:
-                    pass
-                await transcripts_queue.put(None)
-                await ws.send_text(json.dumps({"type":"bye"}))
-                await ws.close()
-                return
-            elif mtype == "metrics":
-                try:
-                    await ws.send_text(json.dumps({"type":"metrics","metrics": {
-                        "requests": METRICS["requests"],
-                        "intent_counts": dict(METRICS["intent_counts"]),
-                        "avg_response_ms": (sum(METRICS["avg_response_ms"])/len(METRICS["avg_response_ms"])) if METRICS["avg_response_ms"] else None,
-                        "sentiment_samples": len(METRICS["sentiments"]),
-                        "confidence_samples": len(METRICS["confidences"])
-                    }}))
-                except Exception:
-                    pass
             else:
-                await ws.send_text(json.dumps({"type":"error","error":"unknown_type"}))
+                # unexpected receive type
+                continue
 
     except WebSocketDisconnect:
         logger.info("HD WS disconnected")
