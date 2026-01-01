@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html>
 <head>
@@ -8,11 +7,13 @@
     body { font-family: system-ui, Arial; margin: 20px; }
     button { padding: 10px 16px; margin-right: 8px; }
     #log { margin-top: 12px; white-space: pre-wrap; background:#f6f6f8;padding:10px;border-radius:6px;max-height:300px;overflow:auto;}
+    input { padding:6px; }
   </style>
 </head>
 <body>
   <h2>HD Voice Bot (Browser)</h2>
-  <p>Click Start → Speak → Stop. Captures audio, downsamples to 16k PCM, sends raw Int16 PCM binary frames to WS (320ms chunks). Uses throttling based on ws.bufferedAmount.</p>
+  <p>Click Start → Speak → Stop. Captures audio, downsamples to 16k PCM, sends raw Int16 PCM binary frames to WS (~320ms chunks). Server throttles with control messages.</p>
+
   <button id="startBtn">Start</button>
   <button id="stopBtn" disabled>Stop</button>
   <div>
@@ -31,12 +32,15 @@ const wsInput  = document.getElementById('wsUrl');
 let ws = null;
 let micStream = null;
 let playbackCtx = null;
+let paused = false;          // client-side pause due to server throttle
+let serverThrottled = false; // server told to throttle
+let bufferedPause = false;   // local backpressure fallback
 
 // CONFIG
 const TARGET_SR = 16000;            // server STT sample rate
 const CHUNK_MS = 320;               // send ~320ms frames
-const MAX_BUFFERED_AMOUNT = 1_000_000;  // bytes: pause sending when ws.bufferedAmount exceeds this
-const RESUME_BUFFERED_AMOUNT = 400_000; // resume threshold
+const MAX_BUFFERED_AMOUNT = 1_500_000;  // bytes: pause sending when ws.bufferedAmount exceeds this
+const RESUME_BUFFERED_AMOUNT = 600_000; // resume threshold
 
 function log(msg) {
   console.log(msg);
@@ -56,7 +60,7 @@ async function handleRemoteAudioBase64(base64Wav) {
   try {
     const ab = Uint8Array.from(atob(base64Wav), c => c.charCodeAt(0)).buffer;
     const ctx = await ensurePlaybackContext();
-    const decoded = await ctx.decodeAudioData(ab.slice(0)); // some browsers require copy
+    const decoded = await ctx.decodeAudioData(ab.slice(0)); // copy for some browsers
     const src = ctx.createBufferSource();
     src.buffer = decoded;
     src.connect(ctx.destination);
@@ -67,6 +71,7 @@ async function handleRemoteAudioBase64(base64Wav) {
   }
 }
 
+// naive downsample (linear pick) - fast and deterministic
 function downsampleBuffer(buffer, inputRate, outputRate) {
   if (outputRate === inputRate) {
     return buffer;
@@ -79,6 +84,16 @@ function downsampleBuffer(buffer, inputRate, outputRate) {
     out[i] = buffer[Math.floor(offset)] || 0;
   }
   return out;
+}
+
+// convert Float32 -> Int16 ArrayBuffer
+function floatToInt16Buffer(float32Arr) {
+  const int16 = new Int16Array(float32Arr.length);
+  for (let i = 0; i < float32Arr.length; i++) {
+    let s = Math.max(-1, Math.min(1, float32Arr[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return int16.buffer;
 }
 
 async function startStreaming() {
@@ -107,7 +122,6 @@ async function startStreaming() {
 
   ws.onmessage = (ev) => {
     try {
-      // server sends textual JSON for control / ai_text / transcript / audio (audio base64 inside JSON)
       const txt = typeof ev.data === 'string' ? ev.data : null;
       if (txt) {
         const msg = JSON.parse(txt);
@@ -117,15 +131,24 @@ async function startStreaming() {
           log('[AI] ' + msg.text);
         } else if (msg.type === 'audio') {
           handleRemoteAudioBase64(msg.audio);
-        } else if (msg.type === 'control' && msg.action === 'stop_playback') {
-          log('[SERVER CONTROL] stop_playback');
+        } else if (msg.type === 'control') {
+          if (msg.action === 'stop_playback') {
+            log('[SERVER CONTROL] stop_playback');
+          } else if (msg.action === 'throttle') {
+            serverThrottled = true;
+            paused = true;
+            log('[SERVER CONTROL] throttle — pausing sends');
+          } else if (msg.action === 'resume') {
+            serverThrottled = false;
+            paused = false;
+            log('[SERVER CONTROL] resume — resuming sends');
+          }
         } else if (msg.type === 'error') {
           log('[SERVER ERROR] ' + msg.error);
         } else {
           log('[WS] ' + JSON.stringify(msg).slice(0,200));
         }
       } else {
-        // binary message from server (unlikely here because server sends base64 in JSON), but handle if needed
         log('[WS] Received binary message length=' + (ev.data && ev.data.byteLength ? ev.data.byteLength : 0));
       }
     } catch (e) {
@@ -142,66 +165,55 @@ async function startStreaming() {
 
     const source = audioCtx.createMediaStreamSource(stream);
 
-    // We'll use ScriptProcessorNode for compatibility, but we will accumulate to larger send chunks.
+    // ScriptProcessorNode (compat). We accumulate to CHUNK_MS sized frames at TARGET_SR.
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-    // Buffer for accumulation (Float32)
     let acc = [];
     const inputRate = audioCtx.sampleRate || 48000;
-    const samplesPerChunk = Math.ceil((CHUNK_MS / 1000) * TARGET_SR); // target number of samples at 16k
-    // Note: we'll downsample each onaudioprocess call and append
-
-    let paused = false;
+    const samplesPerChunk = Math.ceil((CHUNK_MS / 1000) * TARGET_SR);
 
     processor.onaudioprocess = (e) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (paused) return; // honor server throttle or local pause
 
       const input = e.inputBuffer.getChannelData(0); // Float32Array
-      // downsample to target rate (float)
-      const down = downsampleBuffer(input, inputRate, TARGET_SR); // Float32Array
-      // append
+      const down = downsampleBuffer(input, inputRate, TARGET_SR);
       for (let i = 0; i < down.length; i++) acc.push(down[i]);
 
-      // if we have enough samples to send a chunk
       while (acc.length >= samplesPerChunk) {
         const chunkSamples = acc.splice(0, samplesPerChunk);
-        // convert Float32 -> Int16
-        const int16 = new Int16Array(chunkSamples.length);
-        for (let i = 0; i < chunkSamples.length; i++) {
-          let s = Math.max(-1, Math.min(1, chunkSamples[i]));
-          int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        const buffer = int16.buffer;
-
-        // backpressure: pause sending if websocket bufferedAmount grows too large
+        const ab = floatToInt16Buffer(chunkSamples);
+        // client-local backpressure: prefer server throttle, but also watch bufferedAmount
         if (ws.bufferedAmount > MAX_BUFFERED_AMOUNT) {
+          // pause locally until buffered reduces
+          bufferedPause = true;
           paused = true;
-          log('Pausing sends; bufferedAmount=' + ws.bufferedAmount);
-          setTimeout(() => {
-            const checkResume = setInterval(() => {
-              if (!ws || ws.readyState !== WebSocket.OPEN) {
-                clearInterval(checkResume);
-                paused = false;
-                return;
-              }
-              if (ws.bufferedAmount <= RESUME_BUFFERED_AMOUNT) {
-                paused = false;
-                clearInterval(checkResume);
-                log('Resuming sends; bufferedAmount=' + ws.bufferedAmount);
-              }
-            }, 120);
-          }, 0);
+          log('Local pause: ws.bufferedAmount=' + ws.bufferedAmount);
+          const resumeCheck = setInterval(() => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+              clearInterval(resumeCheck);
+              bufferedPause = false;
+              paused = false;
+              return;
+            }
+            if (ws.bufferedAmount <= RESUME_BUFFERED_AMOUNT && !serverThrottled) {
+              clearInterval(resumeCheck);
+              bufferedPause = false;
+              paused = false;
+              log('Local resume: bufferedAmount=' + ws.bufferedAmount);
+            }
+          }, 120);
         }
 
         if (!paused) {
           try {
-            ws.send(buffer); // send raw ArrayBuffer (binary frame)
-            log('Sent chunk bytes=' + (int16.length*2) + ' samples=' + int16.length + ' buffered=' + ws.bufferedAmount);
+            ws.send(ab); // send raw ArrayBuffer binary frame
+            log('Sent chunk bytes=' + (ab.byteLength) + ' samples=' + (ab.byteLength/2) + ' buffered=' + ws.bufferedAmount);
           } catch (e) {
             console.error('WS send audio failed', e);
           }
         } else {
-          // if paused, re-insert chunk front so we don't lose
+          // if paused, put samples back front and break loop
           acc = chunkSamples.concat(acc);
           break;
         }
@@ -209,7 +221,7 @@ async function startStreaming() {
     };
 
     source.connect(processor);
-    // connect processor to destination to keep it running in some browsers
+    // connect processor to destination to keep the node alive in some browsers
     processor.connect(audioCtx.destination);
 
     window._hdAudio = { source, processor, audioCtx, stream };
@@ -247,6 +259,9 @@ async function stopStreaming() {
     log('Recording stopped');
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    paused = false;
+    serverThrottled = false;
+    bufferedPause = false;
   } catch(e) {
     log('stop error: ' + e);
   }
