@@ -50,6 +50,10 @@ BYTES_PER_SEC = STT_SAMPLE_RATE * 2
 CHUNK_BYTES = int(BYTES_PER_SEC * CHUNK_SECONDS)
 MAX_BUFFER_BYTES = int(BYTES_PER_SEC * MAX_BUFFER_SECONDS)
 
+# TTS/streaming tuning
+STREAM_SENTENCE_CHAR_LIMIT = int(os.getenv("HD_WS_SENTENCE_CHAR_LIMIT", "240"))
+TTS_WORKER_IDLE_TIMEOUT = float(os.getenv("HD_WS_TTS_WORKER_IDLE", "60.0"))
+
 executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
 global_tts_semaphore = asyncio.BoundedSemaphore(MAX_CONCURRENT_TTS)
 
@@ -78,7 +82,6 @@ VOICE_MAP = {
 }
 DEFAULT_VOICE = VOICE_MAP["en-IN"]
 
-
 def get_best_voice(language_code: Optional[str]):
     if not language_code:
         return ("en-IN", DEFAULT_VOICE["name"], DEFAULT_VOICE.get("gender"))
@@ -92,7 +95,6 @@ def get_best_voice(language_code: Optional[str]):
         v = VOICE_MAP.get(f, DEFAULT_VOICE)
         return (f, v["name"], v.get("gender"))
     return ("en-IN", DEFAULT_VOICE["name"], DEFAULT_VOICE.get("gender"))
-
 
 def ssml_for_text(text: str, sentiment: float = 0.0, prosody_rate: float = 0.95) -> str:
     """Enhanced SSML with emotional intelligence"""
@@ -124,7 +126,6 @@ def ssml_for_text(text: str, sentiment: float = 0.0, prosody_rate: float = 0.95)
 
     return f"<speak><prosody rate='{rate}' pitch='{pitch}' volume='{volume}'>{esc}</prosody></speak>"
 
-
 def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -134,13 +135,11 @@ def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
 
-
 def is_silence(pcm16: bytes, threshold: int = VAD_THRESHOLD) -> bool:
     try:
         return audioop.rms(pcm16, 2) < threshold
     except Exception:
         return False
-
 
 # ================== TTS Synthesis ==================
 def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: Optional[str], sample_rate_hz: int = 24000):
@@ -151,7 +150,6 @@ def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: O
     )
     synthesis_input = tts.SynthesisInput(ssml=ssml)
     return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
-
 
 async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample_rate_hz: int = 24000, sentiment: float = 0.0) -> Optional[bytes]:
     ssml = ssml_for_text(text, sentiment=sentiment, prosody_rate=0.95)
@@ -180,7 +178,6 @@ async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample
         except Exception:
             pass
 
-
 # ================== Query Normalization ==================
 _CONTRACTIONS = {
     r"\bwhat's\b": "what is",
@@ -194,7 +191,6 @@ _CONTRACTIONS = {
     r"\bdidn't\b": "did not",
     r"\bisn't\b": "is not",
 }
-
 
 def normalize_and_expand_query(transcript: str) -> str:
     if not transcript:
@@ -252,7 +248,6 @@ def normalize_and_expand_query(transcript: str) -> str:
         i += 1
 
     return " ".join(out)
-
 
 # ================== STT Worker ==================
 def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
@@ -326,7 +321,6 @@ def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Q
     finally:
         logger.info("STT worker exiting (language=%s)", language_code)
 
-
 # ================== Advanced Metrics ==================
 METRICS = {
     "requests": 0,
@@ -339,27 +333,21 @@ METRICS = {
     "errors": defaultdict(int),
 }
 
-
 def record_metric_intent(intent: str):
     if intent:
         METRICS["intent_counts"][intent] += 1
 
-
 def record_metric_sentiment(s: float):
     METRICS["sentiments"].append(s)
-
 
 def record_metric_confidence(c: float):
     METRICS["confidences"].append(c)
 
-
 def record_latency(ms: float):
     METRICS["response_times_ms"].append(ms)
 
-
 def record_error(error_type: str):
     METRICS["errors"][error_type] += 1
-
 
 # ================== Advanced Sentiment Analysis ==================
 _POS_WORDS = {
@@ -378,7 +366,6 @@ _INTENSITY_MODIFIERS = {
     "very": 1.5, "really": 1.5, "extremely": 2.0, "super": 1.8,
     "somewhat": 0.6, "slightly": 0.5, "kind of": 0.6, "a bit": 0.5
 }
-
 
 def advanced_sentiment_score(text: str) -> float:
     """Enhanced sentiment analysis with intensity modifiers and context"""
@@ -420,7 +407,6 @@ def advanced_sentiment_score(text: str) -> float:
 
     return max(-1.0, min(1.0, sentiment))
 
-
 # ================== Helper Functions ==================
 def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
     """Robust JSON extraction from LLM response"""
@@ -448,7 +434,6 @@ def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
 
-
 def calculate_rag_confidence(results: List[Dict]) -> float:
     """Calculate confidence from RAG search results"""
     if not results:
@@ -473,7 +458,6 @@ def calculate_rag_confidence(results: List[Dict]) -> float:
         return confidence
     except Exception:
         return 0.0
-
 
 # ================== Intelligent Intent Classification ==================
 async def classify_query_intent(text: str, rag_available: bool) -> Dict[str, Any]:
@@ -513,7 +497,6 @@ async def classify_query_intent(text: str, rag_available: bool) -> Dict[str, Any
 
     # Default to conversational
     return {"type": "conversational", "confidence": 0.6}
-
 
 # ================== Context-Aware Response Generation ==================
 async def generate_contextual_response(
@@ -652,7 +635,6 @@ async def generate_contextual_response(
             logger.exception("Conversational response failed: %s", e)
             return ("I'm happy to chat, but I'm having some technical difficulties. Could you try asking me again?", 0.0, {"intent": "conversational", "error": True})
 
-
 # ================== Streaming LLM Implementation ==================
 def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue: asyncio.Queue, stop_evt: threading.Event):
     """Thread worker for streaming LLM tokens"""
@@ -681,16 +663,16 @@ def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue: a
         except Exception:
             pass
 
-
 async def run_streaming_response(
     user_text: str,
     language_code: str,
     conversation_history: deque,
     ws: WebSocket,
-    send_tts_callback
+    tts_queue: Optional[asyncio.Queue] = None
 ) -> Tuple[str, float]:
     """
-    Stream LLM response with progressive TTS generation
+    Stream LLM response with progressive TTS generation.
+    Uses tts_queue (asyncio.Queue) to enqueue sentences for sequential TTS worker.
     Returns: (full_text, sentiment)
     """
     loop = asyncio.get_running_loop()
@@ -738,7 +720,7 @@ async def run_streaming_response(
             full_text += chunk
             sentence_buffer += chunk
 
-            # Detect complete sentences
+            # Detect complete sentences: punctuation OR newline OR char limit
             sentences = re.split(r'(?<=[.!?])\s+', sentence_buffer)
 
             if len(sentences) > 1:
@@ -746,28 +728,36 @@ async def run_streaming_response(
                 sentence_buffer = sentences[-1]
             else:
                 complete_sentences = []
+                if len(sentence_buffer) >= STREAM_SENTENCE_CHAR_LIMIT or "\n" in sentence_buffer:
+                    split_at = None
+                    if len(sentence_buffer) >= STREAM_SENTENCE_CHAR_LIMIT:
+                        split_at = sentence_buffer.rfind(" ", 0, STREAM_SENTENCE_CHAR_LIMIT)
+                    if split_at is None or split_at <= 0:
+                        split_at = STREAM_SENTENCE_CHAR_LIMIT
+                    complete_sentences = [sentence_buffer[:split_at].strip()]
+                    sentence_buffer = sentence_buffer[split_at:].strip()
 
-            # Send completed sentences to TTS
+            # Enqueue completed sentences to serial TTS queue
             for sentence in complete_sentences:
                 sentence = sentence.strip()
                 if not sentence:
                     continue
-
                 sent_score = advanced_sentiment_score(sentence)
-
-                # Send first sentence immediately, others in background
-                if not first_sentence_sent:
-                    first_sentence_sent = True
-                    logger.info(f"📢 First sentence ready: {sentence[:50]}...")
-                    await send_tts_callback(sentence, language_code=language_code, sentiment=sent_score)
+                if tts_queue:
+                    # Put into serial TTS queue (worker will synthesize sequentially)
+                    await tts_queue.put({"text": sentence, "language": language_code, "sentiment": sent_score})
                 else:
-                    asyncio.create_task(send_tts_callback(sentence, language_code=language_code, sentiment=sent_score))
+                    # fallback direct call (keeps compatibility)
+                    await asyncio.create_task(send_tts_and_audio(sentence, language_code=language_code, sentiment=sent_score))
 
         # Send any remaining text in buffer
         remaining = sentence_buffer.strip()
         if remaining:
             sent_score = advanced_sentiment_score(remaining)
-            await send_tts_callback(remaining, language_code=language_code, sentiment=sent_score)
+            if tts_queue:
+                await tts_queue.put({"text": remaining, "language": language_code, "sentiment": sent_score})
+            else:
+                await asyncio.create_task(send_tts_and_audio(remaining, language_code=language_code, sentiment=sent_score))
 
         # Calculate overall sentiment
         overall_sentiment = advanced_sentiment_score(full_text)
@@ -789,6 +779,71 @@ async def run_streaming_response(
         except Exception:
             pass
 
+# ================== Serial TTS Worker (per-connection) ==================
+async def _tts_worker_loop(ws: WebSocket, queue: asyncio.Queue):
+    """
+    Consume sentence items sequentially and synthesize/send audio.
+    Each item is dict: {"text": str, "language": str, "sentiment": float}
+    """
+    current_task: Optional[asyncio.Task] = None
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=TTS_WORKER_IDLE_TIMEOUT)
+            except asyncio.TimeoutError:
+                # idle timeout -> exit worker
+                break
+
+            if item is None:
+                break
+
+            text = item.get("text", "")
+            language = item.get("language", "en-IN")
+            sentiment = item.get("sentiment", 0.0)
+
+            async def _do_one():
+                pcm = await synthesize_text_to_pcm(text, language_code=language, sample_rate_hz=24000, sentiment=sentiment)
+                if not pcm:
+                    try:
+                        await ws.send_text(json.dumps({"type": "error", "error": "tts_failed"}))
+                    except Exception:
+                        pass
+                    return
+                wav_bytes = make_wav_from_pcm16(pcm, sample_rate=24000)
+                b64wav = base64.b64encode(wav_bytes).decode("ascii")
+                try:
+                    await ws.send_text(json.dumps({"type": "audio", "audio": b64wav, "metadata": {"sentiment": sentiment, "length": len(text)}}))
+                except Exception:
+                    pass
+
+            current_task = asyncio.create_task(_do_one())
+            try:
+                await current_task
+            except asyncio.CancelledError:
+                # cancelled by barge-in or shutdown
+                if current_task and not current_task.done():
+                    try:
+                        current_task.cancel()
+                    except Exception:
+                        pass
+                raise
+            finally:
+                current_task = None
+    except asyncio.CancelledError:
+        # worker cancelled externally
+        pass
+    except Exception:
+        logger.exception("TTS worker loop crashed")
+    finally:
+        # drain queue (asyncio.Queue)
+        try:
+            while not queue.empty():
+                try:
+                    _ = queue.get_nowait()
+                except Exception:
+                    break
+        except Exception:
+            pass
 
 # ================== WebSocket Handler ==================
 @router.websocket("/ws/hd-audio")
@@ -834,8 +889,12 @@ async def hd_audio_ws(ws: WebSocket):
     session_start = time.time()
     session_id = f"session_{int(session_start)}"
 
+    # per-connection TTS queue + worker
+    tts_queue: asyncio.Queue = asyncio.Queue()
+    _tts_worker_task: Optional[asyncio.Task] = asyncio.create_task(_tts_worker_loop(ws, tts_queue))
+
     async def _do_tts_and_send(ai_text: str, language_code: str, sentiment: float):
-        """Internal TTS generation and transmission"""
+        """Internal TTS generation and transmission (kept for compatibility)"""
         nonlocal is_bot_speaking, current_tts_task
 
         try:
@@ -868,7 +927,10 @@ async def hd_audio_ws(ws: WebSocket):
                 except Exception as e:
                     logger.error(f"Failed to send audio: {e}")
             else:
-                await ws.send_text(json.dumps({"type": "error", "error": "tts_failed"}))
+                try:
+                    await ws.send_text(json.dumps({"type": "error", "error": "tts_failed"}))
+                except Exception:
+                    pass
 
         except asyncio.CancelledError:
             logger.info("TTS task cancelled (barge-in)")
@@ -885,7 +947,7 @@ async def hd_audio_ws(ws: WebSocket):
             current_tts_task = None
 
     async def send_tts_and_audio(ai_text: str, language_code: str, sentiment: float = 0.0):
-        """Public TTS interface with cancellation support"""
+        """Public TTS interface with cancellation support (kept for non-streaming code paths)"""
         nonlocal current_tts_task
 
         if current_tts_task and not current_tts_task.done():
@@ -949,6 +1011,8 @@ async def hd_audio_ws(ws: WebSocket):
             logger.info(f"🎯 Intent classified: {intent_info}")
 
             # Step 3: Generate contextual response using Gemini
+            # For streaming-capable responses, we could route to run_streaming_response and let it push to tts_queue.
+            # For simplicity here, we keep using generate_contextual_response (non-streaming) for final utterances.
             response_text, sentiment, metadata = await generate_contextual_response(
                 user_text=user_text,
                 language_code=language,
@@ -991,8 +1055,8 @@ async def hd_audio_ws(ws: WebSocket):
             except Exception as e:
                 logger.error(f"Failed to send response text: {e}")
 
-            # Generate and send TTS
-            await send_tts_and_audio(response_text, language_code=language, sentiment=sentiment)
+            # Generate and send TTS using serial queue to avoid races
+            await tts_queue.put({"text": response_text, "language": language, "sentiment": sentiment})
 
             # Record latency
             latency_ms = time.time() * 1000 - start_ms
@@ -1011,7 +1075,7 @@ async def hd_audio_ws(ws: WebSocket):
                     "text": error_msg,
                     "metadata": {"error": True}
                 }))
-                await send_tts_and_audio(error_msg, language_code=language, sentiment=0.0)
+                await tts_queue.put({"text": error_msg, "language": language, "sentiment": 0.0})
             except:
                 pass
 
@@ -1042,7 +1106,7 @@ async def hd_audio_ws(ws: WebSocket):
     async def process_transcripts_task():
         """Process streaming STT transcripts"""
         nonlocal language, utterance_buffer, pending_debounce_task, is_bot_speaking
-        nonlocal current_tts_task, current_stream_stop_event
+        nonlocal current_tts_task, current_stream_stop_event, _tts_worker_task, tts_queue
 
         while True:
             resp = await transcripts_queue.get()
@@ -1084,6 +1148,25 @@ async def hd_audio_ws(ws: WebSocket):
                             current_stream_stop_event.set()
                         except Exception:
                             pass
+
+                    # Clear serial TTS queue (drop pending sentences)
+                    try:
+                        while not tts_queue.empty():
+                            try:
+                                _ = tts_queue.get_nowait()
+                            except Exception:
+                                break
+                    except Exception:
+                        pass
+
+                    # Cancel and restart TTS worker to ensure all in-flight synthesis stops
+                    if _tts_worker_task and not _tts_worker_task.done():
+                        try:
+                            _tts_worker_task.cancel()
+                        except Exception:
+                            pass
+                    # start fresh worker
+                    _tts_worker_task = asyncio.create_task(_tts_worker_loop(ws, tts_queue))
 
                     is_bot_speaking = False
 
@@ -1136,9 +1219,7 @@ async def hd_audio_ws(ws: WebSocket):
 
         logger.info(f"🎤 Session {session_id} ready")
 
-        # ----------------------
         # Main WebSocket message loop (robust: supports text and binary frames)
-        # ----------------------
         while True:
             msg = await ws.receive()  # returns dict with 'type' and optionally 'text' or 'bytes' keys
 
@@ -1288,7 +1369,7 @@ async def hd_audio_ws(ws: WebSocket):
                 else:
                     try:
                         await ws.send_text(json.dumps({"type": "error", "error": "unknown_type"}))
-                    except:
+                    except Exception:
                         pass
 
             # Binary frame (raw audio from client)
@@ -1335,6 +1416,21 @@ async def hd_audio_ws(ws: WebSocket):
 
         try:
             transcripts_queue.put_nowait(None)
+        except Exception:
+            pass
+
+        # Stop TTS worker gracefully
+        try:
+            # signal worker to stop
+            try:
+                await tts_queue.put(None)
+            except Exception:
+                pass
+            if _tts_worker_task and not _tts_worker_task.done():
+                try:
+                    _tts_worker_task.cancel()
+                except Exception:
+                    pass
         except Exception:
             pass
 
