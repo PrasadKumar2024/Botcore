@@ -1,6 +1,3 @@
-
-# app/routes/hd_audio_ws.py
-
 import os
 import io
 import json
@@ -20,11 +17,12 @@ from datetime import datetime
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from google.cloud import speech_v1 as speech
 from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
 from google.api_core import exceptions as google_exceptions
+import google.generativeai as genai  # Updated import
 
 # Local services
 from app.services.pinecone_service import pinecone_service
@@ -33,7 +31,7 @@ from app.services.gemini_service import GeminiService
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ================== Enhanced Configuration ==================
+# ================== Configuration ==================
 EXECUTOR_WORKERS = int(os.getenv("HD_WS_EXECUTOR_WORKERS", "12"))
 MAX_CONCURRENT_TTS = int(os.getenv("HD_WS_MAX_TTS", "6"))
 MAX_CONCURRENT_STT = int(os.getenv("HD_WS_MAX_STT", "4"))
@@ -48,14 +46,10 @@ CHUNK_SECONDS = float(os.getenv("HD_WS_CHUNK_SECONDS", "0.32"))
 MAX_BUFFER_SECONDS = int(os.getenv("HD_WS_MAX_BUFFER_S", "15"))
 WEBSOCKET_API_TOKEN = os.getenv("WEBSOCKET_API_TOKEN", None)
 
-# Advanced audio processing
+# Audio processing
 VOICE_ACTIVITY_RMS_THRESHOLD = int(os.getenv("HD_WS_VAD_THRESHOLD", "250"))
 MIN_SPEECH_DURATION = float(os.getenv("HD_WS_MIN_SPEECH_DURATION", "0.3"))
-MAX_SILENCE_DURATION = float(os.getenv("HD_WS_MAX_SILENCE", "1.2"))
-
-# Emotional intelligence
-EMOTION_SMOOTHING_WINDOW = int(os.getenv("HD_WS_EMOTION_WINDOW", "5"))
-ENABLE_REAL_TIME_EMOTION = os.getenv("HD_WS_ENABLE_REAL_TIME_EMOTION", "true").lower() == "true"
+MAX_SILENCE_DURATION = float(os.getenv("HD_WS_MAX_SILENCE", "1.5"))
 
 # Business persona
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "BrightCare")
@@ -63,17 +57,12 @@ BUSINESS_TYPE = os.getenv("BUSINESS_TYPE", "healthcare")
 ASSISTANT_PERSONA = os.getenv("ASSISTANT_PERSONA", "friendly and professional assistant")
 DEFAULT_CLIENT_ID = os.getenv("DEFAULT_CLIENT_ID", "default")
 
-# ================== Advanced Constants ==================
+# ================== Constants ==================
 BYTES_PER_SEC = STT_SAMPLE_RATE * 2
 CHUNK_BYTES = int(BYTES_PER_SEC * CHUNK_SECONDS)
 MAX_BUFFER_BYTES = int(BYTES_PER_SEC * MAX_BUFFER_SECONDS)
 
-# Enhanced TTS parameters
 TTS_SAMPLE_RATE = 24000
-TTS_VOICE_TEMPO = float(os.getenv("HD_WS_TTS_TEMPO", "1.0"))
-TTS_EMOTION_MODULATION = float(os.getenv("HD_WS_EMOTION_MOD", "0.8"))
-
-# Streaming & conversational
 MAX_CONVERSATION_TURNS = 20
 MIN_RESPONSE_WORDS = 5
 MAX_RESPONSE_WORDS = 100
@@ -94,48 +83,49 @@ try:
     _creds = service_account.Credentials.from_service_account_info(_creds_info)
     _speech_client = speech.SpeechClient(credentials=_creds)
     _tts_client = tts.TextToSpeechClient(credentials=_creds)
+    logger.info("✅ Google Cloud Speech/TTS clients initialized")
 except Exception as e:
     logger.error(f"Failed to initialize Google clients: {e}")
     raise
 
-# ================== Enhanced Voice Configuration ==================
+# ================== Voice Configuration ==================
 VOICE_MAP = {
     "en-IN": {
         "name": "en-IN-Neural2-C",
         "gender": "MALE",
         "tempo": 1.0,
-        "pitch_range": "+2st",
+        "pitch_range": 0.0,  # Changed from string to float
         "emotion_sensitivity": 0.9
     },
     "en-US": {
         "name": "en-US-Neural2-F",
         "gender": "FEMALE", 
         "tempo": 1.05,
-        "pitch_range": "+3st",
+        "pitch_range": 0.8,  # Changed from string to float
         "emotion_sensitivity": 0.95
     },
     "en-GB": {
         "name": "en-GB-Neural2-B",
         "gender": "MALE",
         "tempo": 0.98,
-        "pitch_range": "+1.5st",
+        "pitch_range": 0.3,  # Changed from string to float
         "emotion_sensitivity": 0.85
     },
     "hi-IN": {
         "name": "hi-IN-Neural2-A",
         "gender": "FEMALE",
         "tempo": 1.02,
-        "pitch_range": "+2.5st",
+        "pitch_range": 0.5,  # Changed from string to float
         "emotion_sensitivity": 0.92
     }
 }
 
 DEFAULT_VOICE = VOICE_MAP["en-IN"]
 
-# ================== Enhanced Emotional Intelligence System ==================
+# ================== Emotional Intelligence System ==================
 
 class EmotionalIntelligence:
-    """Advanced emotional intelligence for natural conversation"""
+    """Emotional intelligence for natural conversation"""
     
     EMOTION_CATEGORIES = {
         "joy": {"keywords": ["happy", "great", "wonderful", "excited", "love", "thanks"], "intensity": 1.2},
@@ -155,7 +145,7 @@ class EmotionalIntelligence:
     
     @staticmethod
     def analyze_emotion(text: str) -> Dict[str, Any]:
-        """Deep emotional analysis of text"""
+        """Analyze emotion from text"""
         if not text:
             return {"primary": "neutral", "intensity": 0.0, "confidence": 0.0}
         
@@ -163,7 +153,6 @@ class EmotionalIntelligence:
         words = text_lower.split()
         
         emotion_scores = defaultdict(float)
-        context_window = []
         
         for i, word in enumerate(words):
             # Check for emotion modifiers
@@ -181,7 +170,6 @@ class EmotionalIntelligence:
         # Check for negations
         has_negation = any(neg in text_lower for neg in EmotionalIntelligence.NEGATION_WORDS)
         if has_negation:
-            # Invert emotion scores for negative contexts
             for emotion in emotion_scores:
                 emotion_scores[emotion] *= -0.8
         
@@ -213,36 +201,36 @@ class EmotionalIntelligence:
         patterns = {
             "joy": {
                 "tts_rate": 1.05 + (intensity * 0.05),
-                "tts_pitch": "+2st" if intensity > 0 else "0st",
-                "tts_volume": "loud" if intensity > 0.5 else "medium",
+                "tts_pitch": 0.5 + (intensity * 0.2),  # Float value
+                "tts_volume": 0.8,
                 "response_style": "enthusiastic and warm",
                 "empathy_level": 0.7
             },
             "sadness": {
                 "tts_rate": 0.92 - (abs(intensity) * 0.03),
-                "tts_pitch": "-1st" if intensity < -0.3 else "0st",
-                "tts_volume": "soft",
+                "tts_pitch": -0.3 + (intensity * 0.1),  # Float value
+                "tts_volume": 0.7,
                 "response_style": "compassionate and understanding",
                 "empathy_level": 0.9
             },
             "anger": {
                 "tts_rate": 0.95,
-                "tts_pitch": "0st",
-                "tts_volume": "medium",
+                "tts_pitch": 0.0,
+                "tts_volume": 0.8,
                 "response_style": "calm and professional",
                 "empathy_level": 0.8
             },
             "fear": {
                 "tts_rate": 1.0,
-                "tts_pitch": "+1st",
-                "tts_volume": "medium",
+                "tts_pitch": 0.2,
+                "tts_volume": 0.75,
                 "response_style": "reassuring and clear",
                 "empathy_level": 0.85
             },
             "neutral": {
                 "tts_rate": 1.0,
-                "tts_pitch": "0st",
-                "tts_volume": "medium",
+                "tts_pitch": 0.0,
+                "tts_volume": 0.8,
                 "response_style": "professional and helpful",
                 "empathy_level": 0.6
             }
@@ -276,37 +264,25 @@ def create_emotional_ssml(text: str, emotion_data: Dict[str, Any],
     for pattern, replacement in pause_patterns:
         processed_text = processed_text.replace(pattern, replacement)
     
-    # Emotional prosody
-    rate = emotion_pattern["tts_rate"]
-    pitch = emotion_pattern["tts_pitch"]
-    volume = emotion_pattern["tts_volume"]
-    
-    # Add slight variations for naturalness
-    rate_variation = random.uniform(-0.02, 0.02)
-    final_rate = rate + rate_variation
+    # Clean up SSML
+    processed_text = processed_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     
     # Build SSML with emotional intelligence
-    ssml = f"""
-    <speak>
-        <prosody rate="{final_rate:.2f}" pitch="{pitch}" volume="{volume}">
-            {processed_text}
-        </prosody>
-        <express-as type="{emotion_pattern['response_style'].split()[0]}">
-            <prosody rate="{final_rate:.2f}">
-                {processed_text}
-            </prosody>
-        </express-as>
-    </speak>
-    """
+    ssml = f"""<speak>
+    <prosody rate="{emotion_pattern['tts_rate']:.2f}" 
+             pitch="{emotion_pattern['tts_pitch']:.1f}st" 
+             volume="{emotion_pattern['tts_volume']}">
+        {processed_text}
+    </prosody>
+    </speak>"""
     
-    # Clean up SSML
     ssml = re.sub(r'\s+', ' ', ssml).strip()
     return ssml
 
-# ================== Advanced Audio Processing ==================
+# ================== Audio Processing ==================
 
-class AdvancedVAD:
-    """Advanced Voice Activity Detection with adaptive thresholding"""
+class VoiceActivityDetector:
+    """Voice Activity Detection"""
     
     def __init__(self, initial_threshold=VOICE_ACTIVITY_RMS_THRESHOLD):
         self.threshold = initial_threshold
@@ -316,22 +292,8 @@ class AdvancedVAD:
         self.state_duration = 0.0
         self.last_change_time = time.time()
         
-    def update_threshold(self, rms_value: float, is_speech: bool):
-        """Adaptive threshold update"""
-        if is_speech:
-            self.speech_history.append(rms_value)
-        else:
-            self.silence_history.append(rms_value)
-        
-        # Update threshold based on recent history
-        if len(self.silence_history) > 10 and len(self.speech_history) > 5:
-            avg_silence = np.mean(list(self.silence_history)[-10:])
-            avg_speech = np.mean(list(self.speech_history)[-5:])
-            new_threshold = (avg_silence * 0.3 + avg_speech * 0.7) * 0.5
-            self.threshold = max(100, min(500, new_threshold))
-    
     def detect(self, pcm16_data: bytes) -> Tuple[bool, float]:
-        """Detect speech with state machine"""
+        """Detect speech in audio data"""
         try:
             rms = audioop.rms(pcm16_data, 2)
         except Exception:
@@ -341,7 +303,7 @@ class AdvancedVAD:
         time_since_change = current_time - self.last_change_time
         
         # Update state
-        if rms > self.threshold * 1.2:
+        if rms > self.threshold:
             if self.state == "silence":
                 if time_since_change > 0.05:  # Debounce
                     self.state = "speech"
@@ -351,114 +313,111 @@ class AdvancedVAD:
                 self.state_duration += time_since_change
         else:
             if self.state == "speech":
-                if time_since_change > MAX_SILENCE_DURATION:
+                if self.state_duration > MIN_SPEECH_DURATION and time_since_change > MAX_SILENCE_DURATION:
                     self.state = "silence"
                     self.last_change_time = current_time
                     self.state_duration = 0.0
         
         # Update threshold
-        is_speech_detected = (rms > self.threshold)
-        self.update_threshold(rms, is_speech_detected)
+        is_speech = (rms > self.threshold)
+        if is_speech:
+            self.speech_history.append(rms)
+        else:
+            self.silence_history.append(rms)
         
-        return is_speech_detected, rms
+        # Adaptive threshold
+        if len(self.silence_history) > 10 and len(self.speech_history) > 5:
+            avg_silence = np.mean(list(self.silence_history)[-10:])
+            avg_speech = np.mean(list(self.speech_history)[-5:])
+            new_threshold = (avg_silence * 0.3 + avg_speech * 0.7) * 0.5
+            self.threshold = max(100, min(500, new_threshold))
+        
+        return is_speech, rms
 
-# ================== Enhanced STT with Context Awareness ==================
+# ================== STT Service ==================
 
-class ContextAwareSTT:
-    """STT with context awareness and improved accuracy"""
+class STTService:
+    """Speech-to-Text Service"""
     
     def __init__(self, language_code: str = "en-IN"):
         self.language_code = language_code
-        self.context_phrases = []
-        self.last_transcript = ""
-        self.confidence_history = deque(maxlen=10)
         
     def get_streaming_config(self) -> speech.StreamingRecognitionConfig:
-        """Get enhanced streaming configuration"""
+        """Get streaming recognition configuration"""
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=STT_SAMPLE_RATE,
             language_code=self.language_code,
             enable_automatic_punctuation=True,
             enable_word_confidence=True,
-            enable_word_time_offsets=True,
-            model="latest_long" if self.language_code.startswith("en") else "default",
+            model="latest_long",
             use_enhanced=True,
-            speech_contexts=[speech.SpeechContext(phrases=self.context_phrases)] if self.context_phrases else None
         )
         
         streaming_config = speech.StreamingRecognitionConfig(
             config=config,
             interim_results=True,
             single_utterance=False,
-            enable_voice_activity_events=True,
-            voice_activity_timeout={
-                "speech_start_timeout": {"seconds": 0},
-                "speech_end_timeout": {"seconds": 1}
-            }
         )
         
         return streaming_config
     
-    def update_context(self, conversation_history: deque):
-        """Update context phrases from conversation history"""
-        recent_phrases = []
-        for entry in list(conversation_history)[-3:]:
-            if entry[0] == "assistant":
-                # Extract key phrases from assistant responses
-                text = entry[1]
-                words = text.lower().split()
-                # Add 2-3 word phrases
-                for i in range(len(words) - 1):
-                    phrase = f"{words[i]} {words[i+1]}"
-                    if len(phrase) < 20:
-                        recent_phrases.append(phrase)
+    def create_request_generator(self, audio_queue: queue.Queue, stop_event: threading.Event):
+        """Create request generator for streaming recognition"""
+        # First request contains the config
+        yield speech.StreamingRecognizeRequest(streaming_config=self.get_streaming_config())
         
-        self.context_phrases = list(set(recent_phrases))[:20]  # Limit to 20 phrases
+        # Then yield audio chunks
+        while not stop_event.is_set():
+            try:
+                chunk = audio_queue.get(timeout=0.5)
+                if chunk is None:  # Sentinel for shutdown
+                    break
+                yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error getting audio chunk: {e}")
+                break
 
-# ================== Natural Language Understanding System ==================
+# ================== Natural Language Understanding ==================
 
 class NLUSystem:
-    """Advanced Natural Language Understanding System"""
+    """Natural Language Understanding System"""
     
     def __init__(self, gemini_service: GeminiService):
         self.gemini = gemini_service
         
     async def understand_intent(self, text: str, context: List[Dict]) -> Dict[str, Any]:
-        """Advanced intent understanding using Gemini"""
+        """Understand intent using Gemini"""
         try:
             # Build context string
             context_str = "\n".join([
-                f"{'User' if ctx['role'] == 'user' else 'Assistant'}: {ctx['text']}"
-                for ctx in context[-5:]  # Last 5 turns
-            ])
+                f"{ctx['role']}: {ctx['text']}"
+                for ctx in context[-5:]
+            ]) if context else "No previous context"
             
             prompt = f"""
             Analyze this user message and determine:
             1. Primary intent (greeting, question, command, complaint, inquiry, feedback, other)
-            2. Sub-intent (service-related, personal, informational, transactional)
-            3. Key entities mentioned
-            4. Urgency level (1-5)
-            5. Emotional tone
+            2. Key entities mentioned
+            3. Urgency level (1-5)
+            4. Emotional tone
             
             Context:
             {context_str}
             
             User: {text}
             
-            Respond in JSON format with keys: primary_intent, sub_intent, entities, urgency, emotional_tone, confidence
+            Respond in JSON format with: primary_intent, entities, urgency, emotional_tone, confidence
             """
             
-            async with llm_semaphore:
-                response = await asyncio.wait_for(
-                    self.gemini.generate_response(
-                        prompt=prompt,
-                        system_message="You are an expert NLU system. Be precise and analytical.",
-                        temperature=0.1,
-                        max_tokens=200
-                    ),
-                    timeout=LLM_TIMEOUT
-                )
+            response = await self.gemini.generate_response(
+                prompt=prompt,
+                system_message="You are an expert NLU system. Be precise.",
+                temperature=0.1,
+                max_tokens=200
+            )
             
             # Parse JSON response
             try:
@@ -467,7 +426,6 @@ class NLUSystem:
                 # Fallback parsing
                 result = {
                     "primary_intent": "question",
-                    "sub_intent": "informational",
                     "entities": [],
                     "urgency": 3,
                     "emotional_tone": "neutral",
@@ -480,44 +438,11 @@ class NLUSystem:
             logger.error(f"NLU error: {e}")
             return {
                 "primary_intent": "question",
-                "sub_intent": "informational",
                 "entities": [],
                 "urgency": 3,
                 "emotional_tone": "neutral",
                 "confidence": 0.5
             }
-    
-    async def extract_entities(self, text: str) -> List[Dict[str, Any]]:
-        """Extract entities using Gemini"""
-        prompt = f"""
-        Extract all important entities from this text. Include:
-        - People/Names
-        - Dates/Times
-        - Locations
-        - Services/Products
-        - Problems/Issues
-        - Emotions/Sentiments
-        
-        Text: {text}
-        
-        Return as JSON list of entities with type and value.
-        """
-        
-        try:
-            response = await asyncio.wait_for(
-                self.gemini.generate_response(
-                    prompt=prompt,
-                    system_message="Extract entities accurately.",
-                    temperature=0.1,
-                    max_tokens=150
-                ),
-                timeout=LLM_TIMEOUT
-            )
-            
-            entities = json.loads(response) if response.startswith("[") else []
-            return entities
-        except:
-            return []
 
 # ================== Natural Response Generation ==================
 
@@ -528,7 +453,6 @@ class NaturalResponseGenerator:
         self.gemini = gemini_service
         self.business_name = business_name
         self.persona = persona
-        self.conversation_style = "warm, professional, and helpful"
         
     async def generate_response(self, 
                                user_message: str,
@@ -536,22 +460,22 @@ class NaturalResponseGenerator:
                                context: List[Dict],
                                rag_results: Optional[List[Dict]] = None,
                                emotion_data: Optional[Dict] = None) -> Dict[str, Any]:
-        """Generate natural response with personality"""
+        """Generate natural response"""
         
         # Build conversation context
         context_str = "\n".join([
-            f"{'User' if ctx['role'] == 'user' else 'Assistant'}: {ctx['text']}"
-            for ctx in context[-6:]  # Last 6 turns
-        ])
+            f"{ctx['role']}: {ctx['text']}"
+            for ctx in context[-6:]
+        ]) if context else "No previous conversation"
         
         # Prepare knowledge base context
         kb_context = ""
-        if rag_results and intent.get("sub_intent") in ["service-related", "informational"]:
+        if rag_results and intent.get("primary_intent") in ["question", "inquiry"]:
             kb_context = "\n\nRelevant Information:\n"
             for i, result in enumerate(rag_results[:3], 1):
                 kb_context += f"{i}. {result.get('chunk_text', '')}\n"
         
-        # Build system prompt based on persona and emotion
+        # Build system message
         emotional_style = ""
         if emotion_data and emotion_data.get("primary") != "neutral":
             emotional_pattern = EmotionalIntelligence.get_emotional_response_pattern(
@@ -559,19 +483,15 @@ class NaturalResponseGenerator:
             )
             emotional_style = f" Respond in a {emotional_pattern['response_style']} manner."
         
-        system_message = f"""
-        You are {self.persona} for {self.business_name}. 
-        Your conversation style: {self.conversation_style}.{emotional_style}
+        system_message = f"""You are {self.persona} for {self.business_name}. 
+        Your conversation style: warm, professional, and helpful.{emotional_style}
         
         Guidelines:
-        1. Be natural and conversational, not robotic
-        2. Use contractions (I'm, you're, don't) when appropriate
-        3. Vary sentence structure and length
-        4. Show empathy and understanding
-        5. Be concise but complete
-        6. Use the user's name if mentioned
-        7. Acknowledge emotions when appropriate
-        8. End with a helpful question when relevant
+        1. Be natural and conversational
+        2. Show empathy and understanding
+        3. Be concise but complete
+        4. Use the user's name if mentioned
+        5. End with a helpful question when relevant
         """
         
         # Build prompt
@@ -589,35 +509,28 @@ class NaturalResponseGenerator:
         """
         
         try:
-            async with llm_semaphore:
-                response = await asyncio.wait_for(
-                    self.gemini.generate_response(
-                        prompt=prompt,
-                        system_message=system_message,
-                        temperature=0.7 + (emotion_data.get('intensity', 0) * 0.1 if emotion_data else 0),
-                        max_tokens=150
-                    ),
-                    timeout=LLM_TIMEOUT
-                )
+            response = await self.gemini.generate_response(
+                prompt=prompt,
+                system_message=system_message,
+                temperature=0.7 + (emotion_data.get('intensity', 0) * 0.1 if emotion_data else 0),
+                max_tokens=150
+            )
             
-            # Post-process response for naturalness
-            response = self._naturalize_response(response)
-            
-            # Calculate response metrics
-            word_count = len(response.split())
-            sentence_count = len(re.split(r'[.!?]+', response))
+            # Post-process response
+            response = response.strip()
+            if not response.endswith(('.', '!', '?')):
+                response = response + '.'
             
             return {
-                "text": response.strip(),
-                "word_count": word_count,
-                "sentence_count": sentence_count,
-                "style": emotional_style.strip() if emotional_style else "neutral",
-                "generation_time": time.time()
+                "text": response,
+                "word_count": len(response.split()),
+                "emotion": emotion_data,
+                "timestamp": time.time()
             }
             
         except Exception as e:
             logger.error(f"Response generation error: {e}")
-            # Fallback natural response
+            # Fallback responses
             fallbacks = [
                 "I understand. Let me help you with that.",
                 "Thanks for sharing that. Here's what I can tell you.",
@@ -627,44 +540,22 @@ class NaturalResponseGenerator:
             return {
                 "text": random.choice(fallbacks),
                 "word_count": 10,
-                "sentence_count": 1,
-                "style": "neutral",
-                "generation_time": time.time()
+                "emotion": {"primary": "neutral", "intensity": 0.0},
+                "timestamp": time.time()
             }
-    
-    def _naturalize_response(self, text: str) -> str:
-        """Apply natural language patterns"""
-        
-        # Remove AI markers
-        text = text.replace("AI:", "").replace("Assistant:", "").strip()
-        
-        # Add natural fillers occasionally (10% chance)
-        if random.random() < 0.1:
-            fillers = ["Well, ", "You know, ", "Actually, ", "So, "]
-            text = random.choice(fillers) + text
-        
-        # Ensure proper punctuation
-        if not text.endswith(('.', '!', '?')):
-            text = text.rstrip() + '.'
-        
-        # Capitalize first letter
-        text = text[0].upper() + text[1:] if text else text
-        
-        return text
 
-# ================== Conversation Memory System ==================
+# ================== Conversation Memory ==================
 
 class ConversationMemory:
-    """Advanced conversation memory with context retention"""
+    """Conversation memory with context retention"""
     
     def __init__(self, max_turns: int = 20):
         self.history = deque(maxlen=max_turns)
         self.user_preferences = {}
         self.mentioned_topics = set()
-        self.emotion_history = deque(maxlen=10)
         
     def add_turn(self, role: str, text: str, metadata: Optional[Dict] = None):
-        """Add conversation turn with metadata"""
+        """Add conversation turn"""
         entry = {
             "role": role,
             "text": text,
@@ -673,79 +564,31 @@ class ConversationMemory:
         }
         self.history.append(entry)
         
-        # Extract and store user preferences
+        # Extract user preferences
         if role == "user":
             self._extract_preferences(text)
-            self.mentioned_topics.update(self._extract_topics(text))
     
     def get_context(self, turns: int = 5) -> List[Dict]:
         """Get recent conversation context"""
         return list(self.history)[-turns:]
     
-    def get_summary(self) -> str:
-        """Get conversation summary"""
-        if len(self.history) < 3:
-            return "New conversation"
-        
-        summary_parts = []
-        user_messages = [entry["text"] for entry in self.history if entry["role"] == "user"]
-        
-        if user_messages:
-            topics = ", ".join(list(self.mentioned_topics)[:3])
-            summary_parts.append(f"User discussed: {topics}")
-        
-        if self.user_preferences:
-            prefs = ", ".join([f"{k}: {v}" for k, v in list(self.user_preferences.items())[:2]])
-            summary_parts.append(f"Preferences: {prefs}")
-        
-        return "; ".join(summary_parts) if summary_parts else "General conversation"
-    
     def _extract_preferences(self, text: str):
         """Extract user preferences from text"""
         text_lower = text.lower()
-        
-        # Simple preference extraction (can be enhanced)
         if "morning" in text_lower:
             self.user_preferences["time_preference"] = "morning"
         if "afternoon" in text_lower:
             self.user_preferences["time_preference"] = "afternoon"
         if "evening" in text_lower:
             self.user_preferences["time_preference"] = "evening"
-    
-    def _extract_topics(self, text: str) -> List[str]:
-        """Extract topics from text"""
-        topics = []
-        words = text.lower().split()
-        
-        # Common topic indicators
-        topic_keywords = {
-            "appointment": "scheduling",
-            "booking": "scheduling",
-            "schedule": "scheduling",
-            "price": "pricing",
-            "cost": "pricing",
-            "payment": "pricing",
-            "service": "services",
-            "product": "services",
-            "location": "location",
-            "address": "location",
-            "hours": "timing",
-            "time": "timing"
-        }
-        
-        for word in words:
-            if word in topic_keywords:
-                topics.append(topic_keywords[word])
-        
-        return list(set(topics))
 
-# ================== Enhanced TTS Synthesis ==================
+# ================== TTS Synthesis ==================
 
 async def synthesize_with_emotion(text: str, 
                                  language_code: str = "en-IN",
                                  emotion_data: Optional[Dict] = None,
                                  voice_config: Optional[Dict] = None) -> Optional[bytes]:
-    """Enhanced TTS synthesis with emotional intelligence"""
+    """TTS synthesis with emotional intelligence"""
     
     # Get voice configuration
     if voice_config is None:
@@ -764,14 +607,12 @@ async def synthesize_with_emotion(text: str,
         ssml_gender=tts.SsmlVoiceGender.MALE if voice_config.get("gender") == "MALE" else tts.SsmlVoiceGender.FEMALE
     )
     
-    # Audio configuration with enhancements
+    # Audio configuration - FIXED: Using float for pitch
     audio_config = tts.AudioConfig(
         audio_encoding=tts.AudioEncoding.LINEAR16,
         sample_rate_hertz=TTS_SAMPLE_RATE,
-        speaking_rate=voice_config.get("tempo", 1.0),
-        pitch=voice_config.get("pitch_range", "0st"),
-        volume_gain_db=0.0,
-        effects_profile_id=["small-bluetooth-speaker-class-device"]  # Better for voice
+        speaking_rate=float(voice_config.get("tempo", 1.0)),  # Ensure float
+        pitch=float(voice_config.get("pitch_range", 0.0)),    # Ensure float
     )
     
     synthesis_input = tts.SynthesisInput(ssml=ssml_text)
@@ -809,7 +650,7 @@ def create_wav_from_pcm(pcm_bytes: bytes, sample_rate: int = TTS_SAMPLE_RATE) ->
 
 @router.websocket("/ws/hd-audio")
 async def hd_audio_websocket(websocket: WebSocket):
-    """Enhanced WebSocket handler for natural voice conversations"""
+    """WebSocket handler for voice conversations"""
     
     # Authentication
     token = websocket.query_params.get("token")
@@ -818,9 +659,9 @@ async def hd_audio_websocket(websocket: WebSocket):
         return
     
     await websocket.accept()
-    logger.info("New HD voice connection established")
+    logger.info("✅ New HD voice connection established")
     
-    # Initialize systems
+    # Initialize services
     gemini_service = GeminiService()
     nlu_system = NLUSystem(gemini_service)
     response_generator = NaturalResponseGenerator(
@@ -829,8 +670,8 @@ async def hd_audio_websocket(websocket: WebSocket):
         ASSISTANT_PERSONA
     )
     conversation_memory = ConversationMemory(MAX_CONVERSATION_TURNS)
-    vad_detector = AdvancedVAD()
-    stt_context = ContextAwareSTT()
+    vad_detector = VoiceActivityDetector()
+    stt_service = STTService()
     
     # State management
     audio_queue = queue.Queue(maxsize=500)
@@ -840,7 +681,6 @@ async def hd_audio_websocket(websocket: WebSocket):
     # TTS management
     tts_queue = asyncio.Queue()
     is_speaking = False
-    current_tts_task = None
     
     # Conversation state
     current_language = "en-IN"
@@ -848,10 +688,10 @@ async def hd_audio_websocket(websocket: WebSocket):
     last_activity_time = time.time()
     
     async def tts_worker():
-        """TTS worker that processes TTS requests serially"""
+        """TTS worker that processes TTS requests"""
         while True:
             try:
-                # Get TTS request with timeout
+                # Get TTS request
                 try:
                     request = await asyncio.wait_for(tts_queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:
@@ -866,6 +706,7 @@ async def hd_audio_websocket(websocket: WebSocket):
                 emotion = request.get("emotion", {})
                 
                 if not text:
+                    tts_queue.task_done()
                     continue
                 
                 # Synthesize speech
@@ -885,32 +726,28 @@ async def hd_audio_websocket(websocket: WebSocket):
                         "audio": b64_audio,
                         "metadata": {
                             "text_length": len(text),
-                            "emotion": emotion.get("primary", "neutral"),
-                            "timestamp": time.time()
+                            "emotion": emotion.get("primary", "neutral")
                         }
                     })
                 
-                # Mark task as done
                 tts_queue.task_done()
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"TTS worker error: {e}")
+                tts_queue.task_done()
                 continue
     
     async def process_transcripts():
         """Process STT transcripts and generate responses"""
         while not stop_event.is_set():
             try:
-                # Get transcript with timeout
-                try:
-                    transcript_data = await asyncio.wait_for(
-                        transcripts_queue.get(), 
-                        timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    continue
+                # Get transcript
+                transcript_data = await asyncio.wait_for(
+                    transcripts_queue.get(), 
+                    timeout=1.0
+                )
                 
                 if transcript_data is None:
                     break
@@ -932,8 +769,8 @@ async def hd_audio_websocket(websocket: WebSocket):
                 })
                 
                 # Process final transcript
-                if is_final and confidence > 0.7:  # Confidence threshold
-                    logger.info(f"Final transcript: {transcript}")
+                if is_final and confidence > 0.6:
+                    logger.info(f"📝 Final transcript: {transcript}")
                     
                     # Analyze emotion
                     emotion_data = EmotionalIntelligence.analyze_emotion(transcript)
@@ -956,13 +793,11 @@ async def hd_audio_websocket(websocket: WebSocket):
                     
                     # Perform RAG search for relevant information
                     rag_results = None
-                    if intent_data.get("sub_intent") in ["service-related", "informational"]:
+                    if intent_data.get("primary_intent") in ["question", "inquiry"]:
                         try:
-                            # Normalize query for better search
-                            normalized_query = re.sub(r'[^\w\s]', ' ', transcript.lower())
                             rag_results = await pinecone_service.search_similar_chunks(
                                 client_id=DEFAULT_CLIENT_ID,
-                                query=normalized_query,
+                                query=transcript,
                                 top_k=5,
                                 min_score=0.3
                             )
@@ -987,8 +822,7 @@ async def hd_audio_websocket(websocket: WebSocket):
                         text=response_text,
                         metadata={
                             "intent": intent_data,
-                            "rag_used": rag_results is not None,
-                            "generation_data": response_data
+                            "rag_used": rag_results is not None
                         }
                     )
                     
@@ -999,7 +833,6 @@ async def hd_audio_websocket(websocket: WebSocket):
                         "metadata": {
                             "intent": intent_data.get("primary_intent"),
                             "emotion": emotion_data,
-                            "response_style": response_data.get("style", "neutral")
                         }
                     })
                     
@@ -1009,44 +842,28 @@ async def hd_audio_websocket(websocket: WebSocket):
                         "language": current_language,
                         "emotion": emotion_data
                     })
-                    
-                    # Update STT context with new phrases
-                    stt_context.update_context(conversation_memory.history)
                 
+            except asyncio.TimeoutError:
+                continue
             except Exception as e:
                 logger.error(f"Transcript processing error: {e}")
                 continue
     
     def stt_worker():
-        """STT worker thread"""
+        """STT worker thread - FIXED API CALL"""
         try:
-            # Create streaming recognizer
-            config = stt_context.get_streaming_config()
+            # Create request generator
+            requests = stt_service.create_request_generator(audio_queue, stop_event)
             
-            # Generate requests
-            def request_generator():
-                # Send config first
-                yield speech.StreamingRecognizeRequest(streaming_config=config)
-                
-                # Send audio chunks
-                while not stop_event.is_set():
-                    try:
-                        chunk = audio_queue.get(timeout=0.5)
-                        if chunk is None:
-                            break
-                        yield speech.StreamingRecognizeRequest(audio_content=chunk)
-                    except queue.Empty:
-                        continue
-                    except Exception as e:
-                        logger.error(f"STT chunk error: {e}")
-                        break
-            
-            # Start recognition
-            responses = _speech_client.streaming_recognize(request_generator())
+            # Start streaming recognition - FIXED: Correct API call
+            responses = _speech_client.streaming_recognize(requests)
             
             for response in responses:
                 if stop_event.is_set():
                     break
+                
+                if not response.results:
+                    continue
                 
                 for result in response.results:
                     if not result.alternatives:
@@ -1056,7 +873,6 @@ async def hd_audio_websocket(websocket: WebSocket):
                     transcript = alternative.transcript.strip()
                     
                     if transcript:
-                        # Calculate confidence
                         confidence = alternative.confidence if alternative.confidence else 0.0
                         
                         # Queue for processing
@@ -1064,22 +880,24 @@ async def hd_audio_websocket(websocket: WebSocket):
                             transcripts_queue.put({
                                 "text": transcript,
                                 "is_final": result.is_final,
-                                "confidence": confidence,
-                                "alternatives": [
-                                    {"text": alt.transcript, "confidence": alt.confidence or 0.0}
-                                    for alt in result.alternatives[:3]
-                                ]
+                                "confidence": confidence
                             }),
                             asyncio.get_event_loop()
                         )
         
         except Exception as e:
             logger.error(f"STT worker error: {e}")
+            # Try to restart STT
+            if not stop_event.is_set():
+                logger.info("Restarting STT worker...")
+                time.sleep(1)
+                stt_worker()
     
     # Start workers
     tts_worker_task = asyncio.create_task(tts_worker())
     transcript_processor_task = asyncio.create_task(process_transcripts())
     
+    # Start STT thread
     stt_thread = threading.Thread(target=stt_worker, daemon=True)
     stt_thread.start()
     
@@ -1104,6 +922,7 @@ async def hd_audio_websocket(websocket: WebSocket):
             message = await websocket.receive()
             
             if message.get("type") == "websocket.disconnect":
+                logger.info("WebSocket disconnected by client")
                 break
             
             # Handle binary audio data
@@ -1128,16 +947,12 @@ async def hd_audio_websocket(websocket: WebSocket):
                         audio_queue.put_nowait(audio_data)
                     except queue.Full:
                         logger.warning("Audio queue full, dropping chunk")
-                
-                # Send audio metrics occasionally
-                if random.random() < 0.01:  # 1% chance
+                    
+                    # Send audio metrics
                     await websocket.send_json({
-                        "type": "metrics",
-                        "audio": {
-                            "rms": rms_value,
-                            "vad_threshold": vad_detector.threshold,
-                            "queue_size": audio_queue.qsize()
-                        }
+                        "type": "audio_level",
+                        "level": rms_value,
+                        "threshold": vad_detector.threshold
                     })
             
             # Handle text messages (control)
@@ -1151,7 +966,7 @@ async def hd_audio_websocket(websocket: WebSocket):
                         language = data.get("meta", {}).get("language", "en-IN")
                         if language in VOICE_MAP:
                             current_language = language
-                            stt_context.language_code = language
+                            stt_service.language_code = language
                         
                         await websocket.send_json({
                             "type": "ready",
@@ -1160,6 +975,7 @@ async def hd_audio_websocket(websocket: WebSocket):
                         })
                     
                     elif msg_type == "stop":
+                        logger.info("Client requested stop")
                         break
                     
                     elif msg_type == "ping":
@@ -1193,7 +1009,7 @@ async def hd_audio_websocket(websocket: WebSocket):
         # Stop TTS worker
         if tts_worker_task and not tts_worker_task.done():
             try:
-                await tts_queue.put(None)  # Signal shutdown
+                await tts_queue.put(None)
                 await asyncio.wait_for(tts_worker_task, timeout=2.0)
             except:
                 tts_worker_task.cancel()
