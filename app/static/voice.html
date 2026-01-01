@@ -1,9 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HD Voice Assistant - Natural Conversation</title>
+    <title>Voice Assistant - Natural Conversation</title>
     <style>
         * {
             margin: 0;
@@ -39,11 +40,6 @@
             font-size: 2.5em;
             margin-bottom: 10px;
             font-weight: 700;
-        }
-
-        .header p {
-            opacity: 0.9;
-            font-size: 1.1em;
         }
 
         .status-indicator {
@@ -105,10 +101,6 @@
             display: flex;
             align-items: center;
             gap: 10px;
-        }
-
-        .section-title i {
-            color: #6a11cb;
         }
 
         .controls {
@@ -264,20 +256,51 @@
             opacity: 0.8;
         }
 
-        .emotion-indicator {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            margin-left: 5px;
-            vertical-align: middle;
+        .audio-meter {
+            height: 100px;
+            background: #1a1a2e;
+            border-radius: 10px;
+            margin-top: 20px;
+            position: relative;
+            overflow: hidden;
         }
 
-        .emotion-joy { background: #ffd700; }
-        .emotion-sadness { background: #3498db; }
-        .emotion-anger { background: #e74c3c; }
-        .emotion-fear { background: #9b59b6; }
-        .emotion-neutral { background: #95a5a6; }
+        .meter-bar {
+            position: absolute;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(to top, #6a11cb, #2575fc);
+            border-radius: 2px 2px 0 0;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transform: translateX(150%);
+            transition: transform 0.3s ease;
+            z-index: 1000;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+
+        .notification.success {
+            border-left: 5px solid #2ed573;
+        }
+
+        .notification.error {
+            border-left: 5px solid #ff4757;
+        }
+
+        .notification.warning {
+            border-left: 5px solid #ffa502;
+        }
 
         .typing-indicator {
             display: flex;
@@ -306,23 +329,6 @@
             30% { transform: translateY(-10px); }
         }
 
-        .audio-visualizer {
-            height: 100px;
-            background: #1a1a2e;
-            border-radius: 10px;
-            margin-top: 20px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .visualizer-bar {
-            position: absolute;
-            bottom: 0;
-            width: 4px;
-            background: linear-gradient(to top, #6a11cb, #2575fc);
-            border-radius: 2px 2px 0 0;
-        }
-
         .footer {
             text-align: center;
             padding: 20px;
@@ -330,45 +336,13 @@
             font-size: 0.9em;
             border-top: 1px solid #e9ecef;
         }
-
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 15px 25px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transform: translateX(150%);
-            transition: transform 0.3s ease;
-            z-index: 1000;
-        }
-
-        .notification.show {
-            transform: translateX(0);
-        }
-
-        .notification.success {
-            border-left: 5px solid #2ed573;
-        }
-
-        .notification.error {
-            border-left: 5px solid #ff4757;
-        }
-
-        .notification.warning {
-            border-left: 5px solid #ffa502;
-        }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1><i class="fas fa-robot"></i> HD Voice Assistant</h1>
+            <h1><i class="fas fa-robot"></i> Voice Assistant</h1>
             <p>Natural, Emotionally Intelligent Conversations</p>
             <div class="status">
                 <span class="status-indicator" id="statusIndicator"></span>
@@ -380,7 +354,7 @@
             <div class="control-panel">
                 <div class="section-title">
                     <i class="fas fa-sliders-h"></i>
-                    Controls & Settings
+                    Controls
                 </div>
 
                 <div class="controls">
@@ -408,26 +382,26 @@
                         </select>
                     </div>
 
-                    <div class="audio-visualizer" id="audioVisualizer">
+                    <div class="audio-meter" id="audioMeter">
                         <!-- Audio bars will be generated here -->
                     </div>
 
                     <div class="metrics">
                         <div class="metric-card">
-                            <div class="metric-label">Connection</div>
-                            <div class="metric-value" id="connectionMetric">0ms</div>
-                        </div>
-                        <div class="metric-card">
                             <div class="metric-label">Audio Level</div>
-                            <div class="metric-value" id="audioLevel">0%</div>
+                            <div class="metric-value" id="audioLevel">0</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Response Time</div>
-                            <div class="metric-value" id="responseTime">0ms</div>
+                            <div class="metric-label">Status</div>
+                            <div class="metric-value" id="connectionStatus">-</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-label">Emotion Score</div>
-                            <div class="metric-value" id="emotionScore">0.0</div>
+                            <div class="metric-label">Queue Size</div>
+                            <div class="metric-value" id="queueSize">0</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Emotion</div>
+                            <div class="metric-value" id="emotionScore">-</div>
                         </div>
                     </div>
                 </div>
@@ -453,8 +427,7 @@
         </div>
 
         <div class="footer">
-            <p>Powered by Gemini AI • Emotionally Intelligent • Natural Conversations</p>
-            <p>Session ID: <span id="sessionId">-</span></p>
+            <p>Powered by Gemini AI • Natural Conversations • Real-time Processing</p>
         </div>
     </div>
 
@@ -471,20 +444,16 @@
         let processor = null;
         let isRecording = false;
         let isConnected = false;
-        let sessionId = null;
-        let lastPing = 0;
-        let latency = 0;
         let audioLevel = 0;
+        let meterBars = [];
         let conversationHistory = [];
-        let visualizerBars = [];
 
         // Configuration
         const CONFIG = {
             sampleRate: 16000,
             chunkDuration: 320, // ms
-            visualizerBars: 64,
-            maxBufferSize: 1500000,
-            resumeBufferSize: 600000
+            meterBars: 64,
+            maxBufferSize: 1000000
         };
 
         // DOM Elements
@@ -496,40 +465,38 @@
         const typingIndicator = document.getElementById('typingIndicator');
         const statusIndicator = document.getElementById('statusIndicator');
         const statusText = document.getElementById('statusText');
-        const audioVisualizer = document.getElementById('audioVisualizer');
+        const audioMeter = document.getElementById('audioMeter');
         const notification = document.getElementById('notification');
         const notificationText = document.getElementById('notificationText');
-
-        // Metrics elements
-        const connectionMetric = document.getElementById('connectionMetric');
         const audioLevelElement = document.getElementById('audioLevel');
-        const responseTimeElement = document.getElementById('responseTime');
+        const connectionStatusElement = document.getElementById('connectionStatus');
+        const queueSizeElement = document.getElementById('queueSize');
         const emotionScoreElement = document.getElementById('emotionScore');
-        const sessionIdElement = document.getElementById('sessionId');
 
-        // Initialize audio visualizer
-        function initVisualizer() {
-            audioVisualizer.innerHTML = '';
-            visualizerBars = [];
+        // Initialize audio meter
+        function initMeter() {
+            audioMeter.innerHTML = '';
+            meterBars = [];
             
-            for (let i = 0; i < CONFIG.visualizerBars; i++) {
+            for (let i = 0; i < CONFIG.meterBars; i++) {
                 const bar = document.createElement('div');
-                bar.className = 'visualizer-bar';
-                bar.style.left = `${(i / CONFIG.visualizerBars) * 100}%`;
+                bar.className = 'meter-bar';
+                bar.style.left = `${(i / CONFIG.meterBars) * 100}%`;
                 bar.style.height = '0%';
-                audioVisualizer.appendChild(bar);
-                visualizerBars.push(bar);
+                audioMeter.appendChild(bar);
+                meterBars.push(bar);
             }
         }
 
-        // Update visualizer with audio data
-        function updateVisualizer(level) {
-            const barHeight = Math.min(100, level * 2);
-            visualizerBars.forEach((bar, index) => {
+        // Update meter with audio data
+        function updateMeter(level) {
+            const barHeight = Math.min(100, level * 3);
+            meterBars.forEach((bar, index) => {
                 const height = barHeight * (0.5 + 0.5 * Math.sin(index * 0.3 + Date.now() * 0.005));
                 bar.style.height = `${height}%`;
                 bar.style.opacity = 0.3 + (height / 100) * 0.7;
             });
+            audioLevelElement.textContent = Math.round(level);
         }
 
         // Show notification
@@ -557,10 +524,12 @@
                 header.innerHTML = `<i class="fas fa-robot"></i> Assistant`;
                 
                 if (emotion) {
-                    const emotionDot = document.createElement('span');
-                    emotionDot.className = `emotion-indicator emotion-${emotion}`;
-                    emotionDot.title = `Emotion: ${emotion}`;
-                    header.appendChild(emotionDot);
+                    const emotionSpan = document.createElement('span');
+                    emotionSpan.textContent = `[${emotion}]`;
+                    emotionSpan.style.fontSize = '0.8em';
+                    emotionSpan.style.marginLeft = '10px';
+                    emotionSpan.style.color = '#6c757d';
+                    header.appendChild(emotionSpan);
                 }
             }
             
@@ -591,12 +560,14 @@
             switch (status.toLowerCase()) {
                 case 'connected':
                     statusIndicator.classList.add('connected');
+                    connectionStatusElement.textContent = 'Connected';
                     break;
                 case 'recording':
                     statusIndicator.classList.add('recording');
+                    connectionStatusElement.textContent = 'Recording';
                     break;
                 case 'disconnected':
-                    // No special class
+                    connectionStatusElement.textContent = 'Disconnected';
                     break;
             }
             
@@ -625,7 +596,7 @@
                 ws.onerror = handleWebSocketError;
                 ws.onclose = handleWebSocketClose;
                 
-                // Initialize audio context
+                // Initialize audio
                 await initAudio();
                 
                 startBtn.disabled = true;
@@ -649,7 +620,8 @@
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
-                        autoGainControl: true
+                        autoGainControl: true,
+                        sampleRate: CONFIG.sampleRate
                     }
                 });
                 
@@ -667,37 +639,33 @@
                     
                     const inputData = event.inputBuffer.getChannelData(0);
                     
-                    // Calculate audio level for visualizer
+                    // Calculate audio level
                     let sum = 0;
                     for (let i = 0; i < inputData.length; i++) {
                         sum += inputData[i] * inputData[i];
                     }
                     const rms = Math.sqrt(sum / inputData.length);
                     audioLevel = Math.min(1, rms * 10);
-                    updateVisualizer(audioLevel);
-                    audioLevelElement.textContent = `${Math.round(audioLevel * 100)}%`;
+                    updateMeter(audioLevel * 100);
                     
-                    // Downsample to 16kHz
+                    // Downsample to target rate
                     const downsampled = downsampleAudio(inputData, sourceRate, targetRate);
                     
                     // Accumulate audio
                     audioBuffer.push(...downsampled);
                     
-                    // Send chunks
+                    // Send chunks when we have enough
                     while (audioBuffer.length >= chunkSize) {
                         const chunk = audioBuffer.splice(0, chunkSize);
                         const int16Buffer = float32ToInt16(chunk);
                         
-                        // Check buffer size
-                        if (ws.bufferedAmount > CONFIG.maxBufferSize) {
-                            showNotification('Network congestion, pausing...', 'warning');
-                            break;
-                        }
-                        
                         // Send audio chunk
-                        ws.send(int16Buffer);
-                        
-                        audioBuffer = audioBuffer.slice(chunkSize);
+                        if (ws.bufferedAmount < CONFIG.maxBufferSize) {
+                            ws.send(int16Buffer);
+                            queueSizeElement.textContent = ws.bufferedAmount;
+                        } else {
+                            console.warn('Buffer full, dropping audio');
+                        }
                     }
                 };
                 
@@ -752,13 +720,7 @@
                 }
             }));
             
-            // Start ping interval
-            setInterval(() => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    lastPing = Date.now();
-                    ws.send(JSON.stringify({ type: 'ping' }));
-                }
-            }, 30000);
+            showNotification('Connected to voice assistant', 'success');
         }
         
         function handleWebSocketMessage(event) {
@@ -766,9 +728,6 @@
                 if (typeof event.data === 'string') {
                     const data = JSON.parse(event.data);
                     handleServerMessage(data);
-                } else {
-                    // Binary data (audio)
-                    console.log('Received binary data:', event.data.byteLength);
                 }
             } catch (error) {
                 console.error('Message handling error:', error);
@@ -780,14 +739,14 @@
             
             switch (type) {
                 case 'ready':
-                    sessionId = data.session_id || Date.now().toString();
-                    sessionIdElement.textContent = sessionId;
-                    showNotification('Connected to voice assistant', 'success');
+                    showNotification('Ready for conversation', 'success');
                     break;
                     
                 case 'transcript':
                     addMessage(data.text, 'user');
-                    showTypingIndicator(true);
+                    if (data.is_final) {
+                        showTypingIndicator(true);
+                    }
                     break;
                     
                 case 'ai_text':
@@ -801,23 +760,19 @@
                     break;
                     
                 case 'audio':
-                    // Audio will be played automatically by the browser
-                    console.log('Received audio response');
+                    // Create and play audio
+                    const audio = new Audio('data:audio/wav;base64,' + data.audio);
+                    audio.play().catch(e => console.log('Audio play failed:', e));
+                    break;
+                    
+                case 'audio_level':
+                    updateMeter(data.level / 1000);
                     break;
                     
                 case 'control':
                     if (data.action === 'throttle') {
                         showNotification('Assistant is speaking...', 'info');
                     }
-                    break;
-                    
-                case 'metrics':
-                    updateMetrics(data);
-                    break;
-                    
-                case 'pong':
-                    latency = Date.now() - lastPing;
-                    connectionMetric.textContent = `${latency}ms`;
                     break;
                     
                 case 'error':
@@ -853,17 +808,8 @@
             }
         }
         
-        function updateMetrics(data) {
-            if (data.audio) {
-                audioLevelElement.textContent = `${Math.round(data.audio.rms)}`;
-            }
-        }
-        
         function showTypingIndicator(show) {
             typingIndicator.style.display = show ? 'flex' : 'none';
-            if (show) {
-                responseTimeElement.textContent = '...';
-            }
         }
 
         // Stop conversation
@@ -892,12 +838,8 @@
 
         // Initialize
         window.addEventListener('load', () => {
-            initVisualizer();
-            
-            // Test notification
-            setTimeout(() => {
-                showNotification('Voice assistant ready. Click Start to begin.', 'success');
-            }, 1000);
+            initMeter();
+            showNotification('Voice assistant ready. Click Start to begin.', 'success');
         });
 
         // Handle page unload
