@@ -78,6 +78,7 @@ VOICE_MAP = {
 }
 DEFAULT_VOICE = VOICE_MAP["en-IN"]
 
+
 def get_best_voice(language_code: Optional[str]):
     if not language_code:
         return ("en-IN", DEFAULT_VOICE["name"], DEFAULT_VOICE.get("gender"))
@@ -91,6 +92,7 @@ def get_best_voice(language_code: Optional[str]):
         v = VOICE_MAP.get(f, DEFAULT_VOICE)
         return (f, v["name"], v.get("gender"))
     return ("en-IN", DEFAULT_VOICE["name"], DEFAULT_VOICE.get("gender"))
+
 
 def ssml_for_text(text: str, sentiment: float = 0.0, prosody_rate: float = 0.95) -> str:
     """Enhanced SSML with emotional intelligence"""
@@ -122,6 +124,7 @@ def ssml_for_text(text: str, sentiment: float = 0.0, prosody_rate: float = 0.95)
 
     return f"<speak><prosody rate='{rate}' pitch='{pitch}' volume='{volume}'>{esc}</prosody></speak>"
 
+
 def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -131,11 +134,13 @@ def make_wav_from_pcm16(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
 
+
 def is_silence(pcm16: bytes, threshold: int = VAD_THRESHOLD) -> bool:
     try:
         return audioop.rms(pcm16, 2) < threshold
     except Exception:
         return False
+
 
 # ================== TTS Synthesis ==================
 def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: Optional[str], sample_rate_hz: int = 24000):
@@ -146,6 +151,7 @@ def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: O
     )
     synthesis_input = tts.SynthesisInput(ssml=ssml)
     return _tts_client.synthesize_speech(input=synthesis_input, voice=voice, audio_config=audio_config)
+
 
 async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample_rate_hz: int = 24000, sentiment: float = 0.0) -> Optional[bytes]:
     ssml = ssml_for_text(text, sentiment=sentiment, prosody_rate=0.95)
@@ -174,6 +180,7 @@ async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample
         except Exception:
             pass
 
+
 # ================== Query Normalization ==================
 _CONTRACTIONS = {
     r"\bwhat's\b": "what is",
@@ -187,6 +194,7 @@ _CONTRACTIONS = {
     r"\bdidn't\b": "did not",
     r"\bisn't\b": "is not",
 }
+
 
 def normalize_and_expand_query(transcript: str) -> str:
     if not transcript:
@@ -244,6 +252,7 @@ def normalize_and_expand_query(transcript: str) -> str:
         i += 1
 
     return " ".join(out)
+
 
 # ================== STT Worker ==================
 def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
@@ -317,6 +326,7 @@ def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Q
     finally:
         logger.info("STT worker exiting (language=%s)", language_code)
 
+
 # ================== Advanced Metrics ==================
 METRICS = {
     "requests": 0,
@@ -329,21 +339,27 @@ METRICS = {
     "errors": defaultdict(int),
 }
 
+
 def record_metric_intent(intent: str):
     if intent:
         METRICS["intent_counts"][intent] += 1
 
+
 def record_metric_sentiment(s: float):
     METRICS["sentiments"].append(s)
+
 
 def record_metric_confidence(c: float):
     METRICS["confidences"].append(c)
 
+
 def record_latency(ms: float):
     METRICS["response_times_ms"].append(ms)
 
+
 def record_error(error_type: str):
     METRICS["errors"][error_type] += 1
+
 
 # ================== Advanced Sentiment Analysis ==================
 _POS_WORDS = {
@@ -362,6 +378,7 @@ _INTENSITY_MODIFIERS = {
     "very": 1.5, "really": 1.5, "extremely": 2.0, "super": 1.8,
     "somewhat": 0.6, "slightly": 0.5, "kind of": 0.6, "a bit": 0.5
 }
+
 
 def advanced_sentiment_score(text: str) -> float:
     """Enhanced sentiment analysis with intensity modifiers and context"""
@@ -403,6 +420,7 @@ def advanced_sentiment_score(text: str) -> float:
 
     return max(-1.0, min(1.0, sentiment))
 
+
 # ================== Helper Functions ==================
 def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
     """Robust JSON extraction from LLM response"""
@@ -430,6 +448,7 @@ def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
 
+
 def calculate_rag_confidence(results: List[Dict]) -> float:
     """Calculate confidence from RAG search results"""
     if not results:
@@ -454,6 +473,7 @@ def calculate_rag_confidence(results: List[Dict]) -> float:
         return confidence
     except Exception:
         return 0.0
+
 
 # ================== Intelligent Intent Classification ==================
 async def classify_query_intent(text: str, rag_available: bool) -> Dict[str, Any]:
@@ -493,6 +513,7 @@ async def classify_query_intent(text: str, rag_available: bool) -> Dict[str, Any
 
     # Default to conversational
     return {"type": "conversational", "confidence": 0.6}
+
 
 # ================== Context-Aware Response Generation ==================
 async def generate_contextual_response(
@@ -631,6 +652,7 @@ async def generate_contextual_response(
             logger.exception("Conversational response failed: %s", e)
             return ("I'm happy to chat, but I'm having some technical difficulties. Could you try asking me again?", 0.0, {"intent": "conversational", "error": True})
 
+
 # ================== Streaming LLM Implementation ==================
 def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue: asyncio.Queue, stop_evt: threading.Event):
     """Thread worker for streaming LLM tokens"""
@@ -658,6 +680,7 @@ def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue: a
             asyncio.run_coroutine_threadsafe(token_queue.put(None), loop_ref)
         except Exception:
             pass
+
 
 async def run_streaming_response(
     user_text: str,
@@ -765,6 +788,7 @@ async def run_streaming_response(
             writer_thread.join(timeout=1.0)
         except Exception:
             pass
+
 
 # ================== WebSocket Handler ==================
 @router.websocket("/ws/hd-audio")
@@ -1112,82 +1136,173 @@ async def hd_audio_ws(ws: WebSocket):
 
         logger.info(f"🎤 Session {session_id} ready")
 
-        # Main WebSocket message loop
+        # ----------------------
+        # Main WebSocket message loop (robust: supports text and binary frames)
+        # ----------------------
         while True:
-            data_text = await ws.receive_text()
+            msg = await ws.receive()  # returns dict with 'type' and optionally 'text' or 'bytes' keys
 
-            try:
-                msg = json.loads(data_text)
-            except Exception:
-                await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+            # handle disconnect event
+            if msg is None:
+                logger.debug("ws.receive returned None, continuing loop")
                 continue
 
-            mtype = msg.get("type")
+            msg_type = msg.get("type")
 
-            if mtype == "start":
-                meta = msg.get("meta", {}) or {}
-                new_lang = meta.get("language")
+            if msg_type == "websocket.disconnect":
+                logger.info("Client websocket disconnected")
+                break
 
-                # Handle language change
-                if new_lang and new_lang != language:
-                    now_ts = time.time()
-
-                    if now_ts - last_restart_ts < MIN_RESTART_INTERVAL:
-                        logger.info("Language restart suppressed by backoff")
-                    else:
-                        logger.info(f"Language change: {language} -> {new_lang}")
-                        language = new_lang
-
-                        with restarting_lock:
-                            try:
-                                stop_event.set()
-
-                                try:
-                                    audio_queue.put_nowait(None)
-                                except Exception:
-                                    pass
-
-                                if stt_thread and stt_thread.is_alive():
-                                    stt_thread.join(timeout=2.0)
-
-                            except Exception as e:
-                                logger.exception("Error stopping STT thread: %s", e)
-
-                            # Start new STT worker
-                            stop_event = threading.Event()
-                            stt_thread = threading.Thread(
-                                target=grpc_stt_worker,
-                                args=(loop, audio_queue, transcripts_queue, stop_event, language),
-                                daemon=True
-                            )
-                            stt_thread.start()
-                            last_restart_ts = time.time()
-                            logger.info(f"Restarted STT worker with language={language}")
-
-                await ws.send_text(json.dumps({"type": "ack", "message": "started"}))
-
-            elif mtype == "audio":
-                b64 = msg.get("payload")
-                if not b64:
-                    continue
-
+            # Text frame (JSON control messages)
+            if "text" in msg and msg["text"] is not None:
+                data_text = msg["text"]
                 try:
-                    pcm = base64.b64decode(b64)
+                    ctrl = json.loads(data_text)
                 except Exception:
-                    await ws.send_text(json.dumps({"type": "error", "error": "bad_audio_b64"}))
+                    try:
+                        await ws.send_text(json.dumps({"type": "error", "error": "invalid_json"}))
+                    except Exception:
+                        pass
                     continue
 
-                # Voice activity detection
+                mtype = ctrl.get("type")
+
+                if mtype == "start":
+                    meta = ctrl.get("meta", {}) or {}
+                    new_lang = meta.get("language")
+                    if new_lang and new_lang != language:
+                        now_ts = time.time()
+                        if now_ts - last_restart_ts < MIN_RESTART_INTERVAL:
+                            logger.info("Language restart suppressed by backoff")
+                        else:
+                            logger.info(f"Language change: {language} -> {new_lang}")
+                            language = new_lang
+                            with restarting_lock:
+                                try:
+                                    stop_event.set()
+                                    try:
+                                        audio_queue.put_nowait(None)
+                                    except Exception:
+                                        pass
+                                    if stt_thread and stt_thread.is_alive():
+                                        stt_thread.join(timeout=2.0)
+                                except Exception as e:
+                                    logger.exception("Error stopping STT thread: %s", e)
+                                # restart stt thread
+                                stop_event = threading.Event()
+                                stt_thread = threading.Thread(
+                                    target=grpc_stt_worker,
+                                    args=(loop, audio_queue, transcripts_queue, stop_event, language),
+                                    daemon=True
+                                )
+                                stt_thread.start()
+                                last_restart_ts = time.time()
+                                logger.info(f"Restarted STT worker with language={language}")
+
+                    try:
+                        await ws.send_text(json.dumps({"type": "ack", "message": "started"}))
+                    except Exception:
+                        pass
+
+                elif mtype == "audio":
+                    # legacy base64 audio path
+                    b64 = ctrl.get("payload")
+                    if not b64:
+                        continue
+                    try:
+                        pcm = base64.b64decode(b64)
+                    except Exception:
+                        try:
+                            await ws.send_text(json.dumps({"type": "error", "error": "bad_audio_b64"}))
+                        except:
+                            pass
+                        continue
+
+                    try:
+                        silent = is_silence(pcm)
+                    except Exception:
+                        silent = False
+
+                    if not silent:
+                        last_voice_ts = time.time()
+
+                    if audio_queue.qsize() > 350:
+                        logger.warning(f"Audio queue large ({audio_queue.qsize()}), dropping input")
+                        continue
+
+                    try:
+                        audio_queue.put_nowait(pcm)
+                    except queue.Full:
+                        logger.warning("Audio queue full, dropping chunk")
+                        continue
+
+                elif mtype == "stop":
+                    logger.info("Client requested stop")
+                    try:
+                        stop_event.set()
+                        audio_queue.put_nowait(None)
+                    except Exception:
+                        pass
+                    await transcripts_queue.put(None)
+                    try:
+                        await ws.send_text(json.dumps({"type": "bye"}))
+                    except:
+                        pass
+                    try:
+                        await ws.close()
+                    except:
+                        pass
+                    return
+
+                elif mtype == "metrics":
+                    # metrics sending code (unchanged)
+                    session_duration = time.time() - session_start
+                    try:
+                        avg_response_time = (
+                            sum(METRICS["response_times_ms"]) / len(METRICS["response_times_ms"])
+                            if METRICS["response_times_ms"] else None
+                        )
+                        avg_sentiment = (
+                            sum(METRICS["sentiments"]) / len(METRICS["sentiments"])
+                            if METRICS["sentiments"] else None
+                        )
+                        await ws.send_text(json.dumps({
+                            "type": "metrics",
+                            "session_id": session_id,
+                            "metrics": {
+                                "requests": METRICS["requests"],
+                                "intent_counts": dict(METRICS["intent_counts"]),
+                                "avg_response_ms": avg_response_time,
+                                "sentiment_samples": len(METRICS["sentiments"]),
+                                "avg_sentiment": avg_sentiment,
+                                "confidence_samples": len(METRICS["confidences"]),
+                                "rag_hits": METRICS["rag_hits"],
+                                "streaming_uses": METRICS["streaming_uses"],
+                                "errors": dict(METRICS["errors"]),
+                                "session_duration_s": session_duration
+                            }
+                        }))
+                    except Exception as e:
+                        logger.error(f"Failed to send metrics: {e}")
+
+                else:
+                    try:
+                        await ws.send_text(json.dumps({"type": "error", "error": "unknown_type"}))
+                    except:
+                        pass
+
+            # Binary frame (raw audio from client)
+            elif "bytes" in msg and msg["bytes"] is not None:
+                pcm = msg["bytes"]
                 try:
                     silent = is_silence(pcm)
                 except Exception:
                     silent = False
 
-                now = time.time()
                 if not silent:
-                    last_voice_ts = now
+                    last_voice_ts = time.time()
 
-                # Queue audio with backpressure handling
+                # queue with protection
                 if audio_queue.qsize() > 350:
                     logger.warning(f"Audio queue large ({audio_queue.qsize()}), dropping input")
                     continue
@@ -1198,56 +1313,10 @@ async def hd_audio_ws(ws: WebSocket):
                     logger.warning("Audio queue full, dropping chunk")
                     continue
 
-            elif mtype == "stop":
-                logger.info("Client requested stop")
-
-                try:
-                    stop_event.set()
-                    audio_queue.put_nowait(None)
-                except Exception:
-                    pass
-
-                await transcripts_queue.put(None)
-                await ws.send_text(json.dumps({"type": "bye"}))
-                await ws.close()
-                return
-
-            elif mtype == "metrics":
-                # Return session metrics
-                session_duration = time.time() - session_start
-
-                try:
-                    avg_response_time = (
-                        sum(METRICS["response_times_ms"]) / len(METRICS["response_times_ms"])
-                        if METRICS["response_times_ms"] else None
-                    )
-
-                    avg_sentiment = (
-                        sum(METRICS["sentiments"]) / len(METRICS["sentiments"])
-                        if METRICS["sentiments"] else None
-                    )
-
-                    await ws.send_text(json.dumps({
-                        "type": "metrics",
-                        "session_id": session_id,
-                        "metrics": {
-                            "requests": METRICS["requests"],
-                            "intent_counts": dict(METRICS["intent_counts"]),
-                            "avg_response_ms": avg_response_time,
-                            "sentiment_samples": len(METRICS["sentiments"]),
-                            "avg_sentiment": avg_sentiment,
-                            "confidence_samples": len(METRICS["confidences"]),
-                            "rag_hits": METRICS["rag_hits"],
-                            "streaming_uses": METRICS["streaming_uses"],
-                            "errors": dict(METRICS["errors"]),
-                            "session_duration_s": session_duration
-                        }
-                    }))
-                except Exception as e:
-                    logger.error(f"Failed to send metrics: {e}")
-
             else:
-                await ws.send_text(json.dumps({"type": "error", "error": "unknown_type"}))
+                # unhandled message type - ignore but log
+                logger.debug(f"Received unexpected websocket message: {msg}")
+                continue
 
     except WebSocketDisconnect:
         logger.info("HD WS disconnected")
