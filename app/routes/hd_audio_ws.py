@@ -26,14 +26,10 @@ from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
 from google.api_core import exceptions as google_exceptions
 
-# Local services
+# Local services - only import what exists
 from app.services.pinecone_service import pinecone_service
 from app.services.gemini_service import GeminiService
-from app.services.emotion_engine import EmotionEngine
-from app.services.conversation_manager import ConversationManager
-from app.services.voice_persona import VoicePersona
-from app.services.context_awareness import ContextAwareness
-from app.services.interruption_handler import InterruptionHandler
+# Remove non-existent imports and implement simple versions
 from app.database import get_db
 from app.models import Client, VoiceSettings
 
@@ -96,7 +92,98 @@ except Exception as e:
     logger.exception("❌ Failed to initialize Google clients: %s", e)
     raise
 
-# ================== Service Initialization ==================
+# ================== Simple Service Implementations ==================
+
+class EmotionEngine:
+    """Simple emotion analysis based on text keywords"""
+    def __init__(self):
+        self.emotion_keywords = {
+            'positive': ['happy', 'good', 'great', 'excellent', 'wonderful', 'love', 'thanks', 'thank', 'pleased'],
+            'negative': ['sad', 'bad', 'terrible', 'awful', 'angry', 'upset', 'frustrated', 'disappointed', 'emergency', 'urgent'],
+            'neutral': ['hello', 'hi', 'hey', 'information', 'question', 'ask', 'tell']
+        }
+    
+    def analyze_emotion(self, text: str) -> float:
+        """Return emotion score between -1 (negative) and 1 (positive)"""
+        text_lower = text.lower()
+        positive_count = sum(1 for word in self.emotion_keywords['positive'] if word in text_lower)
+        negative_count = sum(1 for word in self.emotion_keywords['negative'] if word in text_lower)
+        
+        total = positive_count + negative_count
+        if total == 0:
+            return 0.0
+        return (positive_count - negative_count) / total
+
+class ConversationManager:
+    """Simple conversation history management"""
+    def __init__(self, max_history: int = 50):
+        self.max_history = max_history
+    
+    def get_context(self, conversation_history: List[Dict], max_turns: int = 6) -> str:
+        """Get conversation context as text"""
+        if not conversation_history:
+            return "No conversation history."
+        
+        # Get last N messages
+        recent_messages = conversation_history[-min(max_turns * 2, len(conversation_history)):]
+        
+        context_parts = []
+        for msg in recent_messages:
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            text = msg.get("text", "")
+            context_parts.append(f"{role}: {text}")
+        
+        return "\n".join(context_parts)
+
+class VoicePersona:
+    """Simple voice persona management"""
+    def __init__(self):
+        self.persona = "friendly_assistant"
+    
+    def get_persona_settings(self):
+        """Get persona-specific settings"""
+        return {
+            "tone": "friendly",
+            "formality": "casual",
+            "enthusiasm": "moderate"
+        }
+
+class ContextAwareness:
+    """Simple context awareness"""
+    def __init__(self):
+        self.context = {}
+    
+    def update_context(self, text: str, conversation_history: List[Dict], current_context: Dict) -> Dict:
+        """Update conversation context"""
+        # Simple keyword-based context detection
+        text_lower = text.lower()
+        
+        if any(word in text_lower for word in ['appointment', 'booking', 'schedule']):
+            current_context['topic'] = 'appointment'
+        elif any(word in text_lower for word in ['time', 'hour', 'open', 'close']):
+            current_context['topic'] = 'business_hours'
+        elif any(word in text_lower for word in ['price', 'cost', 'fee']):
+            current_context['topic'] = 'pricing'
+        elif any(word in text_lower for word in ['contact', 'phone', 'email', 'address']):
+            current_context['topic'] = 'contact'
+        
+        # Track last user query
+        current_context['last_user_query'] = text
+        current_context['conversation_length'] = len(conversation_history)
+        
+        return current_context
+
+class InterruptionHandler:
+    """Simple interruption handling"""
+    def __init__(self):
+        self.interruption_count = 0
+    
+    def handle_interruption(self):
+        """Handle interruption"""
+        self.interruption_count += 1
+        return {"status": "interrupted", "count": self.interruption_count}
+
+# Initialize services
 _gemini = GeminiService()
 _emotion_engine = EmotionEngine()
 _conversation_manager = ConversationManager(max_history=MAX_CONVERSATION_HISTORY)
@@ -576,6 +663,8 @@ class EnhancedSTTWorker:
     
     def _update_config(self):
         """Update streaming recognition configuration"""
+        import datetime  # Import here to avoid circular import issues
+        
         self.streaming_config = speech.StreamingRecognitionConfig(
             config=speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -1652,7 +1741,7 @@ async def test_voice_system():
                 "google_stt": "connected",
                 "google_tts": "connected",
                 "gemini_llm": "initialized",
-                "pinecone_rag": "initialized" if pinecone_service.is_configured() else "disconnected",
+                "pinecone_rag": "initialized" if hasattr(pinecone_service, 'is_configured') and pinecone_service.is_configured() else "disconnected",
                 "emotion_engine": "initialized"
             },
             "timestamp": time.time()
@@ -1748,7 +1837,7 @@ async def voice_health_check():
     
     # Check Pinecone
     try:
-        if pinecone_service.is_configured():
+        if hasattr(pinecone_service, 'is_configured') and pinecone_service.is_configured():
             health_status["components"]["pinecone_rag"] = "healthy"
         else:
             health_status["components"]["pinecone_rag"] = "not_configured"
