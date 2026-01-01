@@ -18,10 +18,10 @@ from collections import deque, defaultdict
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+# Google clients
 from google.cloud import speech_v1 as speech
 from google.cloud import texttospeech_v1 as tts
 from google.oauth2 import service_account
-from google.api_core import exceptions as google_exceptions
 
 # local services
 from app.services.pinecone_service import pinecone_service
@@ -48,6 +48,10 @@ BYTES_PER_SEC = STT_SAMPLE_RATE * 2
 CHUNK_BYTES = int(BYTES_PER_SEC * CHUNK_SECONDS)
 MAX_BUFFER_BYTES = int(BYTES_PER_SEC * MAX_BUFFER_SECONDS)
 
+# Throttle queue thresholds (tunable)
+THROTTLE_QSIZE_HIGH = int(os.getenv("HD_WS_THROTTLE_HIGH", "200"))
+THROTTLE_QSIZE_LOW  = int(os.getenv("HD_WS_THROTTLE_LOW", "100"))
+
 executor = ThreadPoolExecutor(max_workers=EXECUTOR_WORKERS)
 global_tts_semaphore = asyncio.BoundedSemaphore(MAX_CONCURRENT_TTS)
 
@@ -68,6 +72,48 @@ _tts_client = tts.TextToSpeechClient(credentials=_creds)
 
 # -------------- LLM --------------
 _gemini = GeminiService()
+
+# -------------- Storage: optional Redis for session persistence --------------
+REDIS_URL = os.getenv("REDIS_URL", "")
+_redis = None
+try:
+    if REDIS_URL:
+        import redis as _redis_pkg  # optional
+        _redis = _redis_pkg.from_url(REDIS_URL, decode_responses=True)
+        logger.info("Redis session store enabled")
+except Exception:
+    _redis = None
+    logger.info("Redis not available — falling back to in-memory session store")
+
+# in-memory fallback store
+_memory_sessions: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+def append_session_turn(session_id: str, role: str, text: str):
+    entry = {"role": role, "text": text, "ts": time.time()}
+    try:
+        if _redis:
+            key = f"session:{session_id}:history"
+            _redis.rpush(key, json.dumps(entry))
+            _redis.expire(key, 60 * 60 * 24 * 7)
+        else:
+            _memory_sessions[session_id].append(entry)
+            # trim to reasonable size
+            if len(_memory_sessions[session_id]) > 500:
+                _memory_sessions[session_id] = _memory_sessions[session_id][-500:]
+    except Exception:
+        logger.exception("append_session_turn failure")
+
+def get_recent_turns(session_id: str, n: int = 12):
+    try:
+        if _redis:
+            key = f"session:{session_id}:history"
+            items = _redis.lrange(key, -n, -1)
+            return [json.loads(i) for i in items]
+        else:
+            return _memory_sessions.get(session_id, [])[-n:]
+    except Exception:
+        logger.exception("get_recent_turns failure")
+        return []
 
 # -------------- Voice utils --------------
 VOICE_MAP = {
@@ -105,6 +151,7 @@ def ssml_for_text(text: str, sentiment: float = 0.0, prosody_rate: float = 0.95)
     elif s <= -0.15:
         rate = str(prosody_rate * 0.93); pitch = "-1st"; volume = "soft"
     esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # add short breaks to make TTS more conversational
     esc = esc.replace(", ", ", <break time='120ms'/> ")
     esc = esc.replace(". ", ". <break time='200ms'/> ")
     esc = esc.replace("? ", "? <break time='200ms'/> ")
@@ -124,6 +171,42 @@ def is_silence(pcm16: bytes, threshold: int = VAD_THRESHOLD) -> bool:
         return audioop.rms(pcm16, 2) < threshold
     except Exception:
         return False
+
+# -------------- Simple acoustic features (lightweight) --------------
+def acoustic_sentiment_estimate(pcm16: bytes) -> float:
+    """
+    Lightweight acoustic heuristic: map RMS to [-1..1] with smoothing.
+    This is not a full emotion model — replace with real acoustic model for production.
+    """
+    try:
+        rms = audioop.rms(pcm16, 2)  # 0..32767
+        # map typical human rms ranges into -1..+1
+        # choose a heuristic scale: quiet <300 -> negative mild, loud >2000 -> positive energetic
+        val = (rms - 800) / 2000.0
+        return max(-1.0, min(1.0, val))
+    except Exception:
+        return 0.0
+
+# -------------- improved text sentiment (still fast rules) --------------
+_POS_WORDS = {"good","great","happy","awesome","fantastic","love","thanks","thank","yes","sure","okay","ok"}
+_NEG_WORDS = {"bad","sad","angry","upset","hate","problem","frustrat","frustration","not working","issue","no","don't","cannot"}
+
+def quick_sentiment_score_text(text: str) -> float:
+    if not text:
+        return 0.0
+    tl = text.lower()
+    pos = sum(1 for w in _POS_WORDS if w in tl)
+    neg = sum(1 for w in _NEG_WORDS if w in tl)
+    if pos == 0 and neg == 0:
+        return 0.0
+    score = (pos - neg) / max(1, pos + neg)
+    return max(-1.0, min(1.0, score))
+
+def combined_sentiment(text: str, pcm16: Optional[bytes] = None) -> float:
+    text_s = quick_sentiment_score_text(text or "")
+    ac_s = acoustic_sentiment_estimate(pcm16) if pcm16 else 0.0
+    # weighted ensemble (text heavier unless acoustic strong)
+    return max(-1.0, min(1.0, 0.75 * text_s + 0.25 * ac_s))
 
 # ----------------- TTS blocking wrapper -----------------
 def _sync_tts_linear16(ssml: str, language_code: str, voice_name: str, gender: Optional[str], sample_rate_hz: int = 24000):
@@ -158,7 +241,7 @@ async def synthesize_text_to_pcm(text: str, language_code: str = "en-IN", sample
         except Exception:
             pass
 
-# ----------------- Query normalization (fixed) -----------------
+# ----------------- Query normalization -----------------
 _CONTRACTIONS = {
     r"\bwhat's\b": "what are",
     r"\bwhats\b": "what are",
@@ -172,29 +255,23 @@ def normalize_and_expand_query(transcript: str) -> str:
     if not transcript:
         return ""
     s = transcript.lower().strip()
-    # expand contractions first (regex)
     for patt, repl in _CONTRACTIONS.items():
         s = re.sub(patt, repl, s)
     toks = s.split()
-    # dedupe consecutive tokens only
     dedup = []
     prev = None
     for t in toks:
         if t != prev:
             dedup.append(t)
         prev = t
-    # mapping with 2-word check
     mappings = {
         "timings": "business hours operating hours schedule",
         "timing": "business hours operating hours schedule",
         "phone number": "contact number telephone",
-        "whats": "what are",
-        "what's": "what are",
         "open": "business hours operating hours",
         "closed": "business hours operating hours",
         "appointment": "appointment booking consultation",
         "doctor": "doctor physician consultant",
-        "payments": "payment methods accepted cash upi card",
     }
     out = []
     i = 0
@@ -211,7 +288,7 @@ def normalize_and_expand_query(transcript: str) -> str:
         i += 1
     return " ".join(out)
 
-# ----------------- STT worker (unchanged robustness) -----------------
+# ----------------- STT worker (robust) -----------------
 def grpc_stt_worker(loop, audio_queue: queue.Queue, transcripts_queue: asyncio.Queue, stop_event: threading.Event, language_code: str):
     def gen_requests_with_config():
         cfg = speech.RecognitionConfig(
@@ -289,6 +366,8 @@ METRICS = {
     "sentiments": [],
     "confidences": [],
     "avg_response_ms": [],
+    "drops_oldest": 0,
+    "drops_newest": 0,
 }
 
 def record_metric_intent(intent: str):
@@ -305,7 +384,7 @@ def record_metric_confidence(c: float):
 def record_latency(ms: float):
     METRICS["avg_response_ms"].append(ms)
 
-# ----------------- Regex fast-path (persona aware) -----------------
+# ----------------- Regex fast-path -----------------
 FAST_PATTERNS = [
     (re.compile(r"\b(hours|open|close|opening|closing|timings)\b", re.I), "business_hours"),
     (re.compile(r"\b(phone|contact|call|number)\b", re.I), "contact_number"),
@@ -327,24 +406,10 @@ def fast_intent_match(text: str) -> Optional[Tuple[str, str]]:
             return (label, FAST_RESPONSES.get(label, ""))
     return None
 
-# ----------------- lightweight sentiment heuristic (fallback) -----------------
-_POS_WORDS = {"good","great","happy","awesome","fantastic","love","thanks","thank"}
-_NEG_WORDS = {"bad","sad","angry","upset","hate","problem","frustrat","frustration","not working","issue"}
-
-def quick_sentiment_score(text: str) -> float:
-    tl = text.lower()
-    pos = sum(1 for w in _POS_WORDS if w in tl)
-    neg = sum(1 for w in _NEG_WORDS if w in tl)
-    if pos == 0 and neg == 0:
-        return 0.0
-    score = (pos - neg) / max(1, pos + neg)
-    return max(-1.0, min(1.0, score))
-
 # ----------------- Helper: robust JSON parsing from model text -----------------
 def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
     if not s:
         return None
-    # find first "{" and last "}"
     start = s.find("{")
     end = s.rfind("}")
     if start == -1 or end == -1 or end <= start:
@@ -353,69 +418,11 @@ def extract_json_from_text(s: str) -> Optional[Dict[str, Any]]:
     try:
         return json.loads(json_blob)
     except Exception:
-        # attempt a safe tweak: replace single quotes -> double, remove weird prefixes
         try:
             safe = json_blob.replace("\n", " ").replace("'", '"')
             return json.loads(safe)
         except Exception:
             return None
-
-# ----------------- RAG + LLM (deterministic with persona) -----------------
-async def get_ai_text_response(transcript: str, language_code: str = "en-IN", conversation_history: Optional[List[Tuple[str,str]]] = None) -> str:
-    """
-    Lightweight fallback used when RAG branch can't produce structured JSON.
-    Keep persona in system prompt so this still returns natural spoken text.
-    """
-    loop = asyncio.get_running_loop()
-    try:
-        q = transcript.strip()
-        q = q.replace("timings", "business hours").replace("timing", "business hours")
-        norm_q = normalize_and_expand_query(q)
-        # conservative RAG search for fallback
-        results = await pinecone_service.search_similar_chunks(
-            client_id=DEFAULT_CLIENT_ID,
-            query=norm_q or q,
-            top_k=6,
-            min_score=-1.0
-        )
-        convo_pref = ""
-        if conversation_history:
-            lines = []
-            for role, txt in conversation_history[-6:]:
-                if role == "user":
-                    lines.append(f"User: {txt}")
-                else:
-                    lines.append(f"Assistant: {txt}")
-            convo_pref = "\n".join(lines) + "\n\n"
-        if results:
-            context_text = "\n\n".join([r.get("chunk_text", "") for r in results[:4]])
-            system_msg = (
-                "You are BrightCare, a warm, helpful phone assistant. Use the CONTEXT and answer naturally in 2-3 sentences. "
-                "Prefer 'we' phrasing and always offer a next step (book, directions, escalate)."
-            )
-            user_prompt = f"{convo_pref}CONTEXT:\n{context_text}\n\nQUESTION: {transcript}"
-            partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.15, max_tokens=220)
-            fut = loop.run_in_executor(executor, partial)
-            try:
-                resp = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
-                return resp.strip() if resp else "Sorry — I couldn't formulate a response from the records."
-            except asyncio.TimeoutError:
-                logger.warning("LLM RAG timed out")
-                return "Sorry, I couldn't fetch details right now."
-        # no RAG hits: conversational fallback 
-        conv_sys = "You are BrightCare voice assistant. Respond warmly and offer next steps."
-        user_prompt = f"{convo_pref}User said: {transcript}\nRespond naturally and briefly."
-        partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=conv_sys, temperature=0.7, max_tokens=220)
-        fut = loop.run_in_executor(executor, partial)
-        try:
-            conv = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
-            return conv.strip() if conv else "Sorry, I didn't catch that — can you repeat?"
-        except asyncio.TimeoutError:
-            logger.warning("LLM conversational fallback timed out")
-            return "Sorry, I'm having trouble answering right now."
-    except Exception as e:
-        logger.exception("get_ai_text_response error: %s", e)
-        return "I'm sorry, I can't access that information right now."
 
 # ----------------- WebSocket handler -----------------
 @router.websocket("/ws/hd-audio")
@@ -450,7 +457,6 @@ async def hd_audio_ws(ws: WebSocket):
     is_bot_speaking = False
     current_tts_task: Optional[asyncio.Task] = None
     current_stream_stop_event: Optional[threading.Event] = None
-    current_stream_thread: Optional[threading.Thread] = None
 
     CANNED = {
         "hi": "Hello! How can I help you today?",
@@ -461,6 +467,41 @@ async def hd_audio_ws(ws: WebSocket):
         "good morning": "Good morning! How can I assist?",
         "good evening": "Good evening! How can I assist?",
     }
+
+    throttled = False  # server-side flag for sending throttle/resume updates
+
+    def push_audio_chunk(pcm: bytes):
+        """Put chunk into audio_queue. If full, drop oldest to accept newest (prefer recent speech)."""
+        try:
+            audio_queue.put_nowait(pcm)
+        except queue.Full:
+            try:
+                audio_queue.get_nowait()  # drop oldest
+            except Exception:
+                pass
+            try:
+                audio_queue.put_nowait(pcm)
+                METRICS["drops_oldest"] += 1
+                logger.warning("Audio queue full — dropped oldest chunk to accept new")
+            except Exception:
+                # last resort: drop newest
+                METRICS["drops_newest"] += 1
+                logger.warning("Audio queue full — dropping newest chunk")
+
+    async def maybe_send_throttle():
+        nonlocal throttled
+        try:
+            q = audio_queue.qsize()
+            if q > THROTTLE_QSIZE_HIGH and not throttled:
+                throttled = True
+                await ws.send_text(json.dumps({"type":"control","action":"throttle"}))
+                logger.info("Sent throttle to client (qsize=%d)", q)
+            elif q < THROTTLE_QSIZE_LOW and throttled:
+                throttled = False
+                await ws.send_text(json.dumps({"type":"control","action":"resume"}))
+                logger.info("Sent resume to client (qsize=%d)", q)
+        except Exception:
+            logger.exception("maybe_send_throttle failed")
 
     async def _do_tts_and_send(ai_text: str, language_code: str, sentiment: float):
         nonlocal is_bot_speaking, current_tts_task
@@ -507,7 +548,7 @@ async def hd_audio_ws(ws: WebSocket):
         except asyncio.CancelledError:
             return
 
-    # Streaming helper (calls GeminiService.generate_stream in a thread)
+    # helper to run streaming LLM for spoken output
     def _stream_writer_thread(loop_ref, prompt: str, system_msg: str, token_queue_async: asyncio.Queue, stop_evt: threading.Event):
         try:
             gen = _gemini.generate_stream(prompt=prompt, system_message=system_msg, temperature=0.6)
@@ -554,7 +595,6 @@ async def hd_audio_ws(ws: WebSocket):
                 full_text += chunk
                 sentence_buffer += chunk
 
-                # detect completed sentences
                 sentences = re.split(r'(?<=[.!?])\s+', sentence_buffer)
                 if len(sentences) > 1:
                     complete_sentences = sentences[:-1]
@@ -568,13 +608,13 @@ async def hd_audio_ws(ws: WebSocket):
                         continue
                     if not first_sentence_sent:
                         first_sentence_sent = True
-                        await send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score(s))
+                        await send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score_text(s))
                     else:
-                        asyncio.create_task(send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score(s)))
+                        asyncio.create_task(send_tts_and_audio(s, language_code=language_code, sentiment=quick_sentiment_score_text(s)))
             remaining = sentence_buffer.strip()
             if remaining:
-                await send_tts_and_audio(remaining, language_code=language_code, sentiment=quick_sentiment_score(remaining))
-            sentiment_est = quick_sentiment_score(full_text)
+                await send_tts_and_audio(remaining, language_code=language_code, sentiment=quick_sentiment_score_text(remaining))
+            sentiment_est = quick_sentiment_score_text(full_text)
             return full_text, sentiment_est
         finally:
             stop_evt.set()
@@ -583,9 +623,9 @@ async def hd_audio_ws(ws: WebSocket):
             except Exception:
                 pass
 
-    # ---------------- Combined handler with persona, RAG JSON, streaming collector ----------------
-    async def handle_final_utterance(text: str):
-        nonlocal conversation, is_bot_speaking, current_stream_stop_event, current_stream_thread
+    # ---------------- Combined handler with persona, RAG JSON (synchronous), streaming fallback ----------------
+    async def handle_final_utterance(text: str, last_pcm: Optional[bytes] = None, session_id: str = "default"):
+        nonlocal conversation, is_bot_speaking, current_stream_stop_event
         METRICS["requests"] += 1
         start_ms = time.time() * 1000
 
@@ -595,8 +635,9 @@ async def hd_audio_ws(ws: WebSocket):
 
         ts = time.time()
         conversation.append(("user", user_text, None, None, 0.0, ts))
+        append_session_turn(session_id, "user", user_text)
 
-        # 1) fast-path regex (persona aware)
+        # 1) fast-path regex
         fast = fast_intent_match(user_text)
         if fast:
             intent_label, reply = fast
@@ -623,14 +664,13 @@ async def hd_audio_ws(ws: WebSocket):
             logger.exception("Pinecone search failed: %s", e)
             rag_results = None
 
-        # compute rag confidence (average of scores available)
         def rag_confidence(results):
             try:
                 scores = [r.get("score", 0.0) for r in results if r.get("score") is not None]
                 if not scores:
                     return 0.0
                 avg = sum(scores) / len(scores)
-                conf = max(0.0, min(1.0, (avg + 0.5)))  # heuristic
+                conf = max(0.0, min(1.0, (avg + 0.5)))
                 return conf
             except Exception:
                 return 0.0
@@ -644,7 +684,8 @@ async def hd_audio_ws(ws: WebSocket):
             convo_pref = "\n".join(convo_lines)
             context_text = "\n\n".join([f"{r.get('source','')}: {r.get('chunk_text','')}" for r in rag_results[:4]])
             confidence_est = rag_confidence(rag_results)
-            # system prompt: ask for structured JSON with persona spoken rewrite
+
+            # IMPORTANT: structured JSON NLU should be requested in a synchronous safe call to avoid partial JSON parsing problems.
             system_msg = (
                 "You are BrightCare, a warm, helpful phone assistant serving BrightCare Mini Health Service. "
                 "Use only the CONTEXT to answer factual questions. Produce EXACT JSON only with keys: "
@@ -654,51 +695,19 @@ async def hd_audio_ws(ws: WebSocket):
             )
             user_prompt = f"{convo_pref}\n\nCONTEXT:\n{context_text}\n\nUser utterance: {user_text}\nReturn JSON."
 
-            # ---------- STREAMING-based collector for RAG JSON response ----------
-            token_q: asyncio.Queue = asyncio.Queue()
-            stop_evt = threading.Event()
-
-            def _rag_writer_thread(loop_ref, prompt, system_msg, token_q_ref, stop_e):
-                try:
-                    gen = _gemini.generate_stream(prompt=prompt, system_message=system_msg, temperature=0.15, max_tokens=300)
-                    for chunk in gen:
-                        if stop_e.is_set():
-                            break
-                        asyncio.run_coroutine_threadsafe(token_q_ref.put(chunk), loop_ref)
-                except Exception as e:
-                    logger.exception("RAG stream writer error: %s", e)
-                finally:
-                    try:
-                        asyncio.run_coroutine_threadsafe(token_q_ref.put(None), loop_ref)
-                    except Exception:
-                        pass
-
-            writer = threading.Thread(target=_rag_writer_thread, args=(asyncio.get_running_loop(), user_prompt, system_msg, token_q, stop_evt), daemon=True)
-            writer.start()
-
-            # assemble streamed text (with LLM_TIMEOUT as overall cap)
-            resp_text = ""
+            # SYNCHRONOUS safe JSON call (blocking in executor)
+            loop = asyncio.get_running_loop()
             try:
-                while True:
-                    try:
-                        recv = await asyncio.wait_for(token_q.get(), timeout=LLM_TIMEOUT)
-                    except asyncio.TimeoutError:
-                        logger.warning("RAG streaming timed out")
-                        break
-                    if recv is None:
-                        break
-                    piece = recv if isinstance(recv, str) else str(recv)
-                    resp_text += piece
-                    # NOTE: partial JSON extraction is risky unless model streams complete JSON lines.
-                    # We could try early parse: parsed = extract_json_from_text(resp_text); if parsed: break
-            finally:
-                stop_evt.set()
-                try:
-                    writer.join(timeout=1.0)
-                except Exception:
-                    pass
-            resp_text = (resp_text or "").strip()
-            # ---------------------------------------------------------------------
+                partial = functools.partial(_gemini.generate_response, prompt=user_prompt, system_message=system_msg, temperature=0.15, max_tokens=300)
+                fut = loop.run_in_executor(executor, partial)
+                resp_text = await asyncio.wait_for(fut, timeout=LLM_TIMEOUT)
+                resp_text = (resp_text or "").strip()
+            except asyncio.TimeoutError:
+                logger.warning("RAG NLU timed out")
+                resp_text = ""
+            except Exception as e:
+                logger.exception("RAG LLM JSON call failed: %s", e)
+                resp_text = ""
 
             parsed = extract_json_from_text(resp_text)
             if parsed:
@@ -709,25 +718,25 @@ async def hd_audio_ws(ws: WebSocket):
                 spoken = (parsed.get("spoken","") or "").strip()
                 confidence = float(parsed.get("confidence", confidence_est) or confidence_est)
             else:
-                # fallback to textual RAG answer with persona rewrite
+                # fallback: generate textual answer and wrap
                 fact = ""
                 try:
                     raw = await get_ai_text_response(user_text, language_code=language, conversation_history=[(r[0],r[1]) for r in list(conversation)])
                 except Exception:
                     raw = "Sorry, I couldn't fetch that information right now."
-                # create a friendly spoken wrapper
                 spoken = f"Hi — thanks for asking. {raw} Would you like me to help with anything else?"
                 intent = ""
                 entities = {}
-                sentiment = quick_sentiment_score(spoken)
+                sentiment = combined_sentiment(spoken, last_pcm)
                 confidence = confidence_est
 
-            # metrics and conversation store
+            # metrics & storage
             record_metric_intent(intent or "rag_response")
             record_metric_sentiment(sentiment)
             record_metric_confidence(confidence)
             conversation.append(("assistant", spoken or fact or "Sorry, I couldn't find that.", intent, entities, sentiment, time.time()))
-            # send UI: include both fact and spoken in metadata
+            append_session_turn(session_id="default", role="assistant", text=spoken or fact or "")
+
             try:
                 await ws.send_text(json.dumps({
                     "type":"ai_text",
@@ -737,9 +746,7 @@ async def hd_audio_ws(ws: WebSocket):
             except:
                 pass
 
-            # TTS: use spoken if present; fact only if spoken missing
             tts_text = spoken if spoken else fact
-            # start TTS (spoken is final text)
             await send_tts_and_audio(tts_text, language_code=language, sentiment=sentiment)
             record_latency(time.time()*1000 - start_ms)
             return
@@ -763,6 +770,7 @@ async def hd_audio_ws(ws: WebSocket):
                 record_metric_sentiment(sentiment_est)
                 record_metric_confidence(0.0)
                 conversation.append(("assistant", final_text, intent_label, {}, sentiment_est, time.time()))
+                append_session_turn("default", "assistant", final_text)
                 try:
                     await ws.send_text(json.dumps({"type":"ai_text","text":final_text,"metadata":{"intent":intent_label,"sentiment":sentiment_est}}))
                 except:
@@ -779,11 +787,12 @@ async def hd_audio_ws(ws: WebSocket):
             logger.exception("Fallback LLM error: %s", e)
             ai_text = "Sorry, I'm having trouble answering right now."
 
-        sentiment = quick_sentiment_score(ai_text)
+        sentiment = combined_sentiment(ai_text, last_pcm)
         record_metric_sentiment(sentiment)
         record_metric_intent("chat_fallback_sync")
         record_metric_confidence(0.0)
         conversation.append(("assistant", ai_text, "chat_fallback_sync", {}, sentiment, time.time()))
+        append_session_turn("default", "assistant", ai_text)
         try:
             await ws.send_text(json.dumps({"type":"ai_text","text":ai_text,"metadata":{"sentiment":sentiment}}))
         except:
@@ -791,7 +800,7 @@ async def hd_audio_ws(ws: WebSocket):
         await send_tts_and_audio(ai_text, language_code=language, sentiment=sentiment)
         record_latency(time.time()*1000 - start_ms)
 
-    # Debounce handler
+    # Debounce handler (kept for non-final cases)
     async def debounce_and_handle():
         nonlocal pending_debounce_task, utterance_buffer, last_voice_ts
         try:
@@ -802,7 +811,7 @@ async def hd_audio_ws(ws: WebSocket):
             utterance_buffer.clear()
             if not text:
                 return
-            await handle_final_utterance(text)
+            await handle_final_utterance(text, last_pcm=None, session_id="default")
         finally:
             pending_debounce_task = None
 
@@ -846,19 +855,18 @@ async def hd_audio_ws(ws: WebSocket):
                         pass
 
                 if is_final and interim_text:
+                    # immediate action on is_final: handle now
                     utterance_buffer.append(interim_text)
                     language = getattr(result, "language_code", language) or language
-                    # immediate action on is_final: trigger handling immediately (do not wait longer)
                     if pending_debounce_task:
-                        # cancel debounce and handle asap
                         try:
                             pending_debounce_task.cancel()
                         except Exception:
                             pass
                         pending_debounce_task = None
-                    # handle immediately
-                    await handle_final_utterance(" ".join(utterance_buffer).strip())
+                    text_to_handle = " ".join(utterance_buffer).strip()
                     utterance_buffer.clear()
+                    await handle_final_utterance(text_to_handle, last_pcm=None, session_id="default")
 
     transcript_consumer_task = None
 
@@ -874,10 +882,8 @@ async def hd_audio_ws(ws: WebSocket):
         while True:
             # Use ws.receive() to accept both text and binary frames
             msg = await ws.receive()
-            # handle disconnect
             if msg is None:
                 continue
-            # 'websocket.receive' returns dict with 'type'
             if msg.get("type") == "websocket.disconnect":
                 logger.info("Client disconnected")
                 break
@@ -926,7 +932,7 @@ async def hd_audio_ws(ws: WebSocket):
                         pass
 
                 elif mtype == "audio":
-                    # backward-compatible base64 JSON path
+                    # backward-compatible base64 JSON path (support legacy clients)
                     b64 = msgj.get("payload")
                     if not b64:
                         continue
@@ -944,18 +950,14 @@ async def hd_audio_ws(ws: WebSocket):
                     except Exception:
                         silent = False
 
-                    now = time.time()
                     if not silent:
-                        last_voice_ts = now
+                        last_voice_ts = time.time()
 
-                    if audio_queue.qsize() > 350:
-                        logger.warning("Audio queue large (%d) dropping input", audio_queue.qsize())
-                        continue
-                    try:
-                        audio_queue.put_nowait(pcm)
-                    except queue.Full:
-                        logger.warning("Audio queue full, drop chunk")
-                        continue
+                    # push with drop-oldest policy
+                    push_audio_chunk(pcm)
+                    # inform client about throttle/resume if needed
+                    asyncio.create_task(maybe_send_throttle())
+                    continue
 
                 elif mtype == "stop":
                     logger.info("Client stop received; flushing and closing")
@@ -979,7 +981,9 @@ async def hd_audio_ws(ws: WebSocket):
                             "intent_counts": dict(METRICS["intent_counts"]),
                             "avg_response_ms": (sum(METRICS["avg_response_ms"])/len(METRICS["avg_response_ms"])) if METRICS["avg_response_ms"] else None,
                             "sentiment_samples": len(METRICS["sentiments"]),
-                            "confidence_samples": len(METRICS["confidences"])
+                            "confidence_samples": len(METRICS["confidences"]),
+                            "drops_oldest": METRICS["drops_oldest"],
+                            "drops_newest": METRICS["drops_newest"],
                         }}))
                     except Exception:
                         pass
@@ -997,18 +1001,12 @@ async def hd_audio_ws(ws: WebSocket):
                 except Exception:
                     silent = False
 
-                now = time.time()
                 if not silent:
-                    last_voice_ts = now
+                    last_voice_ts = time.time()
 
-                if audio_queue.qsize() > 350:
-                    logger.warning("Audio queue large (%d) dropping input", audio_queue.qsize())
-                    continue
-                try:
-                    audio_queue.put_nowait(pcm)
-                except queue.Full:
-                    logger.warning("Audio queue full, drop chunk")
-                    continue
+                push_audio_chunk(pcm)
+                asyncio.create_task(maybe_send_throttle())
+
             else:
                 # unexpected receive type
                 continue
