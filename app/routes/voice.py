@@ -110,7 +110,24 @@ async def voice_ws(ws: WebSocket):
         nonlocal is_bot_speaking, current_llm_task
 
         session.add_user(text)
+        fast = fast_intent_classify(text)
+        if fast and fast["intent"] == "greeting":
+            response = gemini_service.generate_response(
+                prompt=text,
+                system_message="You are a warm, friendly voice assistant. Respond briefly and naturally.",
+                max_tokens=60,
+                temperature=0.8,
+            )
 
+            await tts_enqueue(
+                session_id=session.id,
+                text=response,
+                language=session.language,
+                sentiment=0.4,
+            )
+
+            session.add_assistant(response)
+            return
         # ---------- RAG ----------
         rag = await pinecone_service.search(
             client_id=session.client_id,
