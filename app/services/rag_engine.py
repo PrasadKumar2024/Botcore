@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 from app.services.pinecone_service import pinecone_service
-from app.services.gemini_service import gemini_service
+from app.services.pinecone_service import get_pinecone_service
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ class RAGEngine:
 
         # 2. Retrieve KB context (CLIENT-SCOPED)
         try:
-            results = await pinecone_service.search_similar_chunks(
+            results = await get_pinecone_service.search_similar_chunks(
                 client_id=client_id,
                 query=normalized or query,
                 top_k=self.top_k,
