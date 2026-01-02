@@ -2,25 +2,30 @@
 # WebRTC VAD (Real-time voice UX)
 # ===============================
 
-import webrtcvad
+# app/utils/audio.py
+try:
+    import webrtcvad
+    _HAS_WEBRTCVAD = True
+except Exception:
+    webrtcvad = None
+    _HAS_WEBRTCVAD = False
+
 
 class WebRTCVAD:
-    """
-    Thin wrapper around webrtcvad for 16kHz mono PCM.
-    """
     def __init__(self, sample_rate: int = 16000, aggressiveness: int = 2):
         self.sample_rate = sample_rate
-        self.vad = webrtcvad.Vad(aggressiveness)
+        if _HAS_WEBRTCVAD:
+            self.vad = webrtcvad.Vad(aggressiveness)
+        else:
+            self.vad = None
 
     def is_speech(self, pcm: bytes) -> bool:
-        # expects 16-bit mono PCM
+        if not self.vad:
+            return True  # fallback: treat everything as speech
         return self.vad.is_speech(pcm, self.sample_rate)
 
 
 def is_silence(pcm: bytes, vad: WebRTCVAD) -> bool:
-    """
-    Returns True if PCM frame contains no speech.
-    """
     try:
         return not vad.is_speech(pcm)
     except Exception:
