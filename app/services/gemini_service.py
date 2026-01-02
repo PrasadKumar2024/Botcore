@@ -878,6 +878,175 @@ Respond with ONLY the intent label that best matches, nothing else."""
         
         return final_embeddings
 
+# =========================
+# FAST INTENT CLASSIFIER
+# =========================
 
+FAST_INTENT_PATTERNS = {
+    "greeting": [
+        r"\b(hi|hello|hey|good morning|good evening)\b",
+    ],
+    "goodbye": [
+        r"\b(bye|goodbye|see you|thanks|thank you)\b",
+    ],
+    "booking": [
+        r"\b(book|appointment|schedule|reschedule|cancel appointment)\b",
+    ],
+    "billing": [
+        r"\b(bill|billing|price|cost|refund|payment|invoice)\b",
+    ],
+    "complaint": [
+        r"\b(not working|complaint|issue|problem|bad service|angry)\b",
+    ],
+    "human_handoff": [
+        r"\b(agent|human|representative|support person)\b",
+    ],
+}
+
+def fast_intent_classify(text: str) -> Optional[Dict[str, Any]]:
+    text_l = text.lower()
+    for intent, patterns in FAST_INTENT_PATTERNS.items():
+        for p in patterns:
+            if re.search(p, text_l):
+                return {
+                    "intent": intent,
+                    "confidence": 0.85,
+                    "source": "fast_classifier",
+                }
+    return None
+
+
+# =========================
+# SYSTEM PROMPT (PERSONA)
+# =========================
+
+def build_system_prompt(business_name: str) -> str:
+    return f"""
+You are the official AI voice assistant for {business_name}.
+
+RULES:
+- Be calm, friendly, and professional.
+- Use ONLY provided knowledge when answering factual questions.
+- If unsure, say you don’t know and offer to connect to a human.
+- Never hallucinate prices, policies, or medical/legal facts.
+- Keep answers concise and natural for voice.
+""".strip()
+
+
+# =========================
+# STRUCTURED NLU (GEMINI)
+# =========================
+
+def extract_json_from_text(text: str) -> Dict[str, Any]:
+    try:
+        match = re.search(r"\{.*\}", text, re.S)
+        return json.loads(match.group()) if match else {}
+    except Exception:
+        return {}
+
+
+async def gemini_nlu(
+    self,
+    query: str,
+    business_name: str,
+) -> Dict[str, Any]:
+    """
+    Full NLU analysis via Gemini (JSON-only).
+    """
+    system = build_system_prompt(business_name)
+
+    prompt = f"""
+Analyze the user message and return STRICT JSON.
+
+JSON SCHEMA:
+{{
+  "intent": "<string>",
+  "confidence": <0.0-1.0>,
+  "entities": {{ }},
+  "sentiment": <float -1.0 to 1.0>,
+  "urgency": "low|medium|high"
+}}
+
+User message: "{query}"
+"""
+
+    response = self.generate_response(
+        prompt,
+        temperature=0.1,
+        max_tokens=300,
+        system_message=system,
+    )
+
+    data = extract_json_from_text(response)
+
+    return {
+        "intent": data.get("intent", "unknown"),
+        "confidence": float(data.get("confidence", 0.0)),
+        "entities": data.get("entities", {}),
+        "sentiment": float(data.get("sentiment", 0.0)),
+        "urgency": data.get("urgency", "low"),
+        "source": "gemini",
+    }
+
+
+# =========================
+# TOKEN-LEVEL STREAMING WRAPPER
+# =========================
+
+async def stream_response(
+    self,
+    *,
+    prompt: str,
+    system_message: str,
+    cancel_event: Optional[asyncio.Event] = None,
+):
+    """
+    Async token-level streaming generator.
+    Wraps existing generate_stream().
+    """
+    try:
+        for token in self.generate_stream(
+            prompt=prompt,
+            system_message=system_message,
+        ):
+            if cancel_event and cancel_event.is_set():
+                break
+            yield token
+    except Exception as e:
+        logger.error(f"Gemini streaming failed: {e}")
+        return
+
+
+# =========================
+# UNIFIED NLU ENTRYPOINT
+# =========================
+
+async def analyze_user_input(
+    self,
+    query: str,
+    business_name: str,
+) -> Dict[str, Any]:
+    """
+    Fast path → Gemini fallback → confidence fusion.
+    """
+
+    # 1️⃣ Fast regex classifier
+    fast = fast_intent_classify(query)
+    if fast:
+        return {
+            **fast,
+            "entities": {},
+            "sentiment": 0.0,
+            "urgency": "low",
+        }
+
+    # 2️⃣ Gemini structured NLU
+    gem = await gemini_nlu(self, query, business_name)
+
+    # 3️⃣ Confidence guardrail
+    if gem["confidence"] < 0.6:
+        gem["intent"] = "clarification"
+
+    return gem
 # Global singleton instance
 gemini_service = GeminiService()
