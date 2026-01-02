@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Real-Time Voice Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0b1220;
+      color: #e5e7eb;
+      padding: 24px;
+    }
+    h1 { margin-bottom: 12px; }
+    .controls { margin-bottom: 12px; }
+    button, select {
+      padding: 8px 12px;
+      font-size: 14px;
+      margin-right: 8px;
+    }
+    pre {
+      background: #020617;
+      padding: 12px;
+      min-height: 80px;
+      white-space: pre-wrap;
+    }
+    #status { margin-top: 8px; opacity: 0.85; }
+  </style>
+</head>
+
+<body>
+  <h1>🎧 Voice Assistant</h1>
+
+  <div class="controls">
+    <select id="language">
+      <option value="en-US">English (US)</option>
+      <option value="en-IN">English (India)</option>
+    </select>
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+
+  <div id="status">Idle</div>
+  <pre id="transcript"></pre>
+
+<script type="module">
+/* ============================================================
+   CONFIG — MUST MATCH BACKEND
+============================================================ */
+const SAMPLE_RATE = 16000;
+const FRAME_SAMPLES = 3200; // ~200ms
+const WS_URL =
+  (location.protocol === "https:" ? "wss://" : "ws://") +
+  location.host +
+  "/ws/voice";
+
+/* ============================================================
+   PCM PLAYER — progressive, barge-in safe
+============================================================ */
+class PCMPlayer {
+  constructor() {
+    this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    this.queueTime = this.ctx.currentTime;
+  }
+
+  play(int16) {
+    const buffer = this.ctx.createBuffer(1, int16.length, SAMPLE_RATE);
+    const ch = buffer.getChannelData(0);
+    for (let i = 0; i < int16.length; i++) {
+      ch[i] = int16[i] / 0x7fff;
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(this.ctx.destination);
+    src.start(this.queueTime);
+    this.queueTime += buffer.duration;
+  }
+
+  stop() {
+    this.queueTime = this.ctx.currentTime;
+  }
+}
+
+/* ============================================================
+   AUDIO WORKLET — inline (single file)
+============================================================ */
+const workletCode = `
+class RecorderWorklet extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffer = [];
+  }
+  process(inputs) {
+    const ch = inputs[0]?.[0];
+    if (!ch) return true;
+    for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.buffer.push(s * 0x7fff);
+    }
+    if (this.buffer.length >= ${FRAME_SAMPLES}) {
+      const pcm = new Int16Array(this.buffer.splice(0, ${FRAME_SAMPLES}));
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    }
+    return true;
+  }
+}
+registerProcessor("recorder-worklet", RecorderWorklet);
+`;
+const workletURL = URL.createObjectURL(
+  new Blob([workletCode], { type: "application/javascript" })
+);
+
+/* ============================================================
+   MAIN ORCHESTRATION — mirrors voice.py
+============================================================ */
+let ws, audioCtx, micStream, workletNode, player;
+
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const languageSel = document.getElementById("language");
+
+startBtn.onclick = start;
+stopBtn.onclick = stop;
+
+async function start() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = async () => {
+    statusEl.textContent = "Connected";
+    ws.send(JSON.stringify({
+      type: "start",
+      meta: { language: languageSel.value }
+    }));
+    await startMic();
+  };
+
+  ws.onmessage = onMessage;
+  ws.onclose = cleanup;
+
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+}
+
+async function startMic() {
+  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  await audioCtx.audioWorklet.addModule(workletURL);
+
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const src = audioCtx.createMediaStreamSource(micStream);
+
+  workletNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
+  workletNode.port.onmessage = e => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(e.data); // ✅ RAW PCM BINARY
+    }
+  };
+
+  src.connect(workletNode);
+}
+
+function onMessage(ev) {
+  if (typeof ev.data !== "string") return;
+  const msg = JSON.parse(ev.data);
+
+  switch (msg.type) {
+    case "ready":
+      player = new PCMPlayer();
+      statusEl.textContent = "Listening…";
+      break;
+
+    case "transcript":
+      transcriptEl.textContent = msg.text;
+      break;
+
+    case "audio":
+      player.play(base64ToInt16(msg.audio));
+      break;
+
+    case "control":
+      if (msg.action === "stop_playback") {
+        player?.stop(); // ✅ barge-in
+      }
+      break;
+
+    case "error":
+      statusEl.textContent = "Error: " + msg.error;
+      break;
+  }
+}
+
+function stop() {
+  ws?.send(JSON.stringify({ type: "stop" }));
+  ws?.close();
+}
+
+function cleanup() {
+  micStream?.getTracks().forEach(t => t.stop());
+  workletNode?.disconnect();
+  audioCtx?.close();
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  statusEl.textContent = "Idle";
+}
+
+function base64ToInt16(b64) {
+  const raw = atob(b64);
+  const out = new Int16Array(raw.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = raw.charCodeAt(i * 2) |
+            (raw.charCodeAt(i * 2 + 1) << 8);
+  }
+  return out;
+}
+</script>
+</body>
+</html>
