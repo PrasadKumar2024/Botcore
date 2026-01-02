@@ -33,7 +33,6 @@ from app.routes.twilio_voice import router as twilio_voice_router
 from app.routes.websocket_handler import router as websocket_router
 from app.routes.hd_audio_ws import router as hd_audio_router
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 
 # Initialize FastAPI app
@@ -41,10 +40,6 @@ app = FastAPI(
     title="Ownbot",
     description="Multi-tenant Bot Management System",
     version="1.0.0"
-)
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["*"],  # or ["botcore-z6j0.onrender.com"]
 )
 
 app.add_middleware(
