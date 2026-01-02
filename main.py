@@ -25,13 +25,14 @@ from app import models
 from sqlalchemy import text
 
 # Import AI Services
-from app.services.gemini_service import GeminiService
-from app.services.document_service import DocumentService
+#from app.services.gemini_service import GeminiService
+#from app.services.document_service import DocumentService
 from app.routes.chat import router as chat_router
-from app.routes.twilio_webhook import router as twilio_router
-from app.routes.twilio_voice import router as twilio_voice_router
-from app.routes.websocket_handler import router as websocket_router
-from app.routes.hd_audio_ws import router as hd_audio_router
+#from app.routes.twilio_webhook import router as twilio_router
+#from app.routes.twilio_voice import router as twilio_voice_router
+#from app.routes.websocket_handler import router as websocket_router
+#from app.routes.hd_audio_ws import router as hd_audio_router
+from app.routes.voice import router as voice_router
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -50,13 +51,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Initialize AI Services
-gemini_service = GeminiService()
-document_service = DocumentService()
-app.include_router(hd_audio_router)
+#gemini_service = GeminiService()
+#document_service = DocumentService()
+#app.include_router(hd_audio_router)
 app.include_router(chat_router)
-app.include_router(twilio_router)
-app.include_router(twilio_voice_router, prefix="/twilio/voice", tags=["twilio-voice"])
-app.include_router(websocket_router, prefix="", tags=["websocket"])
+app.include_router(voice_router)
+#app.include_router(twilio_router)
+#app.include_router(twilio_voice_router, prefix="/twilio/voice", tags=["twilio-voice"])
+#app.include_router(websocket_router, prefix="", tags=["websocket"])
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
