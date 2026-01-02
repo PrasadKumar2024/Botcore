@@ -22,7 +22,7 @@ from app.services.tts_service import (
     cancel_tts,
     close_session,
 )
-from app.services.pinecone_service import pinecone_service
+from app.services.pinecone_service import get_pinecone_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -129,7 +129,7 @@ async def voice_ws(ws: WebSocket):
             session.add_assistant(response)
             return
         # ---------- RAG ----------
-        rag = await pinecone_service.search(
+        rag = await get_pinecone_service.search(
             client_id=session.client_id,
             query=text,
             top_k=5,
