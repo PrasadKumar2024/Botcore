@@ -1,3 +1,30 @@
+# ===============================
+# WebRTC VAD (Real-time voice UX)
+# ===============================
+
+import webrtcvad
+
+class WebRTCVAD:
+    """
+    Thin wrapper around webrtcvad for 16kHz mono PCM.
+    """
+    def __init__(self, sample_rate: int = 16000, aggressiveness: int = 2):
+        self.sample_rate = sample_rate
+        self.vad = webrtcvad.Vad(aggressiveness)
+
+    def is_speech(self, pcm: bytes) -> bool:
+        # expects 16-bit mono PCM
+        return self.vad.is_speech(pcm, self.sample_rate)
+
+
+def is_silence(pcm: bytes, vad: WebRTCVAD) -> bool:
+    """
+    Returns True if PCM frame contains no speech.
+    """
+    try:
+        return not vad.is_speech(pcm)
+    except Exception:
+        return True
 """
 Audio utilities for Twilio ↔ Google Cloud conversion
 """
