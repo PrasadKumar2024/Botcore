@@ -574,4 +574,14 @@ class PineconeService:
 
 
 # Global instance
-pinecone_service = PineconeService()
+# -------------------------------
+# Lazy global singleton (Render-safe)
+# -------------------------------
+
+pinecone_service = None
+
+def get_pinecone_service() -> "PineconeService":
+    global pinecone_service
+    if pinecone_service is None:
+        pinecone_service = PineconeService()
+    return pinecone_service
