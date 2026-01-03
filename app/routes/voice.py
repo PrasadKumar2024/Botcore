@@ -29,57 +29,54 @@ router = APIRouter()
 
 # ===================== TUNING CONSTANTS =====================
 
-AUDIO_QUEUE_MAX = 400                     # ~80–120s safety buffer
-DEBOUNCE_SECONDS = 0.45                  # silence → utterance end
+AUDIO_QUEUE_MAX = 400
+DEBOUNCE_SECONDS = 0.45
 SENTENCE_REGEX = re.compile(r"(?<=[.!?])\s+")
 MAX_CONTEXT_TURNS = 8
+
+SYSTEM_PROMPT = "You are a helpful, real-time voice assistant."
 
 # ============================================================
 
 
 @router.websocket("/ws/voice")
 async def voice_ws(ws: WebSocket):
-    """
-    REAL-TIME ORCHESTRATION LAYER
-    """
-
     await ws.accept()
-    client_id = websocket.query_params.get("client_id")
+
+    # ---------- CLIENT ID ----------
+    client_id = ws.query_params.get("client_id")
     if not client_id:
-        await websocket.close(code=1008)
+        await ws.close(code=1008)
         return
 
-    # ---------------- SESSION ----------------
-    session = SessionState(
-    client_id=client_id,
-    memory_limit=20
-    )
+    # ---------- SESSION ----------
+    session = SessionState(client_id=client_id, memory_limit=20)
     vad = WebRTCVAD(sample_rate=16000)
 
-    # ---------------- AUDIO PIPELINE ----------------
+    # ---------- AUDIO PIPELINE ----------
     audio_queue: queue.Queue[Optional[bytes]] = queue.Queue(AUDIO_QUEUE_MAX)
     transcript_queue: asyncio.Queue = asyncio.Queue()
     stop_event = threading.Event()
 
-    # ---------------- STATE ----------------
+    # ---------- STATE ----------
     last_voice_ts = time.monotonic()
     utterance_buffer: list[str] = []
     is_bot_speaking = False
     current_llm_task: Optional[asyncio.Task] = None
 
-    # ---------------- TTS INIT ----------------
+    # ---------- TTS INIT ----------
     await register_session(
-        session.id,
+        session.session_id,
         audio_sender=lambda pcm: ws.send_text(
             json.dumps({
                 "type": "audio",
                 "audio": base64.b64encode(pcm).decode(),
             })
-        )
+        ),
     )
 
-    # ---------------- STT THREAD ----------------
-    stt_thread = start_stt_worker(
+    # ---------- STT THREAD ----------
+    start_stt_worker(
         audio_queue=audio_queue,
         transcript_queue=transcript_queue,
         stop_event=stop_event,
@@ -88,7 +85,7 @@ async def voice_ws(ws: WebSocket):
 
     await ws.send_text(json.dumps({
         "type": "ready",
-        "session_id": session.id,
+        "session_id": session.session_id,
         "language": session.language,
     }))
 
@@ -98,6 +95,7 @@ async def voice_ws(ws: WebSocket):
 
     async def hard_barge_in():
         nonlocal is_bot_speaking, current_llm_task
+
         if not is_bot_speaking:
             return
 
@@ -106,7 +104,7 @@ async def voice_ws(ws: WebSocket):
             "action": "stop_playback",
         }))
 
-        cancel_tts(session.id)
+        cancel_tts(session.session_id)
 
         if current_llm_task and not current_llm_task.done():
             current_llm_task.cancel()
@@ -116,34 +114,16 @@ async def voice_ws(ws: WebSocket):
     async def finalize_utterance(text: str):
         nonlocal is_bot_speaking, current_llm_task
 
-        session.add_user(text)
-        fast = fast_intent_classify(text)
-        if fast and fast["intent"] == "greeting":
-            response = gemini_service.generate_response(
-                prompt=text,
-                system_message="You are a warm, friendly voice assistant. Respond briefly and naturally.",
-                max_tokens=60,
-                temperature=0.8,
-            )
+        session.add_turn(role="user", text=text)
 
-            await tts_enqueue(
-                session_id=session.id,
-                text=response,
-                language=session.language,
-                sentiment=0.4,
-            )
-
-            session.add_assistant(response)
-            return
-        # ---------- RAG ----------
-        rag = await get_pinecone_service.search(
+        pinecone = get_pinecone_service()
+        rag = await pinecone.search(
             client_id=session.client_id,
             query=text,
             top_k=5,
             min_score=0.5,
         )
 
-        # ---------- STREAMING LLM ----------
         async def llm_stream():
             nonlocal is_bot_speaking
             is_bot_speaking = True
@@ -154,7 +134,7 @@ async def voice_ws(ws: WebSocket):
             try:
                 async for token in gemini_service.generate_stream(
                     user_text=text,
-                    system_message=system_prompt,
+                    system_message=SYSTEM_PROMPT,
                     cancel_token=session.llm_cancel_token._event,
                 ):
                     token_buffer += token
@@ -166,25 +146,25 @@ async def voice_ws(ws: WebSocket):
                             sent = sent.strip()
                             if sent:
                                 await tts_enqueue(
-                                    session_id=session.id,
+                                    session_id=session.session_id,
                                     text=sent,
                                     language=session.language,
-                                    sentiment=session.estimate_sentiment(sent),
+                                    sentiment=0.0,
                                 )
                         sentence_buffer = sentences[-1]
 
                 if sentence_buffer.strip():
                     await tts_enqueue(
-                        session_id=session.id,
+                        session_id=session.session_id,
                         text=sentence_buffer.strip(),
                         language=session.language,
-                        sentiment=session.estimate_sentiment(sentence_buffer),
+                        sentiment=0.0,
                     )
 
-                session.add_assistant(token_buffer)
+                session.add_turn(role="assistant", text=token_buffer)
 
             except asyncio.CancelledError:
-                logger.info("LLM stream cancelled (barge-in)")
+                logger.info("LLM stream cancelled")
             finally:
                 is_bot_speaking = False
 
@@ -210,7 +190,7 @@ async def voice_ws(ws: WebSocket):
         while True:
             resp = await transcript_queue.get()
             if resp is None:
-                break
+                return
 
             for result in resp.results:
                 if not result.alternatives:
@@ -218,7 +198,6 @@ async def voice_ws(ws: WebSocket):
 
                 alt = result.alternatives[0]
                 text = alt.transcript.strip()
-                is_final = result.is_final
 
                 if text and is_bot_speaking:
                     await hard_barge_in()
@@ -227,10 +206,10 @@ async def voice_ws(ws: WebSocket):
                     await ws.send_text(json.dumps({
                         "type": "transcript",
                         "text": text,
-                        "is_final": is_final,
+                        "is_final": result.is_final,
                     }))
 
-                if is_final:
+                if result.is_final:
                     utterance_buffer.append(text)
                     last_voice_ts = time.monotonic()
 
@@ -247,6 +226,7 @@ async def voice_ws(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive()
+
             if raw["type"] == "websocket.receive":
                 if "bytes" in raw:
                     pcm = raw["bytes"]
@@ -260,22 +240,14 @@ async def voice_ws(ws: WebSocket):
 
                 elif "text" in raw:
                     msg = json.loads(raw["text"])
-
-                    if msg["type"] == "start":
-                        session.language = msg.get("meta", {}).get("language", session.language)
-
-                    elif msg["type"] == "stop":
+                    if msg.get("type") == "stop":
                         break
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
 
-    except Exception as e:
+    except Exception:
         logger.exception("Voice WS error")
-        await ws.send_text(json.dumps({
-            "type": "error",
-            "error": "internal_error",
-        }))
 
     finally:
         stop_event.set()
@@ -283,6 +255,6 @@ async def voice_ws(ws: WebSocket):
         await transcript_queue.put(None)
 
         consumer_task.cancel()
-        await hard_barge_in()
-        await close_session(session.id)
+        cancel_tts(session.session_id)
+        await close_session(session.session_id)
         await ws.close()
