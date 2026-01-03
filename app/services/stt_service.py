@@ -154,7 +154,7 @@ def start_stt_worker(
     Starts a dedicated STT thread and returns it.
     """
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     worker = STTWorker(
         audio_queue=audio_queue,
