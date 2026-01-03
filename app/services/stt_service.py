@@ -91,10 +91,6 @@ class STTWorker:
     # ------------------------------------------------
 
     def _stream_once(self):
-        """
-        Runs a single Google streaming recognition session.
-        """
-
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
@@ -109,11 +105,20 @@ class STTWorker:
             single_utterance=False,
         )
 
-        requests = self._audio_generator()
+        def request_generator():
+        # ✅ FIRST request MUST contain the config
+            yield speech.StreamingRecognizeRequest(
+                streaming_config=streaming_config
+            )
+
+        # ✅ Following requests contain audio only
+            for chunk in self._audio_generator():
+                yield speech.StreamingRecognizeRequest(
+                    audio_content=chunk
+                )
 
         responses = self.client.streaming_recognize(
-            streaming_config=streaming_config,
-            requests=requests,
+            requests=request_generator()
         )
 
         start_ts = time.monotonic()
@@ -122,20 +127,17 @@ class STTWorker:
             if self.stop_event.is_set():
                 return
 
-            # Google enforces stream duration limits
             if time.monotonic() - start_ts > STREAMING_LIMIT_SEC:
-                logger.info("Restarting STT stream (time limit)")
+                logger.info("Restarting STT stream (time limit reached)")
                 return
 
             if not response.results:
                 continue
 
-            # Push response safely into asyncio loop
             asyncio.run_coroutine_threadsafe(
                 self.transcript_queue.put(response),
                 self.loop,
             )
-
 
 # ==================================================
 # ---------------- PUBLIC API -----------------------
