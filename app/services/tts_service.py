@@ -117,7 +117,8 @@ def synthesize_blocking(
         sample_rate_hertz=PCM_SAMPLE_RATE,
     )
 
-    response = _tts_client.synthesize_speech(
+    client = get_tts_client()
+    response = client.synthesize_speech(
         input=synthesis_input,
         voice=voice,
         audio_config=audio_config,
