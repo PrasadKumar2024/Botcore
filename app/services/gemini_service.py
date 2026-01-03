@@ -1049,23 +1049,49 @@ async def analyze_user_input(
         gem["intent"] = "clarification"
 
     return gem
-async def generate_stream_async(
-    self,
-    *,
-    user_text: str,
-    system_message: str,
-    cancel_token: Optional[threading.Event] = None,
-) -> AsyncGenerator[str, None]:
-    """
-    AUTHORITATIVE Gemini token streaming.
-    Threaded producer → asyncio consumer.
-    """
+    async def generate_stream_async(
+        self,
+        user_text: str,
+        system_message: Optional[str] = None,
+        cancel_token: Optional[threading.Event] = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Async wrapper to make the blocking Google API compatible with the voice route
+        """
+        if not self.check_availability():
+            yield "I am currently offline."
+            return
 
-    if not self.check_availability():
-        raise RuntimeError("Gemini unavailable")
+        # Prepare the prompt
+        prompt = user_text
+        if system_message:
+            prompt = f"{system_message}\n\nUser: {user_text}"
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue()
+
+        def _producer():
+            try:
+                response = self.model.generate_content(prompt, stream=True)
+                for chunk in response:
+                    if cancel_token and cancel_token.is_set():
+                        break
+                    if chunk.text:
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk.text)
+            except Exception as e:
+                logger.error(f"Gemini generation error: {e}")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None) # Signal end
+
+        # Run the blocking API in a separate thread
+        threading.Thread(target=_producer, daemon=True).start()
+
+        while True:
+            token = await queue.get()
+            if token is None:
+                break
+            yield token
+
 
     def _worker():
         try:
