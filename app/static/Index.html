@@ -50,10 +50,12 @@
 ============================================================ */
 const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 3200; // ~200ms
+const CLIENT_ID = "user_" + Math.random().toString(36).substring(2, 10);
+
 const WS_URL =
   (location.protocol === "https:" ? "wss://" : "ws://") +
   location.host +
-  "/ws/voice";
+  "/ws/voice?client_id=" + CLIENT_ID;
 
 /* ============================================================
    PCM PLAYER — progressive, barge-in safe
