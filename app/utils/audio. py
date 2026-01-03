@@ -1,7 +1,6 @@
 # ===============================
 # WebRTC VAD (Real-time voice UX)
 # ===============================
-
 # app/utils/audio.py
 try:
     import webrtcvad
