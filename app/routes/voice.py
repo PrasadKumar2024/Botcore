@@ -44,6 +44,10 @@ async def voice_ws(ws: WebSocket):
     """
 
     await ws.accept()
+    client_id = websocket.query_params.get("client_id")
+    if not client_id:
+        await websocket.close(code=1008)
+        return
 
     # ---------------- SESSION ----------------
     session = SessionState(
