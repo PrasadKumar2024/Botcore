@@ -1093,37 +1093,6 @@ async def analyze_user_input(
             yield token
 
 
-    def _worker():
-        try:
-            response = self.model.generate_content(
-                f"{system_message}\n\n{user_text}",
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=1024,
-                ),
-                safety_settings=[
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-                ],
-                stream=True,
-            )
-
-            for chunk in response:
-                if cancel_token and cancel_token.is_set():
-                    break
-                if chunk.text:
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk.text)
-        finally:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-
-    threading.Thread(target=_worker, daemon=True).start()
-
-    while True:
-        token = await queue.get()
-        if token is None:
-            break
-        yield token
+    
 # Global singleton instance
 gemini_service = GeminiService()
