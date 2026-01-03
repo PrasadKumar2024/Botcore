@@ -28,7 +28,13 @@ AUDIO_CHUNK_SIZE = 3200          # ~100ms of 16kHz PCM
 _tts_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TTS)
 _sessions: Dict[str, "TTSSession"] = {}
 
-_tts_client = tts.TextToSpeechClient()
+_tts_client = None
+
+def get_tts_client():
+    global _tts_client
+    if _tts_client is None:
+        _tts_client = tts.TextToSpeechClient()
+    return _tts_client
 
 # ============================================================
 # DATA STRUCTURES
