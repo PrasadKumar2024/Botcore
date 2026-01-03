@@ -46,7 +46,10 @@ async def voice_ws(ws: WebSocket):
     await ws.accept()
 
     # ---------------- SESSION ----------------
-    session = SessionState(maxlen=20)
+    session = SessionState(
+    client_id=client_id,
+    memory_limit=20
+    )
     vad = WebRTCVAD(sample_rate=16000)
 
     # ---------------- AUDIO PIPELINE ----------------
