@@ -132,11 +132,11 @@ async def voice_ws(ws: WebSocket):
             sentence_buffer = ""
 
             try:
-                async for token in gemini_service.generate_stream(
-                    user_text=text,
-                    system_message=SYSTEM_PROMPT,
-                    cancel_token=session.llm_cancel_token._event,
-                ):
+                async for token in gemini_service.generate_stream_async(
+                user_text=text,
+                system_message=SYSTEM_PROMPT,
+                cancel_token=session.llm_cancel_token, 
+            ):
                     token_buffer += token
                     sentence_buffer += token
 
