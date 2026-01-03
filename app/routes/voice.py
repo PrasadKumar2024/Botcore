@@ -227,21 +227,36 @@ async def voice_ws(ws: WebSocket):
         while True:
             raw = await ws.receive()
 
-            if raw["type"] == "websocket.receive":
-                if "bytes" in raw:
-                    pcm = raw["bytes"]
-                    if not is_silence(pcm, vad=vad):
-                        last_voice_ts = time.monotonic()
-                        try:
-                            audio_queue.put_nowait(pcm)
-                        except queue.Full:
-                            audio_queue.get_nowait()
-                            audio_queue.put_nowait(pcm)
+            # ✅ THIS IS THE FIX
+            if raw["type"] == "websocket.disconnect":
+                logger.info("WebSocket disconnected by client")
+                break
 
-                elif "text" in raw:
-                    msg = json.loads(raw["text"])
-                    if msg.get("type") == "stop":
-                        break
+            if raw["type"] != "websocket.receive":
+                continue
+
+        # ---------- Binary audio ----------
+            if "bytes" in raw:
+                pcm = raw["bytes"]
+                if not is_silence(pcm, vad=vad):
+                    last_voice_ts = time.monotonic()
+                    try:
+                        audio_queue.put_nowait(pcm)
+                    except queue.Full:
+                        audio_queue.get_nowait()
+                        audio_queue.put_nowait(pcm)
+
+        # ---------- Text control ----------
+            elif "text" in raw:
+                msg = json.loads(raw["text"])
+
+                if msg["type"] == "start":
+                    session.set_language(
+                        msg.get("meta", {}).get("language", session.language)
+                    )
+
+                elif msg["type"] == "stop":
+                    break
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
@@ -255,6 +270,5 @@ async def voice_ws(ws: WebSocket):
         await transcript_queue.put(None)
 
         consumer_task.cancel()
-        cancel_tts(session.session_id)
+        await hard_barge_in()
         await close_session(session.session_id)
-        await ws.close()
