@@ -67,7 +67,12 @@ def normalize_query(text: str) -> str:
         return ""
 
     s = text.lower().strip()
-
+    
+    urgency_markers = []
+    for word in ['urgent', 'quickly', 'immediately', 'asap', 'hurry', 'fast']:
+        if word in s:
+            urgency_markers.append(word)
+    
     for patt, repl in _CONTRACTIONS.items():
         s = re.sub(patt, repl, s)
 
@@ -88,8 +93,11 @@ def normalize_query(text: str) -> str:
             out.extend(_QUERY_EXPANSIONS[t].split())
         i += 1
 
-    return " ".join(out)
-
+    result = " ".join(out)
+    if urgency_markers:
+        result = " ".join(urgency_markers) + " " + result
+    
+    return result
 
 # -----------------------------
 # Helpers
@@ -112,17 +120,167 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         except Exception:
             return None
 
+def _get_cache_key(self, client_id: str, query: str) -> str:
+    """Generate cache key from client_id and normalized query"""
+    import hashlib
+    normalized = normalize_query(query)
+    key_str = f"{client_id}:{normalized}"
+    return hashlib.md5(key_str.encode()).hexdigest()
 
+def _check_cache(self, cache_key: str) -> Optional[RAGResult]:
+    """Check if cached response is still valid"""
+    if cache_key in self.response_cache:
+        result, timestamp = self.response_cache[cache_key]
+        if time.time() - timestamp < self.cache_ttl:
+            logger.info(f"Cache hit for key: {cache_key[:8]}...")
+            return result
+        else:
+            del self.response_cache[cache_key]
+    return None
+
+def _set_cache(self, cache_key: str, result: RAGResult):
+    """Store result in cache with size limit"""
+    self.response_cache[cache_key] = (result, time.time())
+    
+    if len(self.response_cache) > 100:
+        oldest_key = min(
+            self.response_cache.keys(),
+            key=lambda k: self.response_cache[k][1]
+        )
+        del self.response_cache[oldest_key]
+
+async def _rerank_results(
+    self,
+    query: str,
+    results: List[Dict[str, Any]],
+    top_n: int = 4
+) -> List[Dict[str, Any]]:
+    """
+    Re-rank search results using cross-encoder for semantic relevance.
+    Returns top_n most relevant chunks.
+    """
+    if not self.use_reranker or not results:
+        return results[:top_n]
+    
+    try:
+        pairs = [
+            (query, r.get('chunk_text', ''))
+            for r in results
+        ]
+        
+        loop = asyncio.get_event_loop()
+        scores = await loop.run_in_executor(
+            None,
+            self.reranker.predict,
+            pairs
+        )
+        
+        for i, result in enumerate(results):
+            result['rerank_score'] = float(scores[i])
+        
+        reranked = sorted(
+            results,
+            key=lambda x: x.get('rerank_score', 0.0),
+            reverse=True
+        )
+        
+        logger.info(
+            f"Re-ranked {len(results)} results, "
+            f"top score: {reranked[0].get('rerank_score', 0):.3f}"
+        )
+        
+        return reranked[:top_n]
+        
+    except Exception as e:
+        logger.exception(f"Re-ranking failed: {e}")
+        return results[:top_n]
+
+def _detect_intent_and_emotion(
+    self,
+    query: str,
+    session_context: Optional[List[Dict[str, Any]]] = None
+) -> Tuple[ConversationIntent, float, int]:
+    """
+    Detect user intent, emotion score, and urgency level.
+    Returns tuple of intent, emotion score, and urgency level.
+    """
+    query_lower = query.lower()
+    
+    urgency_words = ['urgent', 'hurry', 'quick', 'quickly', 'immediately', 'now', 'asap', 'fast']
+    urgency_level = sum(1 for word in urgency_words if word in query_lower)
+    urgency_level = min(urgency_level, 3)
+    
+    frustration_words = ['frustrated', 'angry', 'annoyed', 'upset', 'disappointed', 
+                         'waste', 'useless', 'terrible', 'awful', 'horrible']
+    is_frustrated = any(word in query_lower for word in frustration_words)
+    
+    confusion_words = ['confused', "don't understand", "dont understand", 'what do you mean', 
+                       'unclear', 'explain again', 'not clear']
+    is_confused = any(phrase in query_lower for phrase in confusion_words)
+    
+    question_words = ['what', 'when', 'where', 'who', 'why', 'how', '?']
+    is_question = any(word in query_lower for word in question_words)
+    
+    greeting_words = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening']
+    is_greeting = any(word in query_lower for word in greeting_words)
+    
+    farewell_words = ['bye', 'goodbye', 'thank you', 'thanks', "that's all", 'thats all']
+    is_farewell = any(word in query_lower for word in farewell_words)
+    
+    if is_greeting:
+        intent = ConversationIntent.GREETING
+        emotion = 0.5
+    elif is_frustrated:
+        intent = ConversationIntent.FRUSTRATED
+        emotion = -0.7
+    elif is_confused:
+        intent = ConversationIntent.CONFUSED
+        emotion = -0.3
+    elif urgency_level >= 2:
+        intent = ConversationIntent.URGENT
+        emotion = 0.0
+    elif is_farewell:
+        intent = ConversationIntent.FAREWELL
+        emotion = 0.6
+    elif is_question:
+        intent = ConversationIntent.QUESTION
+        emotion = 0.0
+    else:
+        intent = ConversationIntent.QUESTION
+        emotion = 0.0
+    
+    return intent, emotion, urgency_level
+    
 def _rag_confidence(results: List[Dict[str, Any]]) -> float:
+    """
+    Calculate confidence from both embedding score and rerank score.
+    Prioritizes rerank scores when available.
+    """
     if not results:
         return 0.0
-    scores = [r.get("score", 0.0) for r in results if r.get("score") is not None]
-    if not scores:
+    
+    rerank_scores = [
+        r.get("rerank_score", 0.0) 
+        for r in results 
+        if r.get("rerank_score") is not None
+    ]
+    
+    if rerank_scores:
+        avg_rerank = sum(rerank_scores) / len(rerank_scores)
+        normalized = avg_rerank / 10.0
+        return max(0.0, min(1.0, normalized))
+    
+    embed_scores = [
+        r.get("score", 0.0) 
+        for r in results 
+        if r.get("score") is not None
+    ]
+    
+    if not embed_scores:
         return 0.0
-    avg = sum(scores) / len(scores)
-    # heuristic normalization (matches old behavior)
-    return max(0.0, min(1.0, avg + 0.5))
-
+    
+    avg = sum(embed_scores) / len(embed_scores)
+    return max(0.0, min(1.0, (avg + 1.0) / 2.0))
 
 # -----------------------------
 # Main RAG Engine
@@ -343,7 +501,7 @@ class RAGEngine:
             (time.time() - start_ts) * 1000,
         )
 
-        return RAGResult(
+        final_result = RAGResult(
             spoken_text=spoken or fact,
             fact_text=fact,
             intent=intent,
@@ -352,7 +510,10 @@ class RAGEngine:
             confidence=confidence,
             used_rag=True,
         )
-
+    
+        self._set_cache(cache_key, final_result)
+    
+        return final_result
 
 # -----------------------------
 # Singleton
