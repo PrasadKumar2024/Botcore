@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import queue
@@ -12,7 +11,6 @@ from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.utils.audio import is_silence, WebRTCVAD
 from app.context.session_state import SessionState
 from app.services.stt_service import start_stt_worker
 from app.services.gemini_service import gemini_service
@@ -20,9 +18,10 @@ from app.services.tts_service import (
     register_session,
     tts_enqueue,
     cancel_tts,
-    close_session,
+    close_session as close_tts_session,
 )
-from app.services.pinecone_service import get_pinecone_service
+from app.services import webrtc_service
+from app.services.rag_engine import rag_engine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -51,7 +50,6 @@ async def voice_ws(ws: WebSocket):
 
     # ---------- SESSION ----------
     session = SessionState(client_id=client_id, memory_limit=20)
-    vad = WebRTCVAD(sample_rate=16000)
 
     # ---------- AUDIO PIPELINE ----------
     audio_queue: queue.Queue[Optional[bytes]] = queue.Queue(AUDIO_QUEUE_MAX)
@@ -63,46 +61,34 @@ async def voice_ws(ws: WebSocket):
     utterance_buffer: list[str] = []
     is_bot_speaking = False
     current_llm_task: Optional[asyncio.Task] = None
-
-    # ---------- TTS INIT ----------
-    await register_session(
-        session.session_id,
-        audio_sender=lambda pcm: ws.send_text(
-            json.dumps({
-                "type": "audio",
-                "audio": base64.b64encode(pcm).decode(),
-            })
-        ),
-    )
-
-    # ---------- STT THREAD ----------
-    start_stt_worker(
-        audio_queue=audio_queue,
-        transcript_queue=transcript_queue,
-        stop_event=stop_event,
-        language=session.language,
-    )
-
-    await ws.send_text(json.dumps({
-        "type": "ready",
-        "session_id": session.session_id,
-        "language": session.language,
-    }))
+    webrtc_session = None
+    
+    # Track speaking rate for adaptive pacing
+    user_speech_timestamps: list[float] = []
+    user_speech_lengths: list[int] = []
 
     # ============================================================
     # ---------------- INTERNAL HELPERS --------------------------
     # ============================================================
+
+    def stt_audio_callback(pcm_data: bytes):
+        """Callback for WebRTC incoming audio"""
+        try:
+            audio_queue.put_nowait(pcm_data)
+        except queue.Full:
+            audio_queue.get_nowait()
+            audio_queue.put_nowait(pcm_data)
+
+    async def send_tts_audio(pcm_data: bytes):
+        """Send TTS audio via WebRTC"""
+        if webrtc_session:
+            await webrtc_session.send_audio(pcm_data)
 
     async def hard_barge_in():
         nonlocal is_bot_speaking, current_llm_task
 
         if not is_bot_speaking:
             return
-
-        await ws.send_text(json.dumps({
-            "type": "control",
-            "action": "stop_playback",
-        }))
 
         cancel_tts(session.session_id)
 
@@ -111,17 +97,38 @@ async def voice_ws(ws: WebSocket):
 
         is_bot_speaking = False
 
+    async def send_acknowledgment(language: str):
+        """Immediate filler to mask LLM latency"""
+        acknowledgments = {
+            "en-US": ["Let me check that for you...", "One moment...", "Sure, let me see..."],
+            "en-IN": ["Sure, checking...", "One second...", "Let me find that..."],
+        }
+        
+        import random
+        ack = random.choice(acknowledgments.get(language, acknowledgments["en-US"]))
+        
+        await tts_enqueue(
+            session_id=session.session_id,
+            text=ack,
+            language=language,
+            sentiment=0.3,
+            speaking_rate=1.1,
+        )
+
     async def finalize_utterance(text: str):
         nonlocal is_bot_speaking, current_llm_task
 
         session.add_turn(role="user", text=text)
-
-        pinecone = get_pinecone_service()
-        rag = await pinecone.search(
+        
+        # Zero-latency acknowledgment
+        await send_acknowledgment(session.language)
+        
+        # RAG search with re-ranking
+        rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
-            top_k=5,
-            min_score=0.5,
+            session_context=session.memory,
+            language=session.language,
         )
 
         async def llm_stream():
@@ -132,11 +139,16 @@ async def voice_ws(ws: WebSocket):
             sentence_buffer = ""
 
             try:
+                # Build context-aware system prompt
+                system_prompt = SYSTEM_PROMPT
+                if rag_result.used_rag and rag_result.confidence > 0.6:
+                    system_prompt += f"\n\nRELEVANT CONTEXT:\n{rag_result.fact_text}"
+                
                 async for token in gemini_service.generate_stream_async(
-                user_text=text,
-                system_message=SYSTEM_PROMPT,
-                cancel_token=session.llm_cancel_token, 
-            ):
+                    user_text=text,
+                    system_message=system_prompt,
+                    cancel_token=session.llm_cancel_token,
+                ):
                     token_buffer += token
                     sentence_buffer += token
 
@@ -149,7 +161,8 @@ async def voice_ws(ws: WebSocket):
                                     session_id=session.session_id,
                                     text=sent,
                                     language=session.language,
-                                    sentiment=0.0,
+                                    sentiment=rag_result.sentiment,
+                                    speaking_rate=session.speaking_rate,
                                 )
                         sentence_buffer = sentences[-1]
 
@@ -158,7 +171,8 @@ async def voice_ws(ws: WebSocket):
                         session_id=session.session_id,
                         text=sentence_buffer.strip(),
                         language=session.language,
-                        sentiment=0.0,
+                        sentiment=rag_result.sentiment,
+                        speaking_rate=session.speaking_rate,
                     )
 
                 session.add_turn(role="assistant", text=token_buffer)
@@ -211,7 +225,29 @@ async def voice_ws(ws: WebSocket):
 
                 if result.is_final:
                     utterance_buffer.append(text)
-                    last_voice_ts = time.monotonic()
+                    current_time = time.monotonic()
+                    last_voice_ts = current_time
+                    
+                    # Track speaking rate
+                    user_speech_timestamps.append(current_time)
+                    user_speech_lengths.append(len(text))
+                    
+                    if len(user_speech_timestamps) > 5:
+                        user_speech_timestamps.pop(0)
+                        user_speech_lengths.pop(0)
+                    
+                    # Calculate adaptive pacing
+                    if len(user_speech_timestamps) >= 2:
+                        time_span = user_speech_timestamps[-1] - user_speech_timestamps[0]
+                        total_chars = sum(user_speech_lengths)
+                        if time_span > 0:
+                            chars_per_sec = total_chars / time_span
+                            if chars_per_sec > 18:
+                                session.speaking_rate = 1.15
+                            elif chars_per_sec < 10:
+                                session.speaking_rate = 0.90
+                            else:
+                                session.speaking_rate = 1.0
 
                     if debounce_task:
                         debounce_task.cancel()
@@ -220,14 +256,13 @@ async def voice_ws(ws: WebSocket):
     consumer_task = asyncio.create_task(transcript_consumer())
 
     # ============================================================
-    # ---------------- MAIN WS LOOP ------------------------------
+    # ---------------- MAIN SIGNALING LOOP -----------------------
     # ============================================================
 
     try:
         while True:
             raw = await ws.receive()
 
-            # ✅ THIS IS THE FIX
             if raw["type"] == "websocket.disconnect":
                 logger.info("WebSocket disconnected by client")
                 break
@@ -235,25 +270,50 @@ async def voice_ws(ws: WebSocket):
             if raw["type"] != "websocket.receive":
                 continue
 
-        # ---------- Binary audio ----------
-            if "bytes" in raw:
-                pcm = raw["bytes"]
-                if not is_silence(pcm, vad=vad):
-                    last_voice_ts = time.monotonic()
-                    try:
-                        audio_queue.put_nowait(pcm)
-                    except queue.Full:
-                        audio_queue.get_nowait()
-                        audio_queue.put_nowait(pcm)
-
-        # ---------- Text control ----------
-            elif "text" in raw:
+            if "text" in raw:
                 msg = json.loads(raw["text"])
 
-                if msg["type"] == "start":
-                    session.set_language(
-                        msg.get("meta", {}).get("language", session.language)
+                if msg["type"] == "webrtc_offer":
+                    # Create WebRTC session
+                    webrtc_session = await webrtc_service.create_session(
+                        session_id=session.session_id,
+                        stt_callback=stt_audio_callback,
                     )
+                    
+                    # Handle offer and get answer
+                    answer_sdp = await webrtc_session.handle_offer(msg["sdp"])
+                    
+                    # Set language
+                    session.set_language(msg.get("language", session.language))
+                    
+                    # Initialize TTS with WebRTC audio sender
+                    await register_session(
+                        session.session_id,
+                        audio_sender=send_tts_audio,
+                    )
+                    
+                    # Start STT worker
+                    start_stt_worker(
+                        audio_queue=audio_queue,
+                        transcript_queue=transcript_queue,
+                        stop_event=stop_event,
+                        language=session.language,
+                    )
+                    
+                    # Send answer back
+                    await ws.send_text(json.dumps({
+                        "type": "webrtc_answer",
+                        "sdp": answer_sdp,
+                    }))
+                    
+                    await ws.send_text(json.dumps({
+                        "type": "ready",
+                        "session_id": session.session_id,
+                    }))
+
+                elif msg["type"] == "ice_candidate":
+                    if webrtc_session and msg.get("candidate"):
+                        await webrtc_session.add_ice_candidate(msg["candidate"])
 
                 elif msg["type"] == "stop":
                     break
@@ -271,4 +331,7 @@ async def voice_ws(ws: WebSocket):
 
         consumer_task.cancel()
         await hard_barge_in()
-        await close_session(session.session_id)
+        await close_tts_session(session.session_id)
+        
+        if webrtc_session:
+            await webrtc_service.close_session(session.session_id)
