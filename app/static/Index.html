@@ -48,8 +48,6 @@
 /* ============================================================
    CONFIG — MUST MATCH BACKEND
 ============================================================ */
-const SAMPLE_RATE = 16000;
-const FRAME_SAMPLES = 3200; // ~200ms
 const CLIENT_ID = "user_" + Math.random().toString(36).substring(2, 10);
 
 const WS_URL =
@@ -58,65 +56,9 @@ const WS_URL =
   "/ws/voice?client_id=" + CLIENT_ID;
 
 /* ============================================================
-   PCM PLAYER — progressive, barge-in safe
+   WebRTC Setup
 ============================================================ */
-class PCMPlayer {
-  constructor() {
-    this.ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
-    this.queueTime = this.ctx.currentTime;
-  }
-
-  play(int16) {
-    const buffer = this.ctx.createBuffer(1, int16.length, SAMPLE_RATE);
-    const ch = buffer.getChannelData(0);
-    for (let i = 0; i < int16.length; i++) {
-      ch[i] = int16[i] / 0x7fff;
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buffer;
-    src.connect(this.ctx.destination);
-    src.start(this.queueTime);
-    this.queueTime += buffer.duration;
-  }
-
-  stop() {
-    this.queueTime = this.ctx.currentTime;
-  }
-}
-
-/* ============================================================
-   AUDIO WORKLET — inline (single file)
-============================================================ */
-const workletCode = `
-class RecorderWorklet extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.buffer = [];
-  }
-  process(inputs) {
-    const ch = inputs[0]?.[0];
-    if (!ch) return true;
-    for (let i = 0; i < ch.length; i++) {
-      const s = Math.max(-1, Math.min(1, ch[i]));
-      this.buffer.push(s * 0x7fff);
-    }
-    if (this.buffer.length >= ${FRAME_SAMPLES}) {
-      const pcm = new Int16Array(this.buffer.splice(0, ${FRAME_SAMPLES}));
-      this.port.postMessage(pcm.buffer, [pcm.buffer]);
-    }
-    return true;
-  }
-}
-registerProcessor("recorder-worklet", RecorderWorklet);
-`;
-const workletURL = URL.createObjectURL(
-  new Blob([workletCode], { type: "application/javascript" })
-);
-
-/* ============================================================
-   MAIN ORCHESTRATION — mirrors voice.py
-============================================================ */
-let ws, audioCtx, micStream, workletNode, player;
+let ws, pc, audioElement;
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -128,94 +70,134 @@ startBtn.onclick = start;
 stopBtn.onclick = stop;
 
 async function start() {
+  // WebSocket for signaling and control only
   ws = new WebSocket(WS_URL);
-  ws.binaryType = "arraybuffer";
-
+  
   ws.onopen = async () => {
-    statusEl.textContent = "Connected";
-    ws.send(JSON.stringify({
-      type: "start",
-      meta: { language: languageSel.value }
-    }));
-    await startMic();
+    statusEl.textContent = "Connecting audio...";
+    await setupWebRTC();
   };
-
-  ws.onmessage = onMessage;
+  
+  ws.onmessage = handleSignaling;
   ws.onclose = cleanup;
-
+  
   startBtn.disabled = true;
   stopBtn.disabled = false;
 }
 
-async function startMic() {
-  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
-  await audioCtx.audioWorklet.addModule(workletURL);
-
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  const src = audioCtx.createMediaStreamSource(micStream);
-
-  workletNode = new AudioWorkletNode(audioCtx, "recorder-worklet");
-  workletNode.port.onmessage = e => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(e.data); // ✅ RAW PCM BINARY
+async function setupWebRTC() {
+  // Create RTCPeerConnection
+  pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" }
+    ]
+  });
+  
+  // Get microphone with optimal settings
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      sampleRate: 48000,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    }
+  });
+  
+  // Add local audio track to peer connection
+  stream.getTracks().forEach(track => {
+    pc.addTrack(track, stream);
+  });
+  
+  // Handle incoming audio (bot speaking)
+  pc.ontrack = (event) => {
+    if (!audioElement) {
+      audioElement = document.createElement("audio");
+      audioElement.autoplay = true;
+      document.body.appendChild(audioElement);
+    }
+    audioElement.srcObject = event.streams[0];
+    statusEl.textContent = "Listening...";
+  };
+  
+  // Handle ICE candidates
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      ws.send(JSON.stringify({
+        type: "ice_candidate",
+        candidate: event.candidate.toJSON()
+      }));
     }
   };
-
-  src.connect(workletNode);
+  
+  // Create and send offer
+  const offer = await pc.createOffer({
+    offerToReceiveAudio: true
+  });
+  await pc.setLocalDescription(offer);
+  
+  ws.send(JSON.stringify({
+    type: "webrtc_offer",
+    sdp: offer.sdp,
+    language: languageSel.value
+  }));
 }
 
-function onMessage(ev) {
-  if (typeof ev.data !== "string") return;
-  const msg = JSON.parse(ev.data);
-
+async function handleSignaling(event) {
+  const msg = JSON.parse(event.data);
+  
   switch (msg.type) {
-    case "ready":
-      player = new PCMPlayer();
-      statusEl.textContent = "Listening…";
+    case "webrtc_answer":
+      await pc.setRemoteDescription({
+        type: "answer",
+        sdp: msg.sdp
+      });
+      statusEl.textContent = "Connected - Listening...";
       break;
-
+      
+    case "ice_candidate":
+      if (msg.candidate) {
+        await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      }
+      break;
+      
     case "transcript":
       transcriptEl.textContent = msg.text;
       break;
-
-    case "audio":
-      player.play(base64ToInt16(msg.audio));
+      
+    case "ready":
+      statusEl.textContent = "Ready";
       break;
-
-    case "control":
-      if (msg.action === "stop_playback") {
-        player?.stop(); // ✅ barge-in
-      }
-      break;
-
+      
     case "error":
       statusEl.textContent = "Error: " + msg.error;
+      console.error("Server error:", msg.error);
       break;
   }
 }
 
 function stop() {
   ws?.send(JSON.stringify({ type: "stop" }));
-  ws?.close();
+  cleanup();
 }
 
 function cleanup() {
-  micStream?.getTracks().forEach(t => t.stop());
-  workletNode?.disconnect();
-  audioCtx?.close();
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  if (audioElement) {
+    audioElement.srcObject = null;
+  }
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  
   startBtn.disabled = false;
   stopBtn.disabled = true;
   statusEl.textContent = "Idle";
-}
-
-function base64ToInt16(b64) {
-  const raw = atob(b64);
-  const out = new Int16Array(raw.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = raw.charCodeAt(i * 2) |
-            (raw.charCodeAt(i * 2 + 1) << 8);
-  }
-  return out;
 }
 </script>
 </body>
