@@ -177,7 +177,9 @@ class TTSSession:
                                 text=task.text,
                                 language=task.language,
                                 sentiment=task.sentiment,
-                            ),
+                                speaking_rate=task.speaking_rate,
+                          
+                            ), 
                         )
 
                         # Progressive send (chunked)
@@ -245,6 +247,8 @@ async def tts_enqueue(
     text: str,
     language: str,
     sentiment: float = 0.0,
+    speaking_rate: float = 1.0,
+    
 ):
     session = _sessions.get(session_id)
     if not session:
@@ -255,6 +259,7 @@ async def tts_enqueue(
             text=text,
             language=language,
             sentiment=sentiment,
+            speaking_rate=speaking_rate,
         )
     )
 
