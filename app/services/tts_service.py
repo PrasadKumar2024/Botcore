@@ -45,6 +45,7 @@ class TTSTask:
     text: str
     language: str
     sentiment: float
+    speaking_rate: float = 1.0
 
 
 class CancellationToken:
@@ -65,23 +66,26 @@ class CancellationToken:
 # SSML BUILDER (EMOTION-AWARE)
 # ============================================================
 
-def build_ssml(text: str, sentiment: float) -> str:
+def build_ssml(text: str, sentiment: float, speaking_rate: float = 1.0) -> str:
     """
-    Maps sentiment → prosody.
+    Maps sentiment and speaking_rate to prosody for emotional mirroring.
     """
     if sentiment > 0.4:
-        rate = "105%"
+        base_rate = 105
         pitch = "+2st"
     elif sentiment < -0.4:
-        rate = "90%"
+        base_rate = 90
         pitch = "-2st"
     else:
-        rate = "100%"
+        base_rate = 100
         pitch = "0st"
-
+    
+    final_rate = int(base_rate * speaking_rate)
+    final_rate = max(80, min(120, final_rate))
+    
     return f"""
 <speak>
-  <prosody rate="{rate}" pitch="{pitch}">
+  <prosody rate="{final_rate}%" pitch="{pitch}">
     {text}
   </prosody>
 </speak>
@@ -97,6 +101,7 @@ def synthesize_blocking(
     text: str,
     language: str,
     sentiment: float,
+    speaking_rate: float = 1.0,
 ) -> bytes:
     """
     Blocking Google TTS call.
