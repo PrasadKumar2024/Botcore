@@ -139,16 +139,19 @@ async def voice_ws(ws: WebSocket):
             sentence_buffer = ""
 
             try:
-                # Build context-aware system prompt
-                system_prompt = SYSTEM_PROMPT
+        # Determine if we should use RAG context or general conversation
                 if rag_result.used_rag and rag_result.confidence > 0.6:
-                    system_prompt += f"\n\nRELEVANT CONTEXT:\n{rag_result.fact_text}"
-                
-                async for token in gemini_service.generate_stream_async(
-                    user_text=text,
-                    system_message=system_prompt,
-                    cancel_token=session.llm_cancel_token,
-                ):
+            # Use RAG context with intent-aware prompt
+                    system_prompt = SYSTEM_PROMPT
+            
+                    async for token in gemini_service.generate_stream_async(
+                        user_text=text,
+                        system_message=system_prompt,
+                        conversation_history=session.memory,
+                        rag_context=rag_result.fact_text,
+                        cancel_token=session.llm_cancel_token,
+                        temperature=0.3,  # Lower for factual responses
+                    ):
                     token_buffer += token
                     sentence_buffer += token
 
