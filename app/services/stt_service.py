@@ -8,16 +8,20 @@ import time
 from typing import Optional, Iterator
 
 from google.cloud import speech_v1 as speech
+import webrtcvad
 
 logger = logging.getLogger(__name__)
 
-# ===================== CONFIG =====================
+===================== CONFIG =====================
 
 SAMPLE_RATE = 16000
 LANGUAGE_CODE = "en-US"
 
-STREAMING_LIMIT_SEC = 55          # Google recommends restarting streams < 1 min
+STREAMING_LIMIT_SEC = 55
 RESTART_BACKOFF_SEC = 1.5
+VAD_AGGRESSIVENESS = 2  # 0-3, higher = more aggressive silence detection
+FRAME_DURATION_MS = 30  # Must be 10, 20, or 30ms for webrtcvad
+FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)  # 480 samples
 
 # ==================================================
 
@@ -45,6 +49,10 @@ class STTWorker:
 
         self.client = speech.SpeechClient()
         self.thread: Optional[threading.Thread] = None
+        self.vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
+        self.audio_buffer = bytearray()
+        self.silence_threshold = 3  # Number of consecutive silent frames before stopping
+        self.consecutive_silence = 0
 
     # ------------------------------------------------
 
@@ -62,6 +70,7 @@ class STTWorker:
     def _audio_generator(self) -> Iterator[speech.StreamingRecognizeRequest]:
         """
         Converts raw PCM bytes into Google streaming requests.
+        Applies Voice Activity Detection to filter silence.
         """
         while not self.stop_event.is_set():
             try:
@@ -70,10 +79,31 @@ class STTWorker:
                 continue
 
             if chunk is None:
+            # Flush any remaining buffered audio
+                if len(self.audio_buffer) > 0:
+                    yield speech.StreamingRecognizeRequest(
+                        audio_content=bytes(self.audio_buffer)
+                    )
+                    self.audio_buffer.clear()
                 return
-
-            yield speech.StreamingRecognizeRequest(audio_content=chunk)
-
+        
+        # Apply Voice Activity Detection
+            if self._is_speech(chunk):
+                self.audio_buffer.extend(chunk)
+            
+            # Send when buffer reaches optimal size (3200 bytes = 100ms)
+                if len(self.audio_buffer) >= 3200:
+                    yield speech.StreamingRecognizeRequest(
+                        audio_content=bytes(self.audio_buffer)
+                    )
+                    self.audio_buffer.clear()
+            else:
+            # Silent frame, but flush buffer if it has content
+                if len(self.audio_buffer) > 0:
+                    yield speech.StreamingRecognizeRequest(
+                        audio_content=bytes(self.audio_buffer)
+                    )
+                    self.audio_buffer.clear()
     # ------------------------------------------------
 
     def _run(self):
