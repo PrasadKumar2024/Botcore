@@ -22,7 +22,10 @@ google-generativeai>=0.8.0
 pinecone-client==3.2.2
 langchain==0.1.0
 tiktoken==0.5.2
-
+aiortc==1.5.0
+av==11.0.0
+librosa==0.10.1
+sentence-transformers==2.2.2
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
