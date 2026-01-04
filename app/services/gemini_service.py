@@ -1051,47 +1051,82 @@ async def analyze_user_input(
     return gem
     async def generate_stream_async(
         self,
+        *,
         user_text: str,
-        system_message: Optional[str] = None,
-        cancel_token: Optional[threading.Event] = None,
-    ) -> AsyncGenerator[str, None]:
+        system_message: str = "",
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        rag_context: Optional[str] = None,
+        cancel_token = None,
+        temperature: float = 0.7,
+        max_tokens: int = 512,
+    ):
         """
-        Async wrapper to make the blocking Google API compatible with the voice route
+        Streams tokens from Gemini with full context awareness.
+        Supports conversation history and RAG context injection.
         """
-        if not self.check_availability():
-            yield "I am currently offline."
-            return
-
-        # Prepare the prompt
-        prompt = user_text
-        if system_message:
-            prompt = f"{system_message}\n\nUser: {user_text}"
-
-        loop = asyncio.get_running_loop()
-        queue = asyncio.Queue()
-
-        def _producer():
-            try:
-                response = self.model.generate_content(prompt, stream=True)
-                for chunk in response:
-                    if cancel_token and cancel_token.is_set():
-                        break
-                    if chunk.text:
-                        loop.call_soon_threadsafe(queue.put_nowait, chunk.text)
-            except Exception as e:
-                logger.error(f"Gemini generation error: {e}")
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None) # Signal end
-
-        # Run the blocking API in a separate thread
-        threading.Thread(target=_producer, daemon=True).start()
-
-        while True:
-            token = await queue.get()
-            if token is None:
+        try:
+            messages = []
+        
+            # System message with RAG context if available
+            enhanced_system = system_message
+            if rag_context:
+                enhanced_system += f"\n\nRELEVANT CONTEXT:\n{rag_context}"
+        
+            if enhanced_system:
+                messages.append({
+                    "role": "system",
+                    "parts": [{"text": enhanced_system}]
+                })
+        
+        # Add conversation history for context
+            if conversation_history:
+                for msg in conversation_history[-6:]:
+                    role = msg.get("role", "user")
+                    text = msg.get("text", "")
+                    if text:
+                        messages.append({
+                            "role": role,
+                            "parts": [{"text": text}]
+                        })
+        
+        # Current user message
+            messages.append({
+                "role": "user",
+                "parts": [{"text": user_text}]
+            })
+        
+        # Generate with enhanced configuration
+            generation_config = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "top_p": 0.95,
+                "top_k": 40,
+            }
+        
+            response = await self.model.generate_content_async(
+                messages,
+                generation_config=generation_config,
+                stream=True,
+            )
+        
+            async for chunk in response:
+                if cancel_token and cancel_token.is_cancelled():
                 break
-            yield token
-
+            
+            # Handle different response formats
+                if hasattr(chunk, 'text') and chunk.text:
+                    yield chunk.text
+                elif hasattr(chunk, 'candidates') and chunk.candidates:
+                    candidate = chunk.candidates[0]
+                    if hasattr(candidate, 'content') and candidate.content:
+                        if hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    yield part.text
+    
+        except Exception as e:
+            logger.exception(f"Gemini streaming failed: {e}")
+            yield ""
 
     
 # Global singleton instance
