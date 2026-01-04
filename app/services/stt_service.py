@@ -119,7 +119,7 @@ class STTWorker:
                 time.sleep(RESTART_BACKOFF_SEC)
 
     # ------------------------------------------------
-
+    
     def _stream_once(self):
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -127,6 +127,7 @@ class STTWorker:
             language_code=self.language,
             enable_automatic_punctuation=True,
             model="latest_long",
+            enable_automatic_punctuation=True,
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
@@ -136,16 +137,14 @@ class STTWorker:
         )
 
         def request_generator():
-        # ✅ FIRST request MUST contain the config
+        # First request contains only the config
             yield speech.StreamingRecognizeRequest(
                 streaming_config=streaming_config
             )
 
-        # ✅ Following requests contain audio only
-            for chunk in self._audio_generator():
-                yield speech.StreamingRecognizeRequest(
-                    audio_content=chunk
-                )
+        # Following requests contain audio only (already wrapped in StreamingRecognizeRequest)
+            for audio_request in self._audio_generator():
+                yield audio_request
 
         responses = self.client.streaming_recognize(
             requests=request_generator()
