@@ -1049,6 +1049,94 @@ async def analyze_user_input(
         gem["intent"] = "clarification"
 
     return gem
+    async def generate_rag_response_async(
+        self,
+        *,
+        user_query: str,
+        rag_context: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        intent: str = "question",
+        temperature: float = 0.15,
+    ) -> str:
+        """
+        Generate a single RAG response (non-streaming) for knowledge base queries.
+        Optimized for factual accuracy with low temperature.
+        """
+        try:
+        # Build intent-aware system prompt
+            system_prompts = {
+                "frustrated": (
+                    "You are a professional, empathetic assistant. "
+                    "The user is frustrated. Start with a genuine apology, "
+                    "acknowledge their concern, then provide a clear answer. "
+                    "Use the CONTEXT below to answer accurately."
+                ),
+                "urgent": (
+                    "You are a professional assistant. The user needs urgent information. "
+                    "Be concise and direct. Skip pleasantries. "
+                    "Use the CONTEXT below to answer accurately."
+                ),
+                "confused": (
+                    "You are a patient, helpful assistant. The user is confused. "
+                    "Explain step-by-step in simple terms. "
+                    "Use the CONTEXT below to answer accurately."
+                ),
+                "greeting": (
+                    "You are a warm, professional assistant. "
+                    "Respond to the greeting briefly and offer to help."
+                ),
+                "question": (
+                    "You are a professional, knowledgeable assistant. "
+                    "Use ONLY the CONTEXT below to answer factual questions accurately."
+                ),
+            }
+        
+            system_message = system_prompts.get(intent, system_prompts["question"])
+            system_message += f"\n\nCONTEXT:\n{rag_context}"
+        
+            messages = [
+                {"role": "system", "parts": [{"text": system_message}]}
+            ]
+        
+        # Add conversation history
+            if conversation_history:
+                for msg in conversation_history[-4:]:
+                    messages.append({
+                        "role": msg.get("role", "user"),
+                        "parts": [{"text": msg.get("text", "")}]
+                    })
+        
+            messages.append({
+                "role": "user",
+                "parts": [{"text": user_query}]
+            })
+        
+            response = await self.model.generate_content_async(
+                messages,
+                generation_config={
+                    "temperature": temperature,
+                    "max_output_tokens": 350,
+                },
+            )
+         
+            if hasattr(response, 'text'):
+                return response.text
+            elif hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate.content, 'parts'):
+                        texts = [
+                            part.text 
+                            for part in candidate.content.parts 
+                            if hasattr(part, 'text')
+                        ]
+                        return " ".join(texts)
+        
+            return ""
+    
+        except Exception as e:
+            logger.exception(f"Gemini RAG generation failed: {e}")
+            return ""
     async def generate_stream_async(
         self,
         *,
