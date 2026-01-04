@@ -7,9 +7,21 @@ from dataclasses import dataclass
 
 from app.services.pinecone_service import pinecone_service
 from app.services.pinecone_service import get_pinecone_service
+from app.services.gemini_service import gemini_service
+from sentence_transformers import CrossEncoder
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Intent classification for dialogue management
+class ConversationIntent(Enum):
+    GREETING = "greeting"
+    QUESTION = "question"
+    FRUSTRATED = "frustrated"
+    URGENT = "urgent"
+    SATISFIED = "satisfied"
+    CONFUSED = "confused"
+    FAREWELL = "farewell"
 # -----------------------------
 # Public result contract
 # -----------------------------
@@ -129,11 +141,6 @@ class RAGEngine:
     - Provide safe fallback
     """
 
-    def __init__(self):
-        self.max_chunks = 4
-        self.top_k = 6
-        self.min_score = -1.0
-
     async def answer(
         self,
         *,
@@ -144,24 +151,65 @@ class RAGEngine:
     ) -> RAGResult:
 
         start_ts = time.time()
+    
+        cache_key = self._get_cache_key(client_id, query)
+        cached_result = self._check_cache(cache_key)
+        if cached_result:
+            return cached_result
 
-        # 1. Normalize query
+    # 1. Normalize query
         normalized = normalize_query(query)
-
-        # 2. Retrieve KB context (CLIENT-SCOPED)
-        try:
-            results = await get_pinecone_service.search_similar_chunks(
+    
+    # 1.5. Run intent detection and Pinecone search in parallel
+        intent_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._detect_intent_and_emotion,
+                query=query,
+                session_context=session_context
+            )
+        )
+    
+        pinecone_task = asyncio.create_task(
+            get_pinecone_service.search_similar_chunks(
                 client_id=client_id,
                 query=normalized or query,
                 top_k=self.top_k,
                 min_score=self.min_score,
             )
+        )
+    
+        try:
+            intent_result, results = await asyncio.gather(
+                intent_task,
+                pinecone_task,
+                return_exceptions=True
+            )
+        
+            if isinstance(intent_result, Exception):
+                logger.exception("Intent detection failed")
+                intent_detected, emotion_score, urgency_level = (
+                    ConversationIntent.QUESTION, 0.0, 0
+                )
+            else:
+                intent_detected, emotion_score, urgency_level = intent_result
+        
+            if isinstance(results, Exception):
+                logger.exception("Pinecone search failed")
+                results = []
+            
         except Exception as e:
-            logger.exception("Pinecone search failed: %s", e)
+            logger.exception("Parallel operations failed: %s", e)
             results = []
+            intent_detected, emotion_score, urgency_level = (
+                ConversationIntent.QUESTION, 0.0, 0
+            )
+    
+        logger.info(
+            f"Intent detected: {intent_detected.value}, "
+            f"emotion: {emotion_score:.2f}, urgency: {urgency_level}"
+        )
 
         if not results:
-            # No RAG hit → explicit signal to orchestration layer
             return RAGResult(
                 spoken_text="",
                 fact_text="",
@@ -172,13 +220,20 @@ class RAGEngine:
                 used_rag=False,
             )
 
-        # 3. Build context block
-        context_text = "\n\n".join(
-            f"{r.get('source','')}: {r.get('chunk_text','')}"
-            for r in results[:self.max_chunks]
+    # 2.5. Re-rank results with cross-encoder
+        results = await self._rerank_results(
+            query=query,
+            results=results,
+            top_n=self.max_chunks
         )
 
-        # 4. Conversation memory (short-term only)
+    # 3. Build context block
+        context_text = "\n\n".join(
+            f"{r.get('source','')}: {r.get('chunk_text','')}"
+            for r in results
+        )
+
+    # 4. Conversation memory
         convo_block = ""
         if session_context:
             lines = []
@@ -187,9 +242,34 @@ class RAGEngine:
                 lines.append(f"{role}: {m.get('text','')}")
             convo_block = "\n".join(lines) + "\n\n"
 
-        # 5. Structured Gemini prompt
+    # 5. Intent-aware system prompt
+        base_instructions = "You are a professional, warm voice assistant."
+    
+        if intent_detected == ConversationIntent.FRUSTRATED:
+            base_instructions += (
+                "\n**CRITICAL: The user is frustrated. "
+                "Start with a genuine apology, acknowledge their concern, "
+                "then provide a clear, direct answer.**"
+            )
+        elif intent_detected == ConversationIntent.URGENT:
+            base_instructions += (
+                "\n**The user needs urgent information. "
+                "Be concise and direct. Skip pleasantries.**"
+            )
+        elif intent_detected == ConversationIntent.CONFUSED:
+            base_instructions += (
+                "\n**The user is confused. "
+                "Explain step-by-step in simpler terms. "
+                "Ask if they need clarification.**"
+            )
+        elif intent_detected == ConversationIntent.GREETING:
+            base_instructions += (
+                "\n**This is a greeting. Respond warmly and briefly. "
+                "Ask how you can help.**"
+            )
+    
         system_prompt = (
-            "You are a professional, warm voice assistant. "
+            f"{base_instructions}\n\n"
             "Use ONLY the CONTEXT to answer factual questions.\n\n"
             "Return EXACT JSON with keys:\n"
             "{"
@@ -204,7 +284,7 @@ class RAGEngine:
             "- spoken: 2–3 short, phone-friendly sentences\n"
             "- Use 'we' when speaking for the business\n"
             "- Offer a next step when appropriate\n"
-            "- If context is insufficient, say you don’t have that info"
+            "- If context is insufficient, say you don't have that info"
         )
 
         user_prompt = (
