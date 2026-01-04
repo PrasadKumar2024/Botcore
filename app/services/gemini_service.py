@@ -993,7 +993,191 @@ User message: "{query}"
 # =========================
 # TOKEN-LEVEL STREAMING WRAPPER
 # =========================
-
+async def generate_rag_response_async(
+    self,
+    *,
+    user_query: str,
+    rag_context: str,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    intent: str = "question",
+    temperature: float = 0.15,
+) -> str:
+    """
+    Generate a single RAG response (non-streaming) for knowledge base queries.
+    Optimized for factual accuracy with low temperature.
+    """
+    try:
+        # Build intent-aware system prompt
+        system_prompts = {
+            "frustrated": (
+                "You are a professional, empathetic assistant. "
+                "The user is frustrated. Start with a genuine apology, "
+                "acknowledge their concern, then provide a clear answer. "
+                "Use the CONTEXT below to answer accurately."
+            ),
+            "urgent": (
+                "You are a professional assistant. The user needs urgent information. "
+                "Be concise and direct. Skip pleasantries. "
+                "Use the CONTEXT below to answer accurately."
+            ),
+            "confused": (
+                "You are a patient, helpful assistant. The user is confused. "
+                "Explain step-by-step in simple terms. "
+                "Use the CONTEXT below to answer accurately."
+            ),
+            "greeting": (
+                "You are a warm, professional assistant. "
+                "Respond to the greeting briefly and offer to help."
+            ),
+            "question": (
+                "You are a professional, knowledgeable assistant. "
+                "Use ONLY the CONTEXT below to answer factual questions accurately."
+            ),
+        }
+        
+        system_message = system_prompts.get(intent, system_prompts["question"])
+        system_message += f"\n\nCONTEXT:\n{rag_context}"
+        
+        messages = [
+            {"role": "system", "parts": [{"text": system_message}]}
+        ]
+        
+        # Add conversation history
+        if conversation_history:
+            for msg in conversation_history[-4:]:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "parts": [{"text": msg.get("text", "")}]
+                })
+        
+        messages.append({
+            "role": "user",
+            "parts": [{"text": user_query}]
+        })
+        
+        response = await self.model.generate_content_async(
+            messages,
+            generation_config={
+                "temperature": temperature,
+                "max_output_tokens": 350,
+            },
+        )
+        
+        if hasattr(response, 'text'):
+            return response.text
+        elif hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'content') and candidate.content:
+                if hasattr(candidate.content, 'parts'):
+                    texts = [
+                        part.text 
+                        for part in candidate.content.parts 
+                        if hasattr(part, 'text')
+                    ]
+                    return " ".join(texts)
+        
+        return ""
+    
+    except Exception as e:
+        logger.exception(f"Gemini RAG generation failed: {e}")
+        return ""
+async def generate_with_functions_async(
+    self,
+    *,
+    user_text: str,
+    system_message: str = "",
+    available_functions: Optional[List[Dict[str, Any]]] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    cancel_token = None,
+    temperature: float = 0.7,
+    max_tokens: int = 512,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Generate response with function calling capability.
+    Yields dictionaries with 'type' field:
+    - {'type': 'text', 'content': str}
+    - {'type': 'function_call', 'name': str, 'arguments': dict}
+    - {'type': 'error', 'message': str}
+    """
+    try:
+        # Build conversation history
+        messages = []
+        
+        if system_message:
+            messages.append({
+                "role": "system",
+                "parts": [{"text": system_message}]
+            })
+        
+        if conversation_history:
+            for msg in conversation_history[-6:]:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "parts": [{"text": msg.get("text", "")}]
+                })
+        
+        messages.append({
+            "role": "user",
+            "parts": [{"text": user_text}]
+        })
+        
+        # Configure generation with function declarations
+        generation_config = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        
+        # Add function declarations if provided
+        tools = None
+        if available_functions:
+            tools = [{"function_declarations": available_functions}]
+        
+        # Generate with streaming
+        response = await self.model.generate_content_async(
+            messages,
+            generation_config=generation_config,
+            tools=tools,
+            stream=True,
+        )
+        
+        async for chunk in response:
+            if cancel_token and cancel_token.is_cancelled():
+                break
+            
+            if not hasattr(chunk, 'candidates') or not chunk.candidates:
+                continue
+            
+            candidate = chunk.candidates[0]
+            
+            if not hasattr(candidate, 'content') or not candidate.content:
+                continue
+            
+            if not hasattr(candidate.content, 'parts'):
+                continue
+            
+            for part in candidate.content.parts:
+                # Check for function call
+                if hasattr(part, 'function_call') and part.function_call:
+                    func_call = part.function_call
+                    yield {
+                        "type": "function_call",
+                        "name": func_call.name,
+                        "arguments": dict(func_call.args) if func_call.args else {},
+                    }
+                
+                # Regular text content
+                elif hasattr(part, 'text') and part.text:
+                    yield {
+                        "type": "text",
+                        "content": part.text
+                    }
+        
+    except Exception as e:
+        logger.exception(f"Gemini function calling generation failed: {e}")
+        yield {
+            "type": "error",
+            "message": str(e)
+        }
 async def stream_response(
     self,
     *,
@@ -1049,94 +1233,7 @@ async def analyze_user_input(
         gem["intent"] = "clarification"
 
     return gem
-    async def generate_rag_response_async(
-        self,
-        *,
-        user_query: str,
-        rag_context: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None,
-        intent: str = "question",
-        temperature: float = 0.15,
-    ) -> str:
-        """
-        Generate a single RAG response (non-streaming) for knowledge base queries.
-        Optimized for factual accuracy with low temperature.
-        """
-        try:
-        # Build intent-aware system prompt
-            system_prompts = {
-                "frustrated": (
-                    "You are a professional, empathetic assistant. "
-                    "The user is frustrated. Start with a genuine apology, "
-                    "acknowledge their concern, then provide a clear answer. "
-                    "Use the CONTEXT below to answer accurately."
-                ),
-                "urgent": (
-                    "You are a professional assistant. The user needs urgent information. "
-                    "Be concise and direct. Skip pleasantries. "
-                    "Use the CONTEXT below to answer accurately."
-                ),
-                "confused": (
-                    "You are a patient, helpful assistant. The user is confused. "
-                    "Explain step-by-step in simple terms. "
-                    "Use the CONTEXT below to answer accurately."
-                ),
-                "greeting": (
-                    "You are a warm, professional assistant. "
-                    "Respond to the greeting briefly and offer to help."
-                ),
-                "question": (
-                    "You are a professional, knowledgeable assistant. "
-                    "Use ONLY the CONTEXT below to answer factual questions accurately."
-                ),
-            }
-        
-            system_message = system_prompts.get(intent, system_prompts["question"])
-            system_message += f"\n\nCONTEXT:\n{rag_context}"
-        
-            messages = [
-                {"role": "system", "parts": [{"text": system_message}]}
-            ]
-        
-        # Add conversation history
-            if conversation_history:
-                for msg in conversation_history[-4:]:
-                    messages.append({
-                        "role": msg.get("role", "user"),
-                        "parts": [{"text": msg.get("text", "")}]
-                    })
-        
-            messages.append({
-                "role": "user",
-                "parts": [{"text": user_query}]
-            })
-        
-            response = await self.model.generate_content_async(
-                messages,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": 350,
-                },
-            )
-         
-            if hasattr(response, 'text'):
-                return response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content:
-                    if hasattr(candidate.content, 'parts'):
-                        texts = [
-                            part.text 
-                            for part in candidate.content.parts 
-                            if hasattr(part, 'text')
-                        ]
-                        return " ".join(texts)
-        
-            return ""
     
-        except Exception as e:
-            logger.exception(f"Gemini RAG generation failed: {e}")
-            return ""
     async def generate_stream_async(
         self,
         *,
