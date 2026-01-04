@@ -2,12 +2,13 @@ import os
 import logging
 import asyncio
 import time
-from typing import Optional, List, Dict, Any, Generator
+from typing import Optional, List, Dict, Any, Generator, AsyncIterator, Union
 import google.generativeai as genai
 from dotenv import load_dotenv
 import re
 import threading
 from typing import AsyncGenerator
+FunctionDeclaration = Any  # Will be properly typed based on your Gemini SDK version
 # Add this import
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import requests
