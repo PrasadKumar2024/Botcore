@@ -152,6 +152,7 @@ class SessionState:
 
         # Concurrency protection
         self.lock = threading.RLock()
+        self.speaking_rate = 1.0
 
     # ==========================
     # Memory Management
