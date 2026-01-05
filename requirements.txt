@@ -22,7 +22,7 @@ pinecone-client==3.2.2
 langchain==0.1.0
 tiktoken==0.5.2
 aiortc==1.5.0
-av==10.0.0
+av>=9.0.0,<11.0.0
 webrtcvad==2.0.10
 librosa==0.10.1
 sentence-transformers==2.2.2
