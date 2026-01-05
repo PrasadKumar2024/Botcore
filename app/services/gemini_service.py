@@ -1297,7 +1297,7 @@ async def analyze_user_input(
         
             async for chunk in response:
                 if cancel_token and cancel_token.is_cancelled():
-                break
+                    break
             
             # Handle different response formats
                 if hasattr(chunk, 'text') and chunk.text:
