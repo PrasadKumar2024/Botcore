@@ -229,11 +229,15 @@ class WebRTCSession:
     
     async def add_ice_candidate(self, candidate_dict: dict):
         """Add ICE candidate"""
-        candidate = RTCIceCandidate(sdpMid=candidate_dict.get("sdpMid"),
-        sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
-        candidate=candidate_dict.get("candidate"),
-    )
-    await self.pc.addIceCandidate(candidate)
+        # Ensure the candidate mapping matches the aiortc requirements we discussed
+        candidate = RTCIceCandidate(
+            sdpMid=candidate_dict.get("sdpMid"),
+            sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
+            candidate=candidate_dict.get("candidate")
+        )
+        # EXACT FIX: This line MUST be indented inside the function
+        await self.pc.addIceCandidate(candidate)
+
     
     async def send_audio(self, pcm_data: bytes):
         """Send TTS audio to browser"""
