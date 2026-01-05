@@ -152,22 +152,22 @@ async def voice_ws(ws: WebSocket):
                         cancel_token=session.llm_cancel_token,
                         temperature=0.3,  # Lower for factual responses
                     ):
-                    token_buffer += token
-                    sentence_buffer += token
+                        token_buffer += token
+                        sentence_buffer += token
 
-                    sentences = SENTENCE_REGEX.split(sentence_buffer)
-                    if len(sentences) > 1:
-                        for sent in sentences[:-1]:
-                            sent = sent.strip()
-                            if sent:
-                                await tts_enqueue(
-                                    session_id=session.session_id,
-                                    text=sent,
-                                    language=session.language,
-                                    sentiment=rag_result.sentiment,
-                                    speaking_rate=session.speaking_rate,
-                                )
-                        sentence_buffer = sentences[-1]
+                        sentences = SENTENCE_REGEX.split(sentence_buffer)
+                        if len(sentences) > 1:
+                            for sent in sentences[:-1]:
+                                sent = sent.strip()
+                                if sent:
+                                    await tts_enqueue(
+                                        session_id=session.session_id,
+                                        text=sent,
+                                        language=session.language,
+                                        sentiment=rag_result.sentiment,
+                                        speaking_rate=session.speaking_rate,
+                                    )
+                            sentence_buffer = sentences[-1]
 
                 if sentence_buffer.strip():
                     await tts_enqueue(
