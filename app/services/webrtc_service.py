@@ -217,8 +217,11 @@ class WebRTCSession:
     
     async def add_ice_candidate(self, candidate_dict: dict):
         """Add ICE candidate"""
-        candidate = RTCIceCandidate(**candidate_dict)
-        await self.pc.addIceCandidate(candidate)
+        candidate = RTCIceCandidate(sdpMid=candidate_dict.get("sdpMid"),
+        sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
+        candidate=candidate_dict.get("candidate"),
+    )
+    await self.pc.addIceCandidate(candidate)
     
     async def send_audio(self, pcm_data: bytes):
         """Send TTS audio to browser"""
