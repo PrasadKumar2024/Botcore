@@ -127,7 +127,7 @@ class STTWorker:
             language_code=self.language,
             enable_automatic_punctuation=True,
             model="latest_long",
-            enable_automatic_punctuation=True,
+            
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
