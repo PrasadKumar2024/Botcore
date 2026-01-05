@@ -147,6 +147,7 @@ class STTWorker:
                 yield audio_request
 
         responses = self.client.streaming_recognize(
+            streaming_config=streaming_config,
             requests=request_generator()
         )
 
