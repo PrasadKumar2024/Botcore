@@ -1,7 +1,8 @@
 FROM python:3.10-slim
 
 # -----------------------------
-# System dependencies (aiortc / ffmpeg / av)
+# System dependencies
+# (ffmpeg, aiortc, av, webrtcvad)
 # -----------------------------
 RUN apt-get update && apt-get install -y \
     ffmpeg \
@@ -13,6 +14,10 @@ RUN apt-get update && apt-get install -y \
     libswscale-dev \
     libswresample-dev \
     pkg-config \
+    build-essential \
+    gcc \
+    g++ \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
@@ -20,15 +25,15 @@ RUN apt-get update && apt-get install -y \
 # -----------------------------
 WORKDIR /app
 
-# Install Python deps (USES YOUR EXISTING requirements.txt)
+# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy rest of the app
+# Copy application code
 COPY . .
 
-# Render exposes this port automatically
+# Render port
 EXPOSE 10000
 
-# Start app
+# Start server
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
