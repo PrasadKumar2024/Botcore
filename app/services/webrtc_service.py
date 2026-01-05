@@ -195,13 +195,25 @@ class WebRTCSession:
             logger.info(f"WebRTC connection state: {self.pc.connectionState}")
     
     async def _relay_audio(self, source_track):
-        """Relay audio from browser through our custom track"""
         try:
             while True:
-                frame = await source_track.recv()
-                # Process in our custom track
-                if self.incoming_track:
-                    await self.incoming_track.recv()
+                frame: AudioFrame = await source_track.recv()
+
+                audio = frame.to_ndarray()
+
+                if len(audio.shape) > 1:
+                    audio = audio.mean(axis=0)
+
+                audio_16k = librosa.resample(
+                    audio.astype(np.float32),
+                    orig_sr=frame.sample_rate,
+                    target_sr=STT_SAMPLE_RATE,
+                )
+
+                pcm = (audio_16k * 32767).astype(np.int16).tobytes()
+
+                self.stt_callback(pcm)
+
         except Exception as e:
             logger.exception(f"Audio relay error: {e}")
     
