@@ -122,6 +122,7 @@ class SessionState:
         "tts_cancel_token",
         "llm_cancel_token",
         "stt_restart_token",
+        "speaking_rate",
         "lock",
     )
 
