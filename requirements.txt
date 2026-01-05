@@ -1,3 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.1+cpu
+torchvision==0.17.1+cpu
+torchaudio==2.2.1+cpu
+sentence-transformers==2.5.1
+# ... the rest of your packages follow below
+
 
 fastapi==0.104.1
 uvicorn==0.24.0
@@ -25,7 +32,6 @@ aiortc>=1.8.0
 av>=11.0.0
 webrtcvad==2.0.10
 librosa==0.10.1
-sentence-transformers==2.2.2
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
