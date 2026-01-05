@@ -12,7 +12,7 @@ import webrtcvad
 
 logger = logging.getLogger(__name__)
 
-===================== CONFIG =====================
+# ===================== CONFIG =====================
 
 SAMPLE_RATE = 16000
 LANGUAGE_CODE = "en-US"
