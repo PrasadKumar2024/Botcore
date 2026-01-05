@@ -1,44 +1,46 @@
-
-# --- STAGE 1: The Builder (Slow compilation happens here) ---
+# STAGE 1: Builder
 FROM python:3.10-slim AS builder
 
-# Install compilers and system dev headers
+# Install build tools ONLY once
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc g++ make pkg-config \
-    libavcodec-dev libavformat-dev libavdevice-dev \
-    libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
+    build-essential gcc g++ pkg-config \
+    libavcodec-dev libavformat-dev libavutil-dev \
     python3-dev libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+WORKDIR /app
 
-# Copy requirements first to leverage Docker cache
+# 1. Create a Virtual Env
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# 2. INSTALL HEAVY STUFF SEPARATELY (The Secret Move)
+# This caches Torch/Transformers separately from the rest of your requirements.
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# 3. Copy requirements and install the rest
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies into a specific folder (/install)
-# This folder will contain the "built" versions of av, webrtcvad, etc.
-RUN pip install --upgrade pip && \
-    pip install --prefix=/install --no-cache-dir -r requirements.txt
-
-# --- STAGE 2: The Runner (This is what actually runs on Render) ---
+# STAGE 2: Runner
 FROM python:3.10-slim
 
-# Install ONLY the runtime libraries needed for media/db (no compilers)
+# Runtime libraries only
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libpq5 libglib2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the pre-built libraries from the builder stage
-COPY --from=builder /install /usr/local
+# Copy the ENTIRE virtual env from the builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy your code LAST (so changes to code don't trigger re-installation)
+# Copy code LAST - Crucial for 2-minute redeploys!
 COPY . .
 
-# Set environment variables
+# Environment setup
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Ensure your start command is correct
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
