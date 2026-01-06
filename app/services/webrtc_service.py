@@ -8,6 +8,7 @@ from typing import Optional, Callable
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCIceCandidate
 from aiortc.contrib.media import MediaRelay
 from av import AudioFrame
+from aiortc.sdp import candidate_from_sdp
 import librosa
 
 logger = logging.getLogger(__name__)
@@ -229,14 +230,25 @@ class WebRTCSession:
     
     async def add_ice_candidate(self, candidate_dict: dict):
         """Add ICE candidate"""
-        # Ensure the candidate mapping matches the aiortc requirements we discussed
-        candidate = RTCIceCandidate(
-            sdpMid=candidate_dict.get("sdpMid"),
-            sdpMLineIndex=candidate_dict.get("sdpMLineIndex"),
-            candidate=candidate_dict.get("candidate")
-        )
-        # EXACT FIX: This line MUST be indented inside the function
-        await self.pc.addIceCandidate(candidate)
+        try:
+            candidate_string = candidate_dict.get("candidate", "")
+            sdp_mid = candidate_dict.get("sdpMid")
+            sdp_m_line_index = candidate_dict.get("sdpMLineIndex")
+            
+            if not candidate_string:
+                return
+
+            # CORRECT FIX: Use the imported function, not a class method
+            candidate = candidate_from_sdp(candidate_string)
+            candidate.sdpMid = sdp_mid
+            candidate.sdpMLineIndex = sdp_m_line_index
+            
+            if self.pc:
+                await self.pc.addIceCandidate(candidate)
+            
+        except Exception as e:
+            logger.error(f"Failed to add ICE candidate: {e}")
+
 
     
     async def send_audio(self, pcm_data: bytes):
