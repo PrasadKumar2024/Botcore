@@ -196,27 +196,32 @@ class WebRTCSession:
             logger.info(f"WebRTC connection state: {self.pc.connectionState}")
     
     async def _relay_audio(self, source_track):
-        try:
-            while True:
+        SILENCE = b"\x00" * 960  # 30ms @ 16kHz mono
+
+        while True:
+            try:
                 frame: AudioFrame = await source_track.recv()
 
                 audio = frame.to_ndarray()
 
-                if len(audio.shape) > 1:
+                if audio.ndim > 1:
                     audio = audio.mean(axis=0)
 
                 audio_16k = librosa.resample(
                     audio.astype(np.float32),
                     orig_sr=frame.sample_rate,
-                    target_sr=STT_SAMPLE_RATE,
+                    target_sr=16000,
                 )
 
                 pcm = (audio_16k * 32767).astype(np.int16).tobytes()
 
                 self.stt_callback(pcm)
-
-        except Exception as e:
-            logger.exception(f"Audio relay error: {e}")
+ 
+            except Exception:
+            # IMPORTANT: do NOT exit
+            # Send silence instead
+                self.stt_callback(SILENCE)
+                await asyncio.sleep(0.03)
     
     async def handle_offer(self, sdp: str) -> str:
         """Handle WebRTC offer and return answer"""
