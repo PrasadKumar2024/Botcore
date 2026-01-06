@@ -169,7 +169,8 @@ class STTWorker:
                 yield audio_request
 
         responses = self.client.streaming_recognize(
-            requests=request_generator()  # ✅ CORRECT - config is inside first request
+            config=streaming_config,
+            requests=request_generator()
         )
         start_ts = time.monotonic()
 
