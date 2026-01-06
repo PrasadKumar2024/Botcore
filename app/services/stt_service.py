@@ -105,7 +105,29 @@ class STTWorker:
                     )
                     self.audio_buffer.clear()
     # ------------------------------------------------
-
+    def _is_speech(self, pcm_data: bytes) -> bool:
+            """
+            Determine if audio frame contains speech using WebRTC VAD.
+            Returns True if speech is detected, False for silence.
+            """
+            if len(pcm_data) < FRAME_SIZE * 2:  # 2 bytes per sample
+                return False
+    
+            try:
+        # VAD requires exact frame size
+                frame = pcm_data[:FRAME_SIZE * 2]
+                is_speech = self.vad.is_speech(frame, SAMPLE_RATE)
+        
+                if is_speech:
+                    self.consecutive_silence = 0
+                else:
+                    self.consecutive_silence += 1
+        
+                return is_speech or self.consecutive_silence < self.silence_threshold
+        
+            except Exception as e:
+                logger.warning(f"VAD error: {e}, assuming speech")
+                return True
     def _run(self):
         """
         Main STT loop.
@@ -135,29 +157,7 @@ class STTWorker:
             interim_results=True,
             single_utterance=False,
         )
-        def _is_speech(self, pcm_data: bytes) -> bool:
-            """
-            Determine if audio frame contains speech using WebRTC VAD.
-            Returns True if speech is detected, False for silence.
-            """
-            if len(pcm_data) < FRAME_SIZE * 2:  # 2 bytes per sample
-                return False
-    
-            try:
-        # VAD requires exact frame size
-                frame = pcm_data[:FRAME_SIZE * 2]
-                is_speech = self.vad.is_speech(frame, SAMPLE_RATE)
         
-                if is_speech:
-                    self.consecutive_silence = 0
-                else:
-                    self.consecutive_silence += 1
-        
-                return is_speech or self.consecutive_silence < self.silence_threshold
-        
-            except Exception as e:
-                logger.warning(f"VAD error: {e}, assuming speech")
-                return True
         def request_generator():
         # First request contains only the config
             yield speech.StreamingRecognizeRequest(
@@ -169,10 +169,8 @@ class STTWorker:
                 yield audio_request
 
         responses = self.client.streaming_recognize(
-            streaming_config=streaming_config,
-            requests=request_generator()
+            requests=request_generator()  # ✅ CORRECT - config is inside first request
         )
-
         start_ts = time.monotonic()
 
         for response in responses:
