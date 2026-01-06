@@ -31,7 +31,6 @@ tiktoken==0.5.2
 aiortc>=1.8.0
 av>=11.0.0
 webrtcvad==2.0.10
-librosa==0.10.1
 # Utilities
 python-dotenv==1.0.0
 python-multipart==0.0.6
