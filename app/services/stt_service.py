@@ -67,43 +67,33 @@ class STTWorker:
 
     # ------------------------------------------------
 
-    def _audio_generator(self) -> Iterator[speech.StreamingRecognizeRequest]:
-        """
-        Converts raw PCM bytes into Google streaming requests.
-        Applies Voice Activity Detection to filter silence.
-        """
+    def _audio_generator(self):
+        FRAME_BYTES = FRAME_SIZE * 2  # 30ms
+        SILENCE = b"\x00" * FRAME_BYTES
+
         while not self.stop_event.is_set():
             try:
-                chunk = self.audio_queue.get(timeout=0.1)
+                chunk = self.audio_queue.get(timeout=0.03)
             except queue.Empty:
+            # No audio → still send silence
+                yield speech.StreamingRecognizeRequest(audio_content=SILENCE)
                 continue
 
             if chunk is None:
-            # Flush any remaining buffered audio
-                if len(self.audio_buffer) > 0:
-                    yield speech.StreamingRecognizeRequest(
-                        audio_content=bytes(self.audio_buffer)
-                    )
-                    self.audio_buffer.clear()
                 return
-        
-        # Apply Voice Activity Detection
-            if self._is_speech(chunk):
-                self.audio_buffer.extend(chunk)
-            
-            # Send when buffer reaches optimal size (3200 bytes = 100ms)
-                if len(self.audio_buffer) >= 3200:
-                    yield speech.StreamingRecognizeRequest(
-                        audio_content=bytes(self.audio_buffer)
-                    )
-                    self.audio_buffer.clear()
+
+        # Ensure exact frame size
+            if len(chunk) < FRAME_BYTES:
+                chunk = chunk.ljust(FRAME_BYTES, b"\x00")
             else:
-            # Silent frame, but flush buffer if it has content
-                if len(self.audio_buffer) > 0:
-                    yield speech.StreamingRecognizeRequest(
-                        audio_content=bytes(self.audio_buffer)
-                    )
-                    self.audio_buffer.clear()
+                chunk = chunk[:FRAME_BYTES]
+
+            if self._is_speech(chunk):
+                pcm = chunk
+            else:
+                pcm = SILENCE
+
+            yield speech.StreamingRecognizeRequest(audio_content=pcm)
     # ------------------------------------------------
     def _is_speech(self, pcm_data: bytes) -> bool:
             """
