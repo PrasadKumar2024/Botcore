@@ -15,7 +15,7 @@ from aiortc import (
 from av import AudioFrame
 from aiortc.sdp import candidate_from_sdp
 import audioop
-
+from aiortc.contrib.media import MediaRelay
 logger = logging.getLogger(__name__)
 
 # ============================================================
@@ -132,6 +132,7 @@ class WebRTCSession:
         self.incoming_track: Optional[IncomingAudioTrack] = None
         self.outgoing_track = OutgoingAudioTrack()
         self.stt_callback = stt_callback
+        self.relay = MediaRelay()
 
         self.pc.addTrack(self.outgoing_track)
 
@@ -139,7 +140,8 @@ class WebRTCSession:
         def on_track(track):
             logger.info(f"Received track: {track.kind}")
             if track.kind == "audio":
-                asyncio.create_task(self._relay_audio(track))
+                relayed = self.relay.subscribe(track)
+                asyncio.create_task(self._relay_audio(relayed))
 
         @self.pc.on("connectionstatechange")
         async def on_connection_state_change():
