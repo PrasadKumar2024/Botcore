@@ -160,9 +160,9 @@ class STTWorker:
         
         def request_generator():
         # First request contains only the config
-            yield speech.StreamingRecognizeRequest(
-                streaming_config=streaming_config
-            )
+        #    yield speech.StreamingRecognizeRequest(
+              #  streaming_config=streaming_config
+        #    )
 
         # Following requests contain audio only (already wrapped in StreamingRecognizeRequest)
             for audio_request in self._audio_generator():
