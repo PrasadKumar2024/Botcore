@@ -68,32 +68,32 @@ class STTWorker:
     # ------------------------------------------------
 
     def _audio_generator(self):
-        FRAME_BYTES = FRAME_SIZE * 2  # 30ms
-        SILENCE = b"\x00" * FRAME_BYTES
+    # 1. IMMEDIATE HEARTBEAT: Tell Google we are starting
+        yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
 
         while not self.stop_event.is_set():
             try:
-                chunk = self.audio_queue.get(timeout=0.03)
+                chunk = self.audio_queue.get(timeout=0.05)
+                if chunk is None: return
+
+            # VAD logic: If it's speech, send real bytes. 
+            # If it's silence, send ZERO bytes (but keep the timing).
+                if self._is_speech(chunk):
+                    self.audio_buffer.extend(chunk)
+                else:
+                    self.audio_buffer.extend(b'\x00' * len(chunk))
+
+            # Send in ~100ms chunks (3200 bytes at 16k mono)
+                if len(self.audio_buffer) >= 3200:
+                    yield speech.StreamingRecognizeRequest(
+                        audio_content=bytes(self.audio_buffer)
+                    )
+                    self.audio_buffer.clear()
+                
             except queue.Empty:
-            # No audio → still send silence
-                yield speech.StreamingRecognizeRequest(audio_content=SILENCE)
+            # If nothing is in the queue, keep the stream warm
                 continue
 
-            if chunk is None:
-                return
-
-        # Ensure exact frame size
-            if len(chunk) < FRAME_BYTES:
-                chunk = chunk.ljust(FRAME_BYTES, b"\x00")
-            else:
-                chunk = chunk[:FRAME_BYTES]
-
-            if self._is_speech(chunk):
-                pcm = chunk
-            else:
-                pcm = SILENCE
-
-            yield speech.StreamingRecognizeRequest(audio_content=pcm)
     # ------------------------------------------------
     def _is_speech(self, pcm_data: bytes) -> bool:
             """
