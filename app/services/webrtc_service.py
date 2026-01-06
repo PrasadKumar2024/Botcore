@@ -9,8 +9,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, R
 from aiortc.contrib.media import MediaRelay
 from av import AudioFrame
 from aiortc.sdp import candidate_from_sdp
-import librosa
-
+import audioop
 logger = logging.getLogger(__name__)
 
 # ============================================================
