@@ -269,7 +269,7 @@ async def voice_ws(ws: WebSocket):
             if raw["type"] == "websocket.disconnect":
                 logger.info("WebSocket signaling disconnected (keeping session alive)")
                 await asyncio.sleep(3600)  # keep session alive
-                    continue
+                continue
 
             if raw["type"] != "websocket.receive":
                 continue
