@@ -196,32 +196,35 @@ class WebRTCSession:
             logger.info(f"WebRTC connection state: {self.pc.connectionState}")
     
     async def _relay_audio(self, source_track):
-        SILENCE = b"\x00" * 960  # 30ms @ 16kHz mono
-
+        logger.info("Starting unkillable audio relay...")
         while True:
             try:
-                frame: AudioFrame = await source_track.recv()
-
-                audio = frame.to_ndarray()
-
-                if audio.ndim > 1:
-                    audio = audio.mean(axis=0)
-
-                audio_16k = librosa.resample(
-                    audio.astype(np.float32),
-                    orig_sr=frame.sample_rate,
-                    target_sr=16000,
+                frame = await source_track.recv()
+            
+            # Offload heavy math to a worker thread to keep the main loop fast
+                pcm_bytes = await asyncio.get_event_loop().run_in_executor(
+                    None, self._downsample, frame
                 )
+            
+                if pcm_bytes:
+                    self.stt_callback(pcm_bytes)
+                
+            except Exception as e:
+            # If the mic glitches, we send silence instead of letting the task die
+                logger.warning(f"Relay hiccup: {e}. Sending synthetic silence keep-alive.")
+                silence = b'\x00' * 640 # 20ms of silence
+                self.stt_callback(silence)
+                await asyncio.sleep(0.02)
 
-                pcm = (audio_16k * 32767).astype(np.int16).tobytes()
-
-                self.stt_callback(pcm)
- 
-            except Exception:
-            # IMPORTANT: do NOT exit
-            # Send silence instead
-                self.stt_callback(SILENCE)
-                await asyncio.sleep(0.03)
+def _downsample(self, frame):
+    # Convert WebRTC frame (usually 48kHz) to 16kHz PCM for Google STT
+    audio_data = frame.to_ndarray().astype(np.int16).tobytes()
+    
+    # 2 = bytes per sample (int16), 1 = mono
+    resampled_data, _ = audioop.ratecv(
+        audio_data, 2, 1, frame.sample_rate, 16000, None
+    )
+    return resampled_data
     
     async def handle_offer(self, sdp: str) -> str:
         """Handle WebRTC offer and return answer"""
