@@ -267,8 +267,9 @@ async def voice_ws(ws: WebSocket):
             raw = await ws.receive()
 
             if raw["type"] == "websocket.disconnect":
-                logger.info("WebSocket disconnected by client")
-                break
+                logger.info("WebSocket signaling disconnected (keeping session alive)")
+                await asyncio.sleep(3600)  # keep session alive
+                    continue
 
             if raw["type"] != "websocket.receive":
                 continue
@@ -328,6 +329,7 @@ async def voice_ws(ws: WebSocket):
         logger.exception("Voice WS error")
 
     finally:
+        await asyncio.sleep(1.0)  # allow last TTS audio to play
         stop_event.set()
         audio_queue.put(None)
         await transcript_queue.put(None)
