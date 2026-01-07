@@ -120,30 +120,28 @@ class STTWorker:
                     self.loop,
                 )
 
-    def _audio_generator(self):
-        """
-        Yields ONLY audio chunks.
-        Configuration is handled by the client method above.
-        """
+    def _audio_generator(self, initial_config):
+    # Send config ONCE
+        yield speech.StreamingRecognizeRequest(
+            streaming_config=initial_config
+        )
+
         while not self.stop_event.is_set():
             try:
-                # Wait for audio (blocking)
                 chunk = self.audio_queue.get(timeout=0.1)
-                
-                if chunk is None: 
+                if chunk is None:
                     return
 
-                # VAD Filter: Only send speech
-                if self._is_speech(chunk):
-                    # Wrap audio bytes in the request object
-                    yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            # ALWAYS send audio (speech OR silence)
+                yield speech.StreamingRecognizeRequest(
+                    audio_content=chunk
+                )
 
             except queue.Empty:
-                continue
-            except Exception as e:
-                logger.error(f"Error in audio generator: {e}")
-                break
-
+            # Keep-alive: send 30ms silence
+                yield speech.StreamingRecognizeRequest(
+                    audio_content=b"\x00" * 960
+                )
     def _is_speech(self, pcm_data: bytes) -> bool:
         """Simple VAD check."""
         if len(pcm_data) != FRAME_SIZE * 2: 
