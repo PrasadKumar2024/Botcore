@@ -116,36 +116,39 @@ class WebRTCSession:
             logger.info(f"[{self.session_id}] WebRTC State: {self.pc.connectionState}")
             if self.pc.connectionState in ["failed", "closed"]:
                 await self.close()
-
+    #
     async def _relay_audio(self, source_track):
         """Reads audio from browser and sends to STT callback."""
         logger.info("Starting audio relay...")
+        buffer = bytearray()  # ← CRITICAL: Buffer to fix chunk size
+    
         while True:
             try:
                 frame = await source_track.recv()
-                
-                # Heavy processing in executor to avoid blocking event loop
+            
                 pcm_bytes = await asyncio.get_event_loop().run_in_executor(
                     None, self._downsample, frame
                 )
-                
-                # Always send audio to STT, even silence
+            
                 if pcm_bytes:
-                    # THIS LOG CONFIRMS AUDIO IS REAL
-                    logger.info(f"🎤 Relaying {len(pcm_bytes)} bytes") 
-                    self.stt_callback(pcm_bytes)
-
+                    buffer.extend(pcm_bytes)
+                
+                # Force exactly 960 bytes (30ms @ 16kHz) for STT VAD
+                    while len(buffer) >= 960:
+                        chunk = bytes(buffer[:960])
+                        buffer = buffer[960:]
+                        logger.info(f"🎤 Relaying {len(chunk)} bytes to STT") 
+                        self.stt_callback(chunk)
                 else:
-    # 30ms silence @ 16kHz = 480 samples * 2 bytes
-                    self.stt_callback(b"\x00" * 960)
-                    
+                # Send silence if no audio
+                    self.stt_callback(b'\x00' * 960)
+                
             except MediaStreamError:
-                logger.info("Track ended or closed. Stopping relay.")
-                break # STOP THE LOOP
+                logger.info("Track ended. Stopping relay.")
+                break
             except Exception as e:
-                # If it's just a momentary glitch, send silence to keep STT/VAD happy
-                # 960 bytes = 30ms @ 16kHz (Matches STT Frame Size)
-                self.stt_callback(b'\x00' * 960) 
+                logger.error(f"Relay error: {e}")
+                self.stt_callback(b'\x00' * 960)
                 await asyncio.sleep(0.01)
     #
     def _downsample(self, frame):
