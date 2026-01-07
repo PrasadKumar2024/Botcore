@@ -131,7 +131,10 @@ class WebRTCSession:
                 
                 # Always send audio to STT, even silence
                 if pcm_bytes:
+                    # THIS LOG CONFIRMS AUDIO IS REAL
+                    logger.info(f"🎤 Relaying {len(pcm_bytes)} bytes") 
                     self.stt_callback(pcm_bytes)
+
                 else:
     # 30ms silence @ 16kHz = 480 samples * 2 bytes
                     self.stt_callback(b"\x00" * 960)
@@ -144,7 +147,7 @@ class WebRTCSession:
                 # 960 bytes = 30ms @ 16kHz (Matches STT Frame Size)
                 self.stt_callback(b'\x00' * 960) 
                 await asyncio.sleep(0.01)
-
+    #
     def _downsample(self, frame):
         """Safely convert WebRTC AudioFrame to 16kHz mono PCM."""
         try:
@@ -152,9 +155,9 @@ class WebRTCSession:
             pcm = frame.to_ndarray()
             
             # 2. Handle Stereo / Planar (Multi-channel)
+            # Chrome sends "planar" audio. We MUST mix to mono.
             if pcm.ndim > 1:
-                # Average channels to mono
-                pcm = pcm.mean(axis=0)
+                pcm = pcm.mean(axis=0) 
             
             # 3. Handle Empty Frames
             if pcm.size == 0:
@@ -162,11 +165,13 @@ class WebRTCSession:
                 
             # 4. Resample 48k -> 16k
             pcm = pcm.astype(np.int16).tobytes()
+            
             resampled, _ = audioop.ratecv(
                 pcm, 2, 1, frame.sample_rate, STT_SAMPLE_RATE, None
             )
             return resampled
-        except Exception:
+        except Exception as e:
+            logger.error(f"Downsample error: {e}")
             return None
 
     async def handle_offer(self, sdp: str) -> str:
