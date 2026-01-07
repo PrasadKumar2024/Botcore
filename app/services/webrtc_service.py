@@ -3,218 +3,168 @@ from __future__ import annotations
 import asyncio
 import logging
 import numpy as np
-from typing import Optional, Callable
+import audioop
+from typing import Optional, Callable, Dict
 
 from aiortc import (
-    RTCPeerConnection,
-    RTCSessionDescription,
-    MediaStreamTrack,
-    RTCConfiguration,
-    RTCIceServer,
+    RTCPeerConnection, 
+    RTCSessionDescription, 
+    MediaStreamTrack, 
+    RTCConfiguration, 
+    RTCIceServer
 )
 from av import AudioFrame
 from aiortc.sdp import candidate_from_sdp
-import audioop
 from aiortc.contrib.media import MediaRelay
+from aiortc.mediastreams import MediaStreamError
+
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# CONFIG
-# ============================================================
+# ===================== CONFIG =====================
 OPUS_SAMPLE_RATE = 48000
 STT_SAMPLE_RATE = 16000
-TTS_SAMPLE_RATE = 16000  # input PCM rate (will be sent as 48kHz WebRTC)
-
-# ============================================================
-# AUDIO TRACK HANDLERS
-# ============================================================
-
-class IncomingAudioTrack(MediaStreamTrack):
-    """
-    Kept for compatibility, but STT is driven by _relay_audio.
-    """
-    kind = "audio"
-
-    def __init__(self, stt_callback: Callable[[bytes], None]):
-        super().__init__()
-        self._running = True
-
-    async def recv(self):
-        frame: AudioFrame = await super().recv()
-        return frame
-
-    def stop(self):
-        self._running = False
-
+TTS_SAMPLE_RATE = 16000 
+# ==================================================
 
 class OutgoingAudioTrack(MediaStreamTrack):
-    """
-    Sends TTS audio back to browser via WebRTC (48kHz).
-    """
+    """Sends TTS audio back to browser at 48kHz."""
     kind = "audio"
-
+    
     def __init__(self):
         super().__init__()
-        self.queue = asyncio.Queue(maxsize=100)
+        self.queue = asyncio.Queue(maxsize=200)
         self._timestamp = 0
         self._running = True
-
+    
     async def recv(self):
+        if not self._running:
+            return await self._get_silence_frame()
+
         try:
-            if not self._running:
-                pcm = np.zeros(1440, dtype=np.int16)
-            else:
-                try:
-                    pcm_bytes = await asyncio.wait_for(self.queue.get(), timeout=0.02)
-                    pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
-                except asyncio.TimeoutError:
-                    pcm = np.zeros(1440, dtype=np.int16)
+            pcm_bytes = await asyncio.wait_for(self.queue.get(), timeout=0.02)
+            
+            # Upsample 16k -> 48k for WebRTC compatibility
+            pcm_48k, _ = audioop.ratecv(pcm_bytes, 2, 1, 16000, 48000, None)
+            audio_np = np.frombuffer(pcm_48k, dtype=np.int16)
 
-            if len(pcm) < 1440:
-                pcm = np.pad(pcm, (0, 1440 - len(pcm)))
-            elif len(pcm) > 1440:
-                pcm = pcm[:1440]
+            # Ensure frame size is 960 samples (20ms @ 48kHz)
+            # Use simple padding or slicing
+            target_samples = 960
+            if len(audio_np) < target_samples:
+                audio_np = np.pad(audio_np, (0, target_samples - len(audio_np)))
+            elif len(audio_np) > target_samples:
+                audio_np = audio_np[:target_samples]
 
-            frame = AudioFrame.from_ndarray(
-                pcm.reshape(1, -1),
-                format="s16",
-                layout="mono",
-            )
-            frame.sample_rate = OPUS_SAMPLE_RATE
+            frame = AudioFrame.from_ndarray(audio_np.reshape(1, -1), format='s16', layout='mono')
+            frame.sample_rate = 48000
             frame.pts = self._timestamp
-            self._timestamp += 1440  # 30ms @ 48kHz
-
+            self._timestamp += target_samples
             return frame
 
+        except (asyncio.TimeoutError, asyncio.QueueEmpty):
+            return await self._get_silence_frame()
         except Exception as e:
-            logger.exception(f"Outgoing audio error: {e}")
-            pcm = np.zeros(1440, dtype=np.int16)
-            frame = AudioFrame.from_ndarray(
-                pcm.reshape(1, -1),
-                format="s16",
-                layout="mono",
-            )
-            frame.sample_rate = OPUS_SAMPLE_RATE
-            frame.pts = self._timestamp
-            self._timestamp += 1440
-            return frame
+            logger.error(f"OutgoingTrack error: {e}")
+            return await self._get_silence_frame()
+
+    async def _get_silence_frame(self):
+        # 20ms silence @ 48kHz
+        silence = np.zeros(960, dtype=np.int16)
+        frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
+        frame.sample_rate = 48000
+        frame.pts = self._timestamp
+        self._timestamp += 960
+        return frame
 
     async def send_audio(self, pcm_data: bytes):
         if self._running:
             try:
                 self.queue.put_nowait(pcm_data)
             except asyncio.QueueFull:
-                logger.warning("Outgoing audio queue full, dropping frame")
+                pass # Drop frame if congested
 
     def stop(self):
         self._running = False
 
 
-# ============================================================
-# WEBRTC SESSION MANAGER
-# ============================================================
-
 class WebRTCSession:
-    def __init__(
-        self,
-        session_id: str,
-        stt_callback: Callable[[bytes], None],
-    ):
+    def __init__(self, session_id: str, stt_callback: Callable[[bytes], None]):
         self.session_id = session_id
-
-        # ✅ STUN added
-        self.pc = RTCPeerConnection(
-            RTCConfiguration(
-                iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
-            )
-        )
-
-        self.incoming_track: Optional[IncomingAudioTrack] = None
+        
+        # Google STUN for firewall traversal
+        config = RTCConfiguration(iceServers=[
+            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
+        ])
+        
+        self.pc = RTCPeerConnection(configuration=config)
         self.outgoing_track = OutgoingAudioTrack()
         self.stt_callback = stt_callback
         self.relay = MediaRelay()
-
+        
         self.pc.addTrack(self.outgoing_track)
-
+        
         @self.pc.on("track")
         def on_track(track):
-            logger.info(f"Received track: {track.kind}")
             if track.kind == "audio":
-                relayed = self.relay.subscribe(track)
-                asyncio.create_task(self._relay_audio(relayed))
-
+                logger.info(f"[{self.session_id}] Audio track received")
+                # Use MediaRelay to safely duplicate the stream
+                relayed_track = self.relay.subscribe(track)
+                asyncio.create_task(self._relay_audio(relayed_track))
+        
         @self.pc.on("connectionstatechange")
         async def on_connection_state_change():
-            logger.info(f"WebRTC connection state: {self.pc.connectionState}")
+            logger.info(f"[{self.session_id}] WebRTC State: {self.pc.connectionState}")
+            if self.pc.connectionState in ["failed", "closed"]:
+                await self.close()
 
     async def _relay_audio(self, source_track):
-        logger.info("Starting audio relay with 30ms frame chunking...")
-        try:
-            while True:
-                try:
-                    frame = await asyncio.wait_for(source_track.recv(), timeout=2.0)
+        """Reads audio from browser and sends to STT callback."""
+        logger.info("Starting audio relay...")
+        while True:
+            try:
+                frame = await source_track.recv()
                 
-                # Get list of properly chunked 30ms frames
-                    frames = await asyncio.get_event_loop().run_in_executor(
-                        None, self._downsample, frame
-                    )
+                # Heavy processing in executor to avoid blocking event loop
+                pcm_bytes = await asyncio.get_event_loop().run_in_executor(
+                    None, self._downsample, frame
+                )
                 
-                # Send each 30ms frame to STT
-                    if frames:
-                        for frame_bytes in frames:
-                            self.stt_callback(frame_bytes)
-                        
-                except asyncio.TimeoutError:
-                    logger.debug("No audio frames (timeout)")
-                    continue
-                except Exception as e:
-                    logger.error(f"Audio relay error: {type(e).__name__}: {e}")
-                    await asyncio.sleep(0.1)
-        except asyncio.CancelledError:
-            logger.info("Audio relay stopped")
+                if pcm_bytes:
+                    self.stt_callback(pcm_bytes)
+                    
+            except MediaStreamError:
+                logger.info("Track ended or closed. Stopping relay.")
+                break # STOP THE LOOP
+            except Exception as e:
+                # If it's just a momentary glitch, send silence to keep STT/VAD happy
+                # 960 bytes = 30ms @ 16kHz (Matches STT Frame Size)
+                self.stt_callback(b'\x00' * 960) 
+                await asyncio.sleep(0.01)
 
     def _downsample(self, frame):
-        """
-        Downsample to 16kHz and chunk into exact 30ms frames (960 bytes).
-        This is REQUIRED for webrtcvad to function correctly.
-        """
-        if frame is None:
-            return []
-
-        pcm = frame.to_ndarray()
-
-    # Convert to mono safely
-        if pcm.ndim == 2:
-            pcm = pcm.mean(axis=0)
-
-        if pcm.size == 0:
-            return []
-
-    # Convert to int16 PCM
-        pcm = pcm.astype(np.int16).tobytes()
-
-    # Resample to 16kHz
+        """Safely convert WebRTC AudioFrame to 16kHz mono PCM."""
         try:
+            # 1. Convert to numpy
+            pcm = frame.to_ndarray()
+            
+            # 2. Handle Stereo / Planar (Multi-channel)
+            if pcm.ndim > 1:
+                # Average channels to mono
+                pcm = pcm.mean(axis=0)
+            
+            # 3. Handle Empty Frames
+            if pcm.size == 0:
+                return None
+                
+            # 4. Resample 48k -> 16k
+            pcm = pcm.astype(np.int16).tobytes()
             resampled, _ = audioop.ratecv(
-                pcm,
-                2,              # sample width (16-bit = 2 bytes)
-                1,              # channels (mono)
-                frame.sample_rate,  # input rate (48kHz from WebRTC)
-                STT_SAMPLE_RATE,    # output rate (16kHz for STT)
-                None,
+                pcm, 2, 1, frame.sample_rate, STT_SAMPLE_RATE, None
             )
-        except Exception as e:
-            logger.error(f"Resampling failed: {e}")
-            return []
+            return resampled
+        except Exception:
+            return None
 
-    # CRITICAL: Chunk into exact 30ms frames (960 bytes = 480 samples * 2 bytes)
-        FRAME_BYTES = 960  # 30ms at 16kHz mono
-        frames = []
-
-        for i in range(0, len(resampled) - FRAME_BYTES + 1, FRAME_BYTES):
-            frames.append(resampled[i:i + FRAME_BYTES])
-
-        return frames
     async def handle_offer(self, sdp: str) -> str:
         offer = RTCSessionDescription(sdp=sdp, type="offer")
         await self.pc.setRemoteDescription(offer)
@@ -224,52 +174,33 @@ class WebRTCSession:
 
     async def add_ice_candidate(self, candidate_dict: dict):
         try:
-            candidate_string = candidate_dict.get("candidate")
-            if not candidate_string:
-                return
-            candidate = candidate_from_sdp(candidate_string)
+            if not candidate_dict.get("candidate"): return
+            candidate = candidate_from_sdp(candidate_dict["candidate"])
             candidate.sdpMid = candidate_dict.get("sdpMid")
             candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
             await self.pc.addIceCandidate(candidate)
         except Exception as e:
-            logger.error(f"Failed to add ICE candidate: {e}")
+            logger.error(f"ICE Error: {e}")
 
     async def send_audio(self, pcm_data: bytes):
         await self.outgoing_track.send_audio(pcm_data)
 
     async def close(self):
-        try:
-            if self.incoming_track:
-                self.incoming_track.stop()
-            self.outgoing_track.stop()
-            await self.pc.close()
-        except Exception:
-            pass
+        self.outgoing_track.stop()
+        await self.pc.close()
 
+# ===================== GLOBAL MANAGER =====================
 
-# ============================================================
-# GLOBAL SESSION MANAGER
-# ============================================================
+_sessions: Dict[str, WebRTCSession] = {}
 
-_sessions: dict[str, WebRTCSession] = {}
-
-async def create_session(
-    session_id: str,
-    stt_callback: Callable[[bytes], None],
-) -> WebRTCSession:
+async def create_session(session_id: str, stt_callback: Callable[[bytes], None]) -> WebRTCSession:
     if session_id in _sessions:
         await _sessions[session_id].close()
-
     session = WebRTCSession(session_id, stt_callback)
     _sessions[session_id] = session
-    logger.info(f"Created WebRTC session: {session_id}")
     return session
-
-def get_session(session_id: str) -> Optional[WebRTCSession]:
-    return _sessions.get(session_id)
 
 async def close_session(session_id: str):
     session = _sessions.pop(session_id, None)
     if session:
         await session.close()
-        logger.info(f"Closed WebRTC session: {session_id}")
