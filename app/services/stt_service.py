@@ -20,7 +20,7 @@ LANGUAGE_CODE = "en-US"
 STREAMING_LIMIT_SEC = 290 
 RESTART_BACKOFF_SEC = 1.0  # Increased slightly to prevent log spam
 
-VAD_AGGRESSIVENESS = 0
+VAD_AGGRESSIVENESS = 1
 FRAME_DURATION_MS = 30
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 
@@ -119,37 +119,42 @@ class STTWorker:
                     self.transcript_queue.put(response),
                     self.loop,
                 )
-
-    def _audio_generator(self, initial_config):
-    # Send config ONCE
-        yield speech.StreamingRecognizeRequest(
-            streaming_config=initial_config
-        )
+    #
+    def _audio_generator(self):
+        # 1. Start with a blank chunk to wake up Google
+        yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
+        
+        last_send_time = time.monotonic()
 
         while not self.stop_event.is_set():
             try:
-                chunk = self.audio_queue.get(timeout=0.1)
-                if chunk is None:
-                    return
+                # Wait briefly for audio
+                chunk = self.audio_queue.get(timeout=0.05)
+                
+                if chunk is None: return
 
-            # ALWAYS send audio (speech OR silence)
-                yield speech.StreamingRecognizeRequest(
-                    audio_content=chunk
-                )
+                # VAD: If speech, send audio. If silence, send zeros.
+                # This ensures the buffer always fills up.
+                if self._is_speech(chunk):
+                    self.audio_buffer.extend(chunk)
+                else:
+                    self.audio_buffer.extend(b'\x00' * len(chunk))
+
+                # Send data whenever we have ~100ms
+                if len(self.audio_buffer) >= 3200:
+                    yield speech.StreamingRecognizeRequest(
+                        audio_content=bytes(self.audio_buffer)
+                    )
+                    self.audio_buffer.clear()
+                    last_send_time = time.monotonic()
 
             except queue.Empty:
-            # Keep-alive: send 30ms silence
-                yield speech.StreamingRecognizeRequest(
-                    audio_content=b"\x00" * 960
-                )
-    def _is_speech(self, pcm_data: bytes) -> bool:
-        """Simple VAD check."""
-        if len(pcm_data) != FRAME_SIZE * 2: 
-            return True 
-        try:
-            return self.vad.is_speech(pcm_data, SAMPLE_RATE)
-        except:
-            return True
+                # CRITICAL FIX: If queue is empty for >5 seconds, send a heartbeat
+                # This prevents the "Audio Timeout Error"
+                if time.monotonic() - last_send_time > 5.0:
+                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
+                    last_send_time = time.monotonic()
+                continue
 
 # ===================== FACTORY =====================
 
