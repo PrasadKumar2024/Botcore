@@ -298,6 +298,11 @@ class RAGEngine:
     - Fuse confidence (LLM + RAG)
     - Provide safe fallback
     """
+    def _get_cache_key(self, client_id: str, query: str) -> str:
+        """Generates a simple unique key for caching responses."""
+        import hashlib
+        # Create a unique hash based on user ID and their question
+        return hashlib.md5(f"{client_id}:{query}".encode()).hexdigest()
 
     async def answer(
         self,
