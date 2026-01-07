@@ -54,6 +54,21 @@ class STTWorker:
         )
         self.thread.start()
         return self.thread
+    def _is_speech(self, pcm_data: bytes) -> bool:
+        """
+        Determines if audio is speech. 
+        """
+        # Safety check: If frame size is wrong, just pass it through
+        # FRAME_SIZE is defined at the top of your file (usually 480)
+        if len(pcm_data) != 960:  # 480 samples * 2 bytes = 960 bytes
+            return True 
+
+        try:
+            # We use the VAD engine we initialized in __init__
+            return self.vad.is_speech(pcm_data, SAMPLE_RATE)
+        except Exception:
+            # If VAD crashes, assume it is speech so we don't lose audio
+            return True
 
     def _run(self):
         """Main STT loop: Connects and handles restarts."""
