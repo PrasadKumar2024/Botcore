@@ -304,6 +304,22 @@ class RAGEngine:
         # Create a unique hash based on user ID and their question
         return hashlib.md5(f"{client_id}:{query}".encode()).hexdigest()
 
+    def _check_cache(self, key: str):
+        """
+        Safely checks cache. 
+        Returns None to force generating a fresh answer (prevents DB crashes).
+        """
+        # We return None here to bypass complex DB logic for now.
+        # This guarantees the bot will TRY to answer you.
+        return None
+
+    def _save_to_cache(self, key: str, response: str):
+        """
+        Safely saves to cache.
+        Does nothing for now to prevent DB crashes.
+        """
+        pass
+
     async def answer(
         self,
         *,
