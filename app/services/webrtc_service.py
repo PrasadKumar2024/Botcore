@@ -148,27 +148,73 @@ class WebRTCSession:
             logger.info(f"WebRTC connection state: {self.pc.connectionState}")
 
     async def _relay_audio(self, source_track):
-        logger.info("Starting unkillable audio relay...")
-        while True:
-            try:
-                frame = await source_track.recv()
-                pcm_bytes = await asyncio.get_event_loop().run_in_executor(
-                    None, self._downsample, frame
-                )
-                if pcm_bytes:
-                    self.stt_callback(pcm_bytes)
-            except Exception as e:
-                logger.warning(f"Relay hiccup: {e}, sending silence")
-                self.stt_callback(b"\x00" * 640)
-                await asyncio.sleep(0.02)
+        logger.info("Starting audio relay with 30ms frame chunking...")
+        try:
+            while True:
+                try:
+                    frame = await asyncio.wait_for(source_track.recv(), timeout=2.0)
+                
+                # Get list of properly chunked 30ms frames
+                    frames = await asyncio.get_event_loop().run_in_executor(
+                        None, self._downsample, frame
+                    )
+                
+                # Send each 30ms frame to STT
+                    if frames:
+                        for frame_bytes in frames:
+                            self.stt_callback(frame_bytes)
+                        
+                except asyncio.TimeoutError:
+                    logger.debug("No audio frames (timeout)")
+                    continue
+                except Exception as e:
+                    logger.error(f"Audio relay error: {type(e).__name__}: {e}")
+                    await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            logger.info("Audio relay stopped")
 
     def _downsample(self, frame):
-        audio_data = frame.to_ndarray().astype(np.int16).tobytes()
-        resampled, _ = audioop.ratecv(
-            audio_data, 2, 1, frame.sample_rate, STT_SAMPLE_RATE, None
-        )
-        return resampled
+        """
+        Downsample to 16kHz and chunk into exact 30ms frames (960 bytes).
+        This is REQUIRED for webrtcvad to function correctly.
+        """
+        if frame is None:
+            return []
 
+        pcm = frame.to_ndarray()
+
+    # Convert to mono safely
+        if pcm.ndim == 2:
+            pcm = pcm.mean(axis=0)
+
+        if pcm.size == 0:
+            return []
+
+    # Convert to int16 PCM
+        pcm = pcm.astype(np.int16).tobytes()
+
+    # Resample to 16kHz
+        try:
+            resampled, _ = audioop.ratecv(
+                pcm,
+                2,              # sample width (16-bit = 2 bytes)
+                1,              # channels (mono)
+                frame.sample_rate,  # input rate (48kHz from WebRTC)
+                STT_SAMPLE_RATE,    # output rate (16kHz for STT)
+                None,
+            )
+        except Exception as e:
+            logger.error(f"Resampling failed: {e}")
+            return []
+
+    # CRITICAL: Chunk into exact 30ms frames (960 bytes = 480 samples * 2 bytes)
+        FRAME_BYTES = 960  # 30ms at 16kHz mono
+        frames = []
+
+        for i in range(0, len(resampled) - FRAME_BYTES + 1, FRAME_BYTES):
+            frames.append(resampled[i:i + FRAME_BYTES])
+
+        return frames
     async def handle_offer(self, sdp: str) -> str:
         offer = RTCSessionDescription(sdp=sdp, type="offer")
         await self.pc.setRemoteDescription(offer)
