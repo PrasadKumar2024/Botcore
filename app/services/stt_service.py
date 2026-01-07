@@ -14,25 +14,19 @@ logger = logging.getLogger(__name__)
 
 # ===================== CONFIG =====================
 
-SAMPLE_RATE = 16000  # Must match the rate sent from webrtc_service
+SAMPLE_RATE = 16000
 LANGUAGE_CODE = "en-US"
 
-# Google STT limits streams to ~5 minutes, we restart safely before that.
 STREAMING_LIMIT_SEC = 290 
-RESTART_BACKOFF_SEC = 0.5
+RESTART_BACKOFF_SEC = 1.0  # Increased slightly to prevent log spam
 
-VAD_AGGRESSIVENESS = 3  # 0-3 (3 is most aggressive at filtering background noise)
-FRAME_DURATION_MS = 30  # Fixed for VAD (10, 20, or 30ms)
-FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)  # 480 samples @ 16k
+VAD_AGGRESSIVENESS = 3
+FRAME_DURATION_MS = 30
+FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 
 # ==================================================
 
 class STTWorker:
-    """
-    Dedicated streaming STT worker.
-    Runs in a background thread to prevent blocking asyncio.
-    """
-
     def __init__(
         self,
         *,
@@ -51,9 +45,6 @@ class STTWorker:
         self.client = speech.SpeechClient()
         self.thread: Optional[threading.Thread] = None
         self.vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
-        
-        # Buffer to accumulate small chunks if necessary (optional optimization)
-        self.audio_buffer = bytearray()
 
     def start(self):
         self.thread = threading.Thread(
@@ -65,21 +56,24 @@ class STTWorker:
         return self.thread
 
     def _run(self):
-        """Main loop: Connects to Google, handles disconnects/restarts."""
+        """Main STT loop: Connects and handles restarts."""
         while not self.stop_event.is_set():
             try:
                 self._stream_once()
             except Exception as e:
-                # Don't log "Cancelled" errors on shutdown
-                if "503" in str(e) or "11" in str(e): # Common Google retryable errors
+                # Filter out standard shutdown noises
+                if "503" in str(e) or "11" in str(e):
                     logger.warning(f"STT stream interrupted (retrying): {e}")
                 elif not self.stop_event.is_set():
-                    logger.error(f"STT Critical Error: {e}", exc_info=True)
+                    logger.error(f"STT Critical Error: {e}")
                 
                 time.sleep(RESTART_BACKOFF_SEC)
 
     def _stream_once(self):
-        """Manages a single session with Google Cloud STT."""
+        """
+        Manages a single session with Google Cloud STT.
+        USES LIBRARY NATIVE CONFIGURATION (No manual yielding).
+        """
         
         # 1. Prepare Configuration
         config = speech.RecognitionConfig(
@@ -87,7 +81,7 @@ class STTWorker:
             sample_rate_hertz=SAMPLE_RATE,
             language_code=self.language,
             enable_automatic_punctuation=True,
-            model="latest_long", # Use 'latest_long' or 'command_and_search'
+            model="latest_long",
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
@@ -97,22 +91,21 @@ class STTWorker:
         )
 
         # 2. Open the Stream
-        # The _audio_generator will yield the config FIRST, then audio.
-        requests = self._audio_generator(streaming_config)
-        
-        # 3. Process Responses
+        # CRITICAL FIX: Pass 'streaming_config' directly to the client.
+        # The library will automatically send it as the FIRST message.
+        # The generator must ONLY yield audio.
         responses = self.client.streaming_recognize(
-            config=None, # Config is in the first request yielded below
-            requests=requests
+            config=streaming_config,
+            requests=self._audio_generator()
         )
 
         start_ts = time.monotonic()
 
+        # 3. Process Responses
         for response in responses:
             if self.stop_event.is_set():
                 break
 
-            # Soft restart limit to prevent Google forcing a disconnect
             if time.monotonic() - start_ts > STREAMING_LIMIT_SEC:
                 logger.info("Restarting STT stream (time limit reached)")
                 break
@@ -120,7 +113,6 @@ class STTWorker:
             if not response.results:
                 continue
 
-            # Safely put result in queue for the main thread
             result = response.results[0]
             if result.alternatives:
                 asyncio.run_coroutine_threadsafe(
@@ -128,25 +120,22 @@ class STTWorker:
                     self.loop,
                 )
 
-    def _audio_generator(self, initial_config):
+    def _audio_generator(self):
         """
-        Yields the configuration FIRST, then yields audio chunks from the queue.
+        Yields ONLY audio chunks.
+        Configuration is handled by the client method above.
         """
-        
-        # --- CRITICAL FIX: Send Config ONCE at the start ---
-        yield speech.StreamingRecognizeRequest(streaming_config=initial_config)
-        # ---------------------------------------------------
-
         while not self.stop_event.is_set():
             try:
-                # Wait for audio (blocking with timeout to check stop_event)
+                # Wait for audio (blocking)
                 chunk = self.audio_queue.get(timeout=0.1)
                 
                 if chunk is None: 
-                    return # Signal to stop
+                    return
 
-                # VAD Filter: Only send speech to Google
+                # VAD Filter: Only send speech
                 if self._is_speech(chunk):
+                    # Wrap audio bytes in the request object
                     yield speech.StreamingRecognizeRequest(audio_content=chunk)
 
             except queue.Empty:
@@ -157,11 +146,8 @@ class STTWorker:
 
     def _is_speech(self, pcm_data: bytes) -> bool:
         """Simple VAD check."""
-        # VAD requires specific frame lengths (480 samples for 30ms at 16k)
-        # If chunk is wrong size, just pass it through to be safe
         if len(pcm_data) != FRAME_SIZE * 2: 
             return True 
-
         try:
             return self.vad.is_speech(pcm_data, SAMPLE_RATE)
         except:
