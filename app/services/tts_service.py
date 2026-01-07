@@ -4,6 +4,7 @@ import asyncio
 import logging
 import threading
 from typing import Dict, Callable, Optional
+from functools import partial
 from dataclasses import dataclass
 
 from google.cloud import texttospeech_v1 as tts
@@ -172,14 +173,13 @@ class TTSSession:
 
                         pcm: bytes = await loop.run_in_executor(
                             None,
-                            synthesize_blocking,
-                            dict(
+                            partial(
+                                synthesize_blocking,
                                 text=task.text,
                                 language=task.language,
                                 sentiment=task.sentiment,
                                 speaking_rate=task.speaking_rate,
-                          
-                            ), 
+                             ),
                         )
 
                         # Progressive send (chunked)
