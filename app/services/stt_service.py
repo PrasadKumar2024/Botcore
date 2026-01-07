@@ -68,32 +68,20 @@ class STTWorker:
     # ------------------------------------------------
 
     def _audio_generator(self):
-    # 1. IMMEDIATE HEARTBEAT: Tell Google we are starting
-        yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
-
+        """Generate audio requests with proper VAD filtering"""
         while not self.stop_event.is_set():
             try:
-                chunk = self.audio_queue.get(timeout=0.05)
-                if chunk is None: return
+                chunk = self.audio_queue.get(timeout=0.1)
+                if chunk is None:
+                    return
 
-            # VAD logic: If it's speech, send real bytes. 
-            # If it's silence, send ZERO bytes (but keep the timing).
+            # VAD check - if speech, send real audio; if silence, skip
                 if self._is_speech(chunk):
-                    self.audio_buffer.extend(chunk)
-                else:
-                    self.audio_buffer.extend(b'\x00' * len(chunk))
-
-            # Send in ~100ms chunks (3200 bytes at 16k mono)
-                if len(self.audio_buffer) >= 3200:
-                    yield speech.StreamingRecognizeRequest(
-                        audio_content=bytes(self.audio_buffer)
-                    )
-                    self.audio_buffer.clear()
-                
+                    yield speech.StreamingRecognizeRequest(audio_content=chunk)
+            # Else: skip silence completely (Google handles gaps)
+              
             except queue.Empty:
-            # If nothing is in the queue, keep the stream warm
                 continue
-
     # ------------------------------------------------
     def _is_speech(self, pcm_data: bytes) -> bool:
             """
@@ -150,9 +138,9 @@ class STTWorker:
         
         def request_generator():
         # First request contains only the config
-        #    yield speech.StreamingRecognizeRequest(
-              #  streaming_config=streaming_config
-        #    )
+            yield speech.StreamingRecognizeRequest(
+                streaming_config=streaming_config
+            )
 
         # Following requests contain audio only (already wrapped in StreamingRecognizeRequest)
             for audio_request in self._audio_generator():
