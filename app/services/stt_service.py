@@ -45,7 +45,7 @@ class STTWorker:
         self.client = speech.SpeechClient()
         self.thread: Optional[threading.Thread] = None
         self.vad = webrtcvad.Vad(VAD_AGGRESSIVENESS)
-
+        self.audio_buffer = bytearray()
     def start(self):
         self.thread = threading.Thread(
             target=self._run,
