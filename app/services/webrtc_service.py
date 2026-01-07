@@ -129,8 +129,12 @@ class WebRTCSession:
                     None, self._downsample, frame
                 )
                 
+                # Always send audio to STT, even silence
                 if pcm_bytes:
                     self.stt_callback(pcm_bytes)
+                else:
+    # 30ms silence @ 16kHz = 480 samples * 2 bytes
+                    self.stt_callback(b"\x00" * 960)
                     
             except MediaStreamError:
                 logger.info("Track ended or closed. Stopping relay.")
