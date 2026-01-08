@@ -118,7 +118,7 @@ class STTWorker:
         except Exception as e:
             if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
                 logger.exception(f"STT stream error: {e}")
-                    )
+                    
 
     #
     def _audio_generator(self):
