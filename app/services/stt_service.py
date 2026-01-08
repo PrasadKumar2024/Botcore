@@ -73,51 +73,55 @@ class STTWorker:
                 time.sleep(RESTART_BACKOFF_SEC)
     #
     def _stream_once(self):
-        """Manages a single session with Google Cloud STT with proven stable settings."""
-    
+        """
+        Competitor Standard: Sends a strictly ordered stream.
+        1. Configuration Packet (The Header)
+        2. Audio Packets (The Payload)
+        """
+        # 1. The Configuration (The Header)
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-            sample_rate_hertz=SAMPLE_RATE,
+            sample_rate_hertz=16000,
             language_code=self.language,
             enable_automatic_punctuation=True,
-            model="default",
-            use_enhanced=False,
+            model="default", 
+        )
+        streaming_config = speech.StreamingRecognitionConfig(
+            config=config, 
+            interim_results=True
         )
 
-        streaming_config = speech.StreamingRecognitionConfig(
-            config=config,
-            interim_results=True,
-            single_utterance=False,
-        )
+        # 2. The Smart Generator
+        def request_generator():
+            # Packet 1: The Config (Always first)
+            yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
+            
+            # Packets 2+: The Audio (From your generator)
+            for audio_packet in self._audio_generator():
+                yield audio_packet
 
         try:
-            responses = self.client.streaming_recognize(
-                config=streaming_config,
-                requests=self._audio_generator()
-            )
-
+            # 3. Open the connection using the generator
+            responses = self.client.streaming_recognize(requests=request_generator())
+            
             start_ts = time.monotonic()
-
             for response in responses:
-                if self.stop_event.is_set():
-                    break
-
-                if time.monotonic() - start_ts > STREAMING_LIMIT_SEC:
-                    break
-
-                if not response.results:
-                    continue
-
+                if self.stop_event.is_set(): break
+                if time.monotonic() - start_ts > STREAMING_LIMIT_SEC: break
+                
+                if not response.results: continue
+                
                 result = response.results[0]
                 if result.alternatives:
                     asyncio.run_coroutine_threadsafe(
                         self.transcript_queue.put(response),
                         self.loop,
                     )
-                
+
         except Exception as e:
             if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
-                logger.exception(f"STT stream error: {e}")
+                logger.error(f"Stream Error: {e}")
+
                     
 
     #
