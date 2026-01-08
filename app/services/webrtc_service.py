@@ -161,15 +161,20 @@ class WebRTCSession:
             pcm = frame.to_ndarray()
             
             # 2. Handle Stereo / Planar (Multi-channel)
-            # Chrome sends "planar" audio. We MUST mix to mono.
             if pcm.ndim > 1:
                 pcm = pcm.mean(axis=0) 
             
-            # 3. Handle Empty Frames
+            # 3. CRITICAL FIX: Scale Float Audio to 16-bit Integers
+            # Without this, audio volume is rounded to 0 (Silence)
+            if pcm.dtype.kind == 'f':
+                pcm = (pcm * 32767).clip(-32768, 32767)
+
+            # 4. Handle Empty Frames
             if pcm.size == 0:
                 return None
                 
-            # 4. Resample 48k -> 16k
+            # 5. Resample 48k -> 16k
+            # Now safe to cast because we restored the volume
             pcm = pcm.astype(np.int16).tobytes()
             
             resampled, _ = audioop.ratecv(
@@ -179,6 +184,7 @@ class WebRTCSession:
         except Exception as e:
             logger.error(f"Downsample error: {e}")
             return None
+
 
     async def handle_offer(self, sdp: str) -> str:
         offer = RTCSessionDescription(sdp=sdp, type="offer")
