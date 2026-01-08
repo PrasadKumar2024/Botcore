@@ -155,35 +155,31 @@ class WebRTCSession:
                 await asyncio.sleep(0.01)
     #
     def _downsample(self, frame):
-        """Safely convert WebRTC AudioFrame to 16kHz mono PCM."""
+        """
+        Industry Standard: Uses PyAV (FFmpeg) to normalize audio.
+        This guarantees the output is exactly what Google STT needs.
+        """
         try:
-            # 1. Convert to numpy
-            pcm = frame.to_ndarray()
+            import av
+            # 1. Initialize the "Black Box" (Resampler)
+            # format='s16'  -> Signed 16-bit Integer (Google's LINEAR16)
+            # layout='mono' -> Single Channel
+            # rate=16000    -> 16kHz Sample Rate
+            resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
             
-            # 2. Handle Stereo / Planar (Multi-channel)
-            if pcm.ndim > 1:
-                pcm = pcm.mean(axis=0) 
+            # 2. Process the Frame
+            # This automatically handles the Float->Int conversion for you.
+            # It performs the math perfectly, including clipping and dithering.
+            frames = resampler.resample(frame)
             
-            # 3. CRITICAL FIX: Scale Float Audio to 16-bit Integers
-            # Without this, audio volume is rounded to 0 (Silence)
-            if pcm.dtype.kind == 'f':
-                pcm = (pcm * 32767).clip(-32768, 32767)
-
-            # 4. Handle Empty Frames
-            if pcm.size == 0:
-                return None
-                
-            # 5. Resample 48k -> 16k
-            # Now safe to cast because we restored the volume
-            pcm = pcm.astype(np.int16).tobytes()
+            # 3. Pack the Bytes
+            pcm_bytes = b''.join(f.to_bytes() for f in frames)
             
-            resampled, _ = audioop.ratecv(
-                pcm, 2, 1, frame.sample_rate, STT_SAMPLE_RATE, None
-            )
-            return resampled
+            return pcm_bytes
         except Exception as e:
-            logger.error(f"Downsample error: {e}")
+            logger.error(f"Resampling Error: {e}")
             return None
+
 
 
     async def handle_offer(self, sdp: str) -> str:
