@@ -83,20 +83,19 @@ class STTWorker:
                     logger.error(f"STT Critical Error: {e}")
                 
                 time.sleep(RESTART_BACKOFF_SEC)
-
+    #
     def _stream_once(self):
         """
         Manages a single session with Google Cloud STT.
-        USES LIBRARY NATIVE CONFIGURATION (No manual yielding).
+        Switches to a more stable model for real-time streaming.
         """
-        
         # 1. Prepare Configuration
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
             language_code=self.language,
             enable_automatic_punctuation=True,
-            model="latest_long",
+            model="command_and_search", # ✅ CHANGE: Standard model is more stable for WebRTC
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
@@ -106,9 +105,8 @@ class STTWorker:
         )
 
         # 2. Open the Stream
-        # CRITICAL FIX: Pass 'streaming_config' directly to the client.
-        # The library will automatically send it as the FIRST message.
-        # The generator must ONLY yield audio.
+        # Pass config directly to the client. 
+        # The library handles sending the config before audio.
         responses = self.client.streaming_recognize(
             config=streaming_config,
             requests=self._audio_generator()
@@ -134,11 +132,10 @@ class STTWorker:
                     self.transcript_queue.put(response),
                     self.loop,
                 )
+
     #
     def _audio_generator(self):
-        # 1. Start with a blank chunk to wake up Google
-        yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
-        
+        """Yields audio content safely without double-wrapping config."""
         last_send_time = time.monotonic()
 
         while not self.stop_event.is_set():
@@ -148,15 +145,15 @@ class STTWorker:
                 
                 if chunk is None: return
 
-                # VAD: If speech, send audio. If silence, send zeros.
-                # This ensures the buffer always fills up.
+                # VAD: Add audio to the buffer
                 if self._is_speech(chunk):
                     self.audio_buffer.extend(chunk)
                 else:
                     self.audio_buffer.extend(b'\x00' * len(chunk))
 
-                # Send data whenever we have ~100ms
-                if len(self.audio_buffer) >= 3200:
+                # Send data whenever the buffer reaches ~60ms (1920 bytes)
+                # Smaller chunks (1920) reduce latency compared to 3200
+                if len(self.audio_buffer) >= 1920:
                     yield speech.StreamingRecognizeRequest(
                         audio_content=bytes(self.audio_buffer)
                     )
@@ -164,12 +161,12 @@ class STTWorker:
                     last_send_time = time.monotonic()
 
             except queue.Empty:
-                # CRITICAL FIX: If queue is empty for >5 seconds, send a heartbeat
-                # This prevents the "Audio Timeout Error"
-                if time.monotonic() - last_send_time > 5.0:
-                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
+                # Heartbeat: Keep stream alive during silence
+                if time.monotonic() - last_send_time > 4.0:
+                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 1920)
                     last_send_time = time.monotonic()
                 continue
+
 
 # ===================== FACTORY =====================
 
