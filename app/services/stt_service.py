@@ -128,15 +128,14 @@ class STTWorker:
         while not self.stop_event.is_set():
             try:
                 chunk = self.audio_queue.get(timeout=0.05)
-            
-                if chunk is None:
-                    return
+                if chunk is None: return
 
-            # Always pass through audio without VAD filtering initially
+                # Always pass through audio 
                 self.audio_buffer.extend(chunk)
 
-            # Send smaller chunks more frequently for lower latency
-                if len(self.audio_buffer) >= 960:  # Changed from 1920 to 960
+                # CRITICAL FIX: Send 100ms (3200 bytes) chunks
+                # 960 bytes is too small and causes "400 Invalid Argument" errors
+                if len(self.audio_buffer) >= 3200: 
                     yield speech.StreamingRecognizeRequest(
                         audio_content=bytes(self.audio_buffer)
                     )
@@ -144,8 +143,9 @@ class STTWorker:
                     last_send_time = time.monotonic()
 
             except queue.Empty:
-                if time.monotonic() - last_send_time > 3.0:  # Changed from 4.0 to 3.0
-                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 960)
+                # Heartbeat to keep connection alive
+                if time.monotonic() - last_send_time > 3.0:
+                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
                     last_send_time = time.monotonic()
                 continue
 
