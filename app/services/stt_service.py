@@ -56,19 +56,19 @@ class STTWorker:
         return self.thread
     def _is_speech(self, pcm_data: bytes) -> bool:
         """
-        Determines if audio is speech. 
+        Determines if audio is speech using WebRTC VAD.
+        CRITICAL: Only works with exactly 960 bytes (30ms @ 16kHz).
         """
-        # Safety check: If frame size is wrong, just pass it through
-        # FRAME_SIZE is defined at the top of your file (usually 480)
-        if len(pcm_data) != 960:  # 480 samples * 2 bytes = 960 bytes
-            return True 
+    # FRAME_SIZE for 30ms @ 16kHz = 480 samples * 2 bytes = 960 bytes
+        if len(pcm_data) != 960:
+            logger.warning(f"⚠️ VAD received {len(pcm_data)} bytes, expected 960. Assuming speech.")
+            return True  # Pass through malformed chunks
 
         try:
-            # We use the VAD engine we initialized in __init__
             return self.vad.is_speech(pcm_data, SAMPLE_RATE)
-        except Exception:
-            # If VAD crashes, assume it is speech so we don't lose audio
-            return True
+        except Exception as e:
+            logger.error(f"VAD error: {e}")
+            return True  # Assume speech on error
 
     def _run(self):
         """Main STT loop: Connects and handles restarts."""
