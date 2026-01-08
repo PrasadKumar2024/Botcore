@@ -118,32 +118,39 @@ class WebRTCSession:
                 await self.close()
     #
     async def _relay_audio(self, source_track):
-        """Reads audio from browser and sends to STT callback."""
-        logger.info("Starting audio relay...")
-        buffer = bytearray()  # ← CRITICAL: Buffer to fix chunk size
+        """Reads audio from browser and sends EXACTLY 960-byte chunks to STT."""
+        logger.info("Starting audio relay with 960-byte chunking...")
+        buffer = bytearray()  # ← CRITICAL: Accumulate audio here
     
         while True:
             try:
                 frame = await source_track.recv()
             
+            # Convert to 16kHz PCM
                 pcm_bytes = await asyncio.get_event_loop().run_in_executor(
                     None, self._downsample, frame
                 )
             
                 if pcm_bytes:
-    # This confirms audio is successfully moving to the STT worker
-                    logger.info(f"🎤 Relaying {len(pcm_bytes)} bytes to STT") 
-                    self.stt_callback(pcm_bytes)
+                    buffer.extend(pcm_bytes)
+                
+                # Send EXACTLY 960-byte chunks (30ms @ 16kHz)
+                    while len(buffer) >= 960:
+                        chunk = bytes(buffer[:960])
+                        buffer = buffer[960:]  # Remove sent data
+                        logger.info(f"✅ Sending 960-byte chunk to STT")
+                        self.stt_callback(chunk)
                 else:
-    # ✅ Send exactly 30ms of silence (960 bytes) if the buffer is empty
-    # This prevents the 400 "Long duration without audio" error
-                    self.stt_callback(b"\x00" * 960)
+                # Send silence to keep pipeline alive
+                    logger.warning("Empty frame, sending silence")
+                    self.stt_callback(b'\x00' * 960)
                 
             except MediaStreamError:
                 logger.info("Track ended. Stopping relay.")
                 break
             except Exception as e:
-                logger.error(f"Relay error: {e}")
+                logger.error(f"Relay error: {e}", exc_info=True)
+            # Send silence on error to prevent pipeline stall
                 self.stt_callback(b'\x00' * 960)
                 await asyncio.sleep(0.01)
     #
