@@ -131,17 +131,13 @@ class WebRTCSession:
                 )
             
                 if pcm_bytes:
-                    buffer.extend(pcm_bytes)
-                
-                # Force exactly 960 bytes (30ms @ 16kHz) for STT VAD
-                    while len(buffer) >= 960:
-                        chunk = bytes(buffer[:960])
-                        buffer = buffer[960:]
-                        logger.info(f"🎤 Relaying {len(chunk)} bytes to STT") 
-                        self.stt_callback(chunk)
+    # This confirms audio is successfully moving to the STT worker
+                    logger.info(f"🎤 Relaying {len(pcm_bytes)} bytes to STT") 
+                    self.stt_callback(pcm_bytes)
                 else:
-                # Send silence if no audio
-                    self.stt_callback(b'\x00' * 960)
+    # ✅ Send exactly 30ms of silence (960 bytes) if the buffer is empty
+    # This prevents the 400 "Long duration without audio" error
+                    self.stt_callback(b"\x00" * 960)
                 
             except MediaStreamError:
                 logger.info("Track ended. Stopping relay.")
