@@ -20,7 +20,7 @@ LANGUAGE_CODE = "en-US"
 STREAMING_LIMIT_SEC = 290 
 RESTART_BACKOFF_SEC = 1.0  # Increased slightly to prevent log spam
 
-VAD_AGGRESSIVENESS = 0
+VAD_AGGRESSIVENESS = 2
 FRAME_DURATION_MS = 30
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 
@@ -85,75 +85,70 @@ class STTWorker:
                 time.sleep(RESTART_BACKOFF_SEC)
     #
     def _stream_once(self):
-        """
-        Manages a single session with Google Cloud STT.
-        Switches to a more stable model for real-time streaming.
-        """
-        # 1. Prepare Configuration
+        """Manages a single session with Google Cloud STT with proven stable settings."""
+    
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
             language_code=self.language,
             enable_automatic_punctuation=True,
-            model="command_and_search", # ✅ CHANGE: Standard model is more stable for WebRTC
+            model="default",
+            use_enhanced=False,
         )
 
         streaming_config = speech.StreamingRecognitionConfig(
             config=config,
             interim_results=True,
-            single_utterance=False, 
+            single_utterance=False,
         )
 
-        # 2. Open the Stream
-        # Pass config directly to the client. 
-        # The library handles sending the config before audio.
-        responses = self.client.streaming_recognize(
-            config=streaming_config,
-            requests=self._audio_generator()
-        )
+        try:
+            responses = self.client.streaming_recognize(
+                config=streaming_config,
+                requests=self._audio_generator()
+            )
 
-        start_ts = time.monotonic()
+            start_ts = time.monotonic()
 
-        # 3. Process Responses
-        for response in responses:
-            if self.stop_event.is_set():
-                break
+            for response in responses:
+                if self.stop_event.is_set():
+                    break
 
-            if time.monotonic() - start_ts > STREAMING_LIMIT_SEC:
-                logger.info("Restarting STT stream (time limit reached)")
-                break
+                if time.monotonic() - start_ts > STREAMING_LIMIT_SEC:
+                    break
 
-            if not response.results:
-                continue
+                if not response.results:
+                    continue
 
-            result = response.results[0]
-            if result.alternatives:
-                asyncio.run_coroutine_threadsafe(
-                    self.transcript_queue.put(response),
-                    self.loop,
-                )
+                result = response.results[0]
+                if result.alternatives:
+                    asyncio.run_coroutine_threadsafe(
+                        self.transcript_queue.put(response),
+                        self.loop,
+                    )
+                
+        except Exception as e:
+            if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
+                logger.exception(f"STT stream error: {e}")
+                    )
 
     #
     def _audio_generator(self):
-        """Yields audio content safely without double-wrapping config."""
+        """Yields audio content with optimized buffering for real-time speech."""
         last_send_time = time.monotonic()
 
         while not self.stop_event.is_set():
             try:
-                # Wait briefly for audio
                 chunk = self.audio_queue.get(timeout=0.05)
-                
-                if chunk is None: return
+            
+                if chunk is None:
+                    return
 
-                # VAD: Add audio to the buffer
-                if self._is_speech(chunk):
-                    self.audio_buffer.extend(chunk)
-                else:
-                    self.audio_buffer.extend(b'\x00' * len(chunk))
+            # Always pass through audio without VAD filtering initially
+                self.audio_buffer.extend(chunk)
 
-                # Send data whenever the buffer reaches ~60ms (1920 bytes)
-                # Smaller chunks (1920) reduce latency compared to 3200
-                if len(self.audio_buffer) >= 1920:
+            # Send smaller chunks more frequently for lower latency
+                if len(self.audio_buffer) >= 960:  # Changed from 1920 to 960
                     yield speech.StreamingRecognizeRequest(
                         audio_content=bytes(self.audio_buffer)
                     )
@@ -161,12 +156,10 @@ class STTWorker:
                     last_send_time = time.monotonic()
 
             except queue.Empty:
-                # Heartbeat: Keep stream alive during silence
-                if time.monotonic() - last_send_time > 4.0:
-                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 1920)
+                if time.monotonic() - last_send_time > 3.0:  # Changed from 4.0 to 3.0
+                    yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 960)
                     last_send_time = time.monotonic()
                 continue
-
 
 # ===================== FACTORY =====================
 
