@@ -74,11 +74,10 @@ class STTWorker:
     #
     def _stream_once(self):
         """
-        Competitor Standard: Sends a strictly ordered stream.
-        1. Configuration Packet (The Header)
-        2. Audio Packets (The Payload)
+        Stream handler using the Explicit Config Argument.
+        Fixes: 'missing 1 required positional argument: config'
         """
-        # 1. The Configuration (The Header)
+        # 1. Define Config
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=16000,
@@ -91,18 +90,14 @@ class STTWorker:
             interim_results=True
         )
 
-        # 2. The Smart Generator
-        def request_generator():
-            # Packet 1: The Config (Always first)
-            yield speech.StreamingRecognizeRequest(streaming_config=streaming_config)
-            
-            # Packets 2+: The Audio (From your generator)
-            for audio_packet in self._audio_generator():
-                yield audio_packet
-
         try:
-            # 3. Open the connection using the generator
-            responses = self.client.streaming_recognize(requests=request_generator())
+            # 2. Call Google (THE FIX)
+            # We pass 'config' explicitly as the first argument.
+            # We pass the audio generator as 'requests'.
+            responses = self.client.streaming_recognize(
+                config=streaming_config,
+                requests=self._audio_generator()
+            )
             
             start_ts = time.monotonic()
             for response in responses:
@@ -119,27 +114,27 @@ class STTWorker:
                     )
 
         except Exception as e:
+            # Filter standard shutdown errors
             if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
                 logger.error(f"Stream Error: {e}")
 
-                    
-
-    #
     def _audio_generator(self):
-        """Yields audio content with optimized buffering for real-time speech."""
+        """
+        Yields ONLY audio chunks. 
+        """
         last_send_time = time.monotonic()
 
         while not self.stop_event.is_set():
             try:
+                # 1. Get Audio
                 chunk = self.audio_queue.get(timeout=0.05)
                 if chunk is None: return
 
-                # Always pass through audio 
                 self.audio_buffer.extend(chunk)
 
-                # CRITICAL FIX: Send 100ms (3200 bytes) chunks
-                # 960 bytes is too small and causes "400 Invalid Argument" errors
-                if len(self.audio_buffer) >= 3200: 
+                # 2. Send 100ms Chunks (3200 bytes)
+                # Keep this buffer! It stabilizes the stream against 400 errors.
+                if len(self.audio_buffer) >= 3200:
                     yield speech.StreamingRecognizeRequest(
                         audio_content=bytes(self.audio_buffer)
                     )
@@ -147,12 +142,17 @@ class STTWorker:
                     last_send_time = time.monotonic()
 
             except queue.Empty:
-                # Heartbeat to keep connection alive
-                if time.monotonic() - last_send_time > 3.0:
+                # 3. Heartbeat (Prevent Timeout)
+                if time.monotonic() - last_send_time > 1.0:
                     yield speech.StreamingRecognizeRequest(audio_content=b'\x00' * 3200)
                     last_send_time = time.monotonic()
                 continue
 
+
+                    
+
+    #
+    
 # ===================== FACTORY =====================
 
 def start_stt_worker(
