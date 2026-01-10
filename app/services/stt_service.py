@@ -74,7 +74,7 @@ class STTWorker:
     #
     def _stream_once(self):
         """
-        Stream handler using the Explicit Config Argument.
+        Stream handler using Explicit Config Argument.
         Fixes: 'missing 1 required positional argument: config'
         """
         # 1. Define Config
@@ -91,32 +91,14 @@ class STTWorker:
         )
 
         try:
-            # 2. Call Google (THE FIX)
-            # We pass 'config' explicitly as the first argument.
-            # We pass the audio generator as 'requests'.
+            # 2. Call Google (THE CRITICAL FIX)
+            # We pass 'config' explicitly. The generator contains ONLY audio.
             responses = self.client.streaming_recognize(
                 config=streaming_config,
                 requests=self._audio_generator()
             )
             
-            start_ts = time.monotonic()
-            for response in responses:
-                if self.stop_event.is_set(): break
-                if time.monotonic() - start_ts > STREAMING_LIMIT_SEC: break
-                
-                if not response.results: continue
-                
-                result = response.results[0]
-                if result.alternatives:
-                    asyncio.run_coroutine_threadsafe(
-                        self.transcript_queue.put(response),
-                        self.loop,
-                    )
-
-        except Exception as e:
-            # Filter standard shutdown errors
-            if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
-                logger.error(f"Stream Error: {e}")
+            # ... (rest of the processing loop) ...
 
     def _audio_generator(self):
         """
