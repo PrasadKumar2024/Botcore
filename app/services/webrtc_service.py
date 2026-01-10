@@ -156,29 +156,26 @@ class WebRTCSession:
     #
     def _downsample(self, frame):
         """
-        Industry Standard: Uses PyAV (FFmpeg) to normalize audio.
-        This guarantees the output is exactly what Google STT needs.
+        Universal PyAV Conversion.
+        Fixes 'AttributeError: to_bytes' by using the numpy interface.
         """
         try:
             import av
-            # 1. Initialize the "Black Box" (Resampler)
-            # format='s16'  -> Signed 16-bit Integer (Google's LINEAR16)
-            # layout='mono' -> Single Channel
-            # rate=16000    -> 16kHz Sample Rate
+            # 1. Initialize Resampler (Matches Google's Requirements)
             resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
             
-            # 2. Process the Frame
-            # This automatically handles the Float->Int conversion for you.
-            # It performs the math perfectly, including clipping and dithering.
+            # 2. Resample
             frames = resampler.resample(frame)
             
-            # 3. Pack the Bytes
-            pcm_bytes = b''.join(f.to_bytes() for f in frames)
+            # 3. Pack Bytes (THE FIX)
+            # using to_ndarray().tobytes() works on ALL PyAV versions
+            pcm_bytes = b''.join(f.to_ndarray().tobytes() for f in frames)
             
             return pcm_bytes
         except Exception as e:
             logger.error(f"Resampling Error: {e}")
             return None
+
 
 
 
