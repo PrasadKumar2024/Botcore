@@ -27,7 +27,7 @@ TTS_SAMPLE_RATE = 16000
 # ==================================================
 
 class OutgoingAudioTrack(MediaStreamTrack):
-    """Sends TTS audio back to browser at 48kHz."""
+    """Sends TTS audio back to browser at 48kHz with buffering to prevent data loss."""
     kind = "audio"
     
     def __init__(self):
@@ -35,40 +35,36 @@ class OutgoingAudioTrack(MediaStreamTrack):
         self.queue = asyncio.Queue(maxsize=200)
         self._timestamp = 0
         self._running = True
+        self.buffer = bytearray()
     
     async def recv(self):
         if not self._running:
             return await self._get_silence_frame()
 
-        try:
-            pcm_bytes = await asyncio.wait_for(self.queue.get(), timeout=0.02)
+        REQUIRED_BYTES = 1920
+        
+        while len(self.buffer) < REQUIRED_BYTES and self._running:
+            try:
+                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.01)
+                pcm_48k, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 48000, None)
+                self.buffer.extend(pcm_48k)
+            except (asyncio.TimeoutError, asyncio.QueueEmpty):
+                break
+
+        if len(self.buffer) >= REQUIRED_BYTES:
+            chunk = bytes(self.buffer[:REQUIRED_BYTES])
+            del self.buffer[:REQUIRED_BYTES]
             
-            # Upsample 16k -> 48k for WebRTC compatibility
-            pcm_48k, _ = audioop.ratecv(pcm_bytes, 2, 1, 16000, 48000, None)
-            audio_np = np.frombuffer(pcm_48k, dtype=np.int16)
-
-            # Ensure frame size is 960 samples (20ms @ 48kHz)
-            # Use simple padding or slicing
-            target_samples = 960
-            if len(audio_np) < target_samples:
-                audio_np = np.pad(audio_np, (0, target_samples - len(audio_np)))
-            elif len(audio_np) > target_samples:
-                audio_np = audio_np[:target_samples]
-
+            audio_np = np.frombuffer(chunk, dtype=np.int16)
             frame = AudioFrame.from_ndarray(audio_np.reshape(1, -1), format='s16', layout='mono')
             frame.sample_rate = 48000
             frame.pts = self._timestamp
-            self._timestamp += target_samples
+            self._timestamp += 960
             return frame
-
-        except (asyncio.TimeoutError, asyncio.QueueEmpty):
-            return await self._get_silence_frame()
-        except Exception as e:
-            logger.error(f"OutgoingTrack error: {e}")
+        else:
             return await self._get_silence_frame()
 
     async def _get_silence_frame(self):
-        # 20ms silence @ 48kHz
         silence = np.zeros(960, dtype=np.int16)
         frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
         frame.sample_rate = 48000
@@ -81,7 +77,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
             try:
                 self.queue.put_nowait(pcm_data)
             except asyncio.QueueFull:
-                pass # Drop frame if congested
+                pass
 
     def stop(self):
         self._running = False
