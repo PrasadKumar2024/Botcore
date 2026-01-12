@@ -72,58 +72,60 @@ class STTWorker:
                 
                 time.sleep(RESTART_BACKOFF_SEC)
     #
-        def _stream_once(self):
-            """
-            Stream handler with VISIBILITY LOGGING restored.
-            """
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=SAMPLE_RATE,
-                language_code=self.language,
-                audio_channel_count=1,
-                enable_automatic_punctuation=True,
-            )
+    def _stream_once(self):
+        """
+        Stream handler with VISIBILITY LOGGING restored.
+        """
+        config = speech.RecognitionConfig(
+            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=SAMPLE_RATE,
+            language_code=self.language,
+            audio_channel_count=1,
+            enable_automatic_punctuation=True,
+        )
     
-            streaming_config = speech.StreamingRecognitionConfig(
-                config=config,
-                interim_results=True,
-                single_utterance=False,
-            )
+        streaming_config = speech.StreamingRecognitionConfig(
+            config=config,
+            interim_results=True,
+            single_utterance=False,
+        )
 
-            try:
-                responses = self.client.streaming_recognize(
-                    config=streaming_config,
-                    requests=self._audio_generator()
-                )
+        try:
+            responses = self.client.streaming_recognize(
+                config=streaming_config,
+                requests=self._audio_generator()
+            )
         
-                start_ts = time.monotonic()
-                logger.info("🟢 STT Connected. Listening...") 
+            start_ts = time.monotonic()
+            logger.info("🟢 STT Connected. Listening...") 
         
-                for response in responses:
-                    if self.stop_event.is_set(): break
-                    if time.monotonic() - start_ts > STREAMING_LIMIT_SEC: break
+            for response in responses:
+                if self.stop_event.is_set(): break
+                if time.monotonic() - start_ts > STREAMING_LIMIT_SEC: break
             
-                    if not response.results: continue
+                if not response.results: continue
             
-                    result = response.results[0]
-                    if result.alternatives:
+                result = response.results[0]
+                if result.alternatives:
                     # --- THIS WAS MISSING: Print what Google hears ---
-                        transcript = result.alternatives[0].transcript
-                        if result.is_final:
-                            logger.info(f"📢 Google Heard: {transcript}")
-                        else:
-                            pass 
+                    transcript = result.alternatives[0].transcript
+                    if result.is_final:
+                        logger.info(f"📢 Google Heard: {transcript}")
+                    else:
+                        pass 
                     # -----------------------------------------------
 
-                        asyncio.run_coroutine_threadsafe(
-                            self.transcript_queue.put(response),
-                            self.loop,
-                        )
+                    asyncio.run_coroutine_threadsafe(
+                        self.transcript_queue.put(response),
+                        self.loop,
+                    )
                 
-            except Exception as e:
+        except Exception as e:
             # Ignore standard disconnect errors
-                if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
-                    logger.error(f"Stream Error: {e}")
+            if "503" not in str(e) and "11" not in str(e) and not self.stop_event.is_set():
+                logger.error(f"Stream Error: {e}")
+            
+        
 
 
     def _audio_generator(self):
