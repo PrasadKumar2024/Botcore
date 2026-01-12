@@ -105,22 +105,34 @@ def synthesize_blocking(
     speaking_rate: float = 1.0,
 ) -> bytes:
     """
-    Blocking Google TTS call.
-    Returns raw PCM bytes.
+    Blocking Google TTS call using PREMIUM (Neural2/Journey) voices.
     """
 
-    ssml = build_ssml(text, sentiment)
+    ssml = build_ssml(text, sentiment, speaking_rate)
 
     synthesis_input = tts.SynthesisInput(ssml=ssml)
 
+    # 1. DEFINE PREMIUM VOICES (The "Highest Quality" fix)
+    # "Journey" is the most human-like voice for US English.
+    # "Neural2" is the highest quality for others.
+    voice_map = {
+        "en-US": "en-US-Journey-D",  # Extremely realistic human voice
+        "en-IN": "en-IN-Neural2-D",  # High quality Indian English
+    }
+
+    selected_voice = voice_map.get(language, "en-US-Journey-D")
+
+    # 2. SELECT THE VOICE
     voice = tts.VoiceSelectionParams(
         language_code=language,
-        ssml_gender=tts.SsmlVoiceGender.NEUTRAL,
+        name=selected_voice
     )
 
+    # 3. AUDIO CONFIG (Keep 16k to match your WebRTC upsampler)
     audio_config = tts.AudioConfig(
         audio_encoding=tts.AudioEncoding.LINEAR16,
         sample_rate_hertz=PCM_SAMPLE_RATE,
+        effects_profile_id=["headphone-class-device"], # Adds depth/clarity
     )
 
     client = get_tts_client()
