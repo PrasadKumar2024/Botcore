@@ -80,6 +80,7 @@ class STTWorker:
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=SAMPLE_RATE,
             language_code=self.language,
+            audio_channel_count=1,
             enable_automatic_punctuation=True,
         )
     
