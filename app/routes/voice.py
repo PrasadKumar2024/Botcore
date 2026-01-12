@@ -135,57 +135,34 @@ async def voice_ws(ws: WebSocket):
             nonlocal is_bot_speaking
             is_bot_speaking = True
 
-            token_buffer = ""
-            sentence_buffer = ""
-
             try:
-        # Determine if we should use RAG context or general conversation
-                if rag_result.used_rag and rag_result.confidence > 0.6:
-            # Use RAG context with intent-aware prompt
-                    system_prompt = SYSTEM_PROMPT
-            
-                    async for token in gemini_service.generate_stream_async(
-                        user_text=text,
-                        system_message=system_prompt,
-                        conversation_history=session.memory,
-                        rag_context=rag_result.fact_text,
-                        cancel_token=session.llm_cancel_token,
-                        temperature=0.3,  # Lower for factual responses
-                    ):
-                        token_buffer += token
-                        sentence_buffer += token
-
-                        sentences = SENTENCE_REGEX.split(sentence_buffer)
-                        if len(sentences) > 1:
-                            for sent in sentences[:-1]:
-                                sent = sent.strip()
-                                if sent:
-                                    await tts_enqueue(
-                                        session_id=session.session_id,
-                                        text=sent,
-                                        language=session.language,
-                                        sentiment=rag_result.sentiment,
-                                        speaking_rate=session.speaking_rate,
-                                    )
-                            sentence_buffer = sentences[-1]
-
-                if sentence_buffer.strip():
-                    await tts_enqueue(
-                        session_id=session.session_id,
-                        text=sentence_buffer.strip(),
-                        language=session.language,
-                        sentiment=rag_result.sentiment,
-                        speaking_rate=session.speaking_rate,
-                    )
-
-                session.add_turn(role="assistant", text=token_buffer)
+        # Use the RAG-generated response directly
+                response_text = rag_result.spoken_text
+        
+                if not response_text:
+            # Fallback if RAG returned empty response
+                    response_text = "I apologize, but I don't have enough information to answer that question accurately."
+        
+        # Split into sentences for progressive TTS
+                sentences = SENTENCE_REGEX.split(response_text)
+        
+                for sent in sentences:
+                    sent = sent.strip()
+                    if sent:
+                        await tts_enqueue(
+                            session_id=session.session_id,
+                            text=sent,
+                            language=session.language,
+                            sentiment=rag_result.sentiment,
+                            speaking_rate=session.speaking_rate,
+                        )
+        
+                session.add_turn(role="assistant", text=response_text)
 
             except asyncio.CancelledError:
-                logger.info("LLM stream cancelled")
+                logger.info("Response delivery cancelled")
             finally:
                 is_bot_speaking = False
-
-        current_llm_task = asyncio.create_task(llm_stream())
 
     # ============================================================
     # ---------------- TRANSCRIPT CONSUMER -----------------------
