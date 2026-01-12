@@ -105,34 +105,32 @@ def synthesize_blocking(
     speaking_rate: float = 1.0,
 ) -> bytes:
     """
-    Blocking Google TTS call using PREMIUM (Neural2/Journey) voices.
+    Blocking Google TTS call using STABLE PREMIUM (Neural2) voices.
     """
-
+    # 1. Build SSML (Neural2 supports this; Journey does not)
     ssml = build_ssml(text, sentiment, speaking_rate)
-
     synthesis_input = tts.SynthesisInput(ssml=ssml)
 
-    # 1. DEFINE PREMIUM VOICES (The "Highest Quality" fix)
-    # "Journey" is the most human-like voice for US English.
-    # "Neural2" is the highest quality for others.
-    voice_map = {
-        "en-US": "en-US-Journey-D",  # Extremely realistic human voice
-        "en-IN": "en-IN-Neural2-D",  # High quality Indian English
-    }
+    # 2. SELECT NEURAL2 VOICES (High Quality, Human-like)
+    # Neural2-J is a deep, professional male voice.
+    # Neural2-D is a natural Indian English voice.
+    if language == "en-US":
+        voice_name = "en-US-Neural2-J" 
+    elif language == "en-IN":
+        voice_name = "en-IN-Neural2-D"
+    else:
+        voice_name = "en-US-Neural2-C"
 
-    selected_voice = voice_map.get(language, "en-US-Journey-D")
-
-    # 2. SELECT THE VOICE
     voice = tts.VoiceSelectionParams(
         language_code=language,
-        name=selected_voice
+        name=voice_name
     )
 
-    # 3. AUDIO CONFIG (Keep 16k to match your WebRTC upsampler)
+    # 3. AUDIO CONFIG (Optimized for WebRTC)
     audio_config = tts.AudioConfig(
         audio_encoding=tts.AudioEncoding.LINEAR16,
         sample_rate_hertz=PCM_SAMPLE_RATE,
-        effects_profile_id=["headphone-class-device"], # Adds depth/clarity
+        effects_profile_id=["telephony-class-application"], # Enhances clarity
     )
 
     client = get_tts_client()
@@ -143,6 +141,7 @@ def synthesize_blocking(
     )
 
     return response.audio_content
+
 
 
 # ============================================================
