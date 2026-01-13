@@ -115,21 +115,62 @@ async def voice_ws(ws: WebSocket):
             speaking_rate=1.1,
         )
 
+        # In app/routes/voice.py
+
     async def finalize_utterance(text: str):
         nonlocal is_bot_speaking, current_llm_task
-
+        
+        # 1. Add User Turn to Memory
         session.add_turn(role="user", text=text)
+
+        # 2. SMART FILLER LOGIC (The Fix)
+        # We check if it's a greeting BEFORE playing the filler sound.
+        cleaned_text = text.lower().strip()
+        is_greeting = cleaned_text in ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
         
-        # Zero-latency acknowledgment
-        await send_acknowledgment(session.language)
+        # Only say "Let me check..." if it is NOT a greeting
+        if not is_greeting:
+            await send_acknowledgment(session.language)
         
-        # RAG search with re-ranking
+        # 3. Call the RAG Engine (Smart Router)
         rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
             session_context=session.memory,
             language=session.language,
         )
+
+        async def llm_stream():
+            nonlocal is_bot_speaking
+            is_bot_speaking = True
+            try:
+                # 4. Speak the RAG Result
+                final_answer = rag_result.spoken_text
+                
+                if not final_answer:
+                    final_answer = "I'm sorry, I don't have that information right now."
+
+                sentences = SENTENCE_REGEX.split(final_answer)
+                for sent in sentences:
+                    clean_sent = sent.strip()
+                    if clean_sent:
+                        await tts_enqueue(
+                            session_id=session.session_id,
+                            text=clean_sent,
+                            language=session.language,
+                            sentiment=rag_result.sentiment,
+                            speaking_rate=session.speaking_rate,
+                        )
+                
+                session.add_turn(role="assistant", text=final_answer)
+
+            except Exception as e:
+                logger.error(f"LLM Logic Error: {e}")
+            finally:
+                is_bot_speaking = False
+
+        current_llm_task = asyncio.create_task(llm_stream())
+
 
         async def llm_stream():
             nonlocal is_bot_speaking
