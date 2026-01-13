@@ -180,135 +180,111 @@ class RAGEngine:
         session_context: Optional[List[Dict[str, Any]]] = None,
         language: str = "en-IN",
     ) -> RAGResult:
-        
         start_ts = time.time()
         
-        # Check cache
+        # 1. INTENT DETECTION (The "Router")
+        # Run immediately. Matches your existing helper function signature.
+        intent_detected, emotion_score, urgency_level = self._detect_intent_and_emotion(query, session_context)
+        
+        # ==================================================================
+        # BRANCH A: GREETINGS (Instant Reply)
+        # ==================================================================
+        if intent_detected == ConversationIntent.GREETING:
+            logger.info("⚡ Router: Greeting Detected -> Instant Reply")
+            # Returns RAGResult immediately, skipping Pinecone entirely.
+            import random
+            greetings = [
+                "Hello! I am your support assistant. How can I help you with your account?",
+                "Hi there! I'm ready to help. What questions do you have about our plans?",
+                "Good day! I'm here to assist you. What's on your mind?"
+            ]
+            return RAGResult(
+                spoken_text=random.choice(greetings),
+                fact_text="Greeting", 
+                intent="greeting", 
+                entities={}, 
+                sentiment=0.5, 
+                confidence=1.0, 
+                used_rag=False
+            )
+
+        # ==================================================================
+        # BRANCH B: QUESTIONS (RAG + Guardrails)
+        # ==================================================================
+        
+        # Check your existing cache system
         cache_key = self._get_cache_key(client_id, query)
         cached = self._check_cache(cache_key)
-        if cached:
-            return cached
-        
-        # Normalize query
+        if cached: return cached
+
+        # Search Pinecone (Using your existing service)
         normalized = normalize_query(query)
-        
-        # Parallel operations
-        intent_task = asyncio.create_task(
-            asyncio.to_thread(
-                self._detect_intent_and_emotion,
-                query, session_context
-            )
+        results = await get_pinecone_service().search_similar_chunks(
+            client_id=client_id,
+            query=normalized or query,
+            top_k=self.top_k,
+            min_score=self.min_score,
         )
-        
-        pinecone_task = asyncio.create_task(
-            get_pinecone_service().search_similar_chunks(
-                client_id=client_id,
-                query=normalized or query,
-                top_k=self.top_k,
-                min_score=self.min_score,
-            )
-        )
-        
-        try:
-            intent_result, results = await asyncio.gather(
-                intent_task, pinecone_task, return_exceptions=True
-            )
-            
-            if isinstance(intent_result, Exception):
-                logger.error(f"Intent failed: {intent_result}")
-                intent_detected, emotion_score, urgency_level = (
-                    ConversationIntent.QUESTION, 0.0, 0
-                )
-            else:
-                intent_detected, emotion_score, urgency_level = intent_result
-            
-            if isinstance(results, Exception):
-                logger.error(f"Pinecone failed: {results}")
-                results = []
-                
-        except Exception as e:
-            logger.exception(f"Parallel ops failed: {e}")
-            results = []
-            intent_detected, emotion_score, urgency_level = (
-                ConversationIntent.QUESTION, 0.0, 0
-            )
-        
-        logger.info(f"Intent: {intent_detected.value}, emotion: {emotion_score:.2f}")
-        
-        # Handle no results
-        if not results:
-            fallback = RAGResult(
-                spoken_text="I'm sorry, I don't have enough information to answer that. Could you rephrase your question?",
-                fact_text="",
-                intent="no_results",
-                entities={},
-                sentiment=0.0,
-                confidence=0.0,
-                used_rag=False,
-            )
-            self._set_cache(cache_key, fallback)
-            return fallback
-        
-        # Build context
-        context_text = "\n\n".join(
-            f"{r.get('source','')}: {r.get('chunk_text','')}"
-            for r in results[:self.max_chunks]
-        )
-        
-        # Build prompt
+
+        # Build Context
+        if results:
+            context_text = "\n\n".join(f"{r.get('source','')}: {r.get('chunk_text','')}" for r in results[:self.max_chunks])
+        else:
+            context_text = "NO RELEVANT DATABASE RECORDS FOUND."
+
+        # SYSTEM PROMPT (Competitor-Grade Guardrails)
         system_prompt = (
-            "You are a professional voice assistant. "
-            "Answer in 2-3 short sentences suitable for speaking. "
-            "Return JSON only: "
-            '{\"intent\":\"\",\"entities\":{},\"confidence\":0.0,'
-            '\"sentiment\":0.0,\"fact\":\"\",\"spoken\":\"\"}'
+            "You are the Voice Support Agent for [Your Company].\n"
+            "Your Task: Answer the USER QUESTION based ONLY on the CONTEXT.\n\n"
+            
+            "⛔ RESTRICTIONS:\n"
+            "1. IF CONTEXT IS IRRELEVANT: Do not answer. Say: 'I don't have that information. I can only answer questions about [Company] services.'\n"
+            "2. IF OFF-TOPIC (Politics/Weather): Polite refusal. Say: 'I focus on your account and services. I can't discuss that.'\n"
+            "3. NO HALLUCINATIONS: Do not make up prices or policies.\n\n"
+            
+            "Output JSON only: "
+            '{\"intent\":\"question\",\"entities\":{},\"confidence\":0.0,'
+            '\"sentiment\":0.0,\"fact\":\"(The strict fact)\",\"spoken\":\"(The natural spoken answer)\"}'
         )
-        
-        user_prompt = f"CONTEXT:\n{context_text}\n\nQUESTION:\n{query}\n\nReturn JSON only."
-        
-        # Call Gemini
+
+        user_prompt = f"CONTEXT:\n{context_text}\n\nUSER QUESTION:\n{query}\n\nReturn JSON only."
+
+        # Call Gemini (Using your existing gemini_service)
         try:
             raw = gemini_service.generate_response(
                 prompt=user_prompt,
                 system_message=system_prompt,
-                temperature=0.15,
-                max_tokens=300,
+                temperature=0.1, 
+                max_tokens=250,
             )
+            parsed = _extract_json(raw)
         except Exception as e:
-            logger.exception(f"Gemini failed: {e}")
-            raw = ""
-        
-        parsed = _extract_json(raw)
-        rag_conf = _rag_confidence(results)
-        
+            logger.error(f"Gemini Error: {e}")
+            parsed = None
+
+        # Process Result
         if not parsed:
-            fallback = RAGResult(
-                spoken_text="I found some information but need clarification. Could you rephrase?",
-                fact_text="",
-                intent="parse_failed",
-                entities={},
-                sentiment=0.0,
-                confidence=rag_conf,
+            fallback_text = "I'm sorry, I couldn't find that information in my records."
+            result = RAGResult(
+                spoken_text=fallback_text,
+                fact_text="", intent="error", entities={}, sentiment=0.0, confidence=0.0, used_rag=True
+            )
+        else:
+            rag_conf = _rag_confidence(results)
+            result = RAGResult(
+                spoken_text=parsed.get("spoken", "") or parsed.get("fact", ""),
+                fact_text=parsed.get("fact", ""),
+                intent=parsed.get("intent", ""),
+                entities=parsed.get("entities", {}),
+                sentiment=float(parsed.get("sentiment", 0.0)),
+                confidence=max(rag_conf, float(parsed.get("confidence", rag_conf))),
                 used_rag=True,
             )
-            self._set_cache(cache_key, fallback)
-            return fallback
-        
-        # Extract result
-        result = RAGResult(
-            spoken_text=parsed.get("spoken", "") or parsed.get("fact", ""),
-            fact_text=parsed.get("fact", ""),
-            intent=parsed.get("intent", ""),
-            entities=parsed.get("entities", {}),
-            sentiment=float(parsed.get("sentiment", 0.0)),
-            confidence=max(rag_conf, float(parsed.get("confidence", rag_conf))),
-            used_rag=True,
-        )
-        
+
         self._set_cache(cache_key, result)
-        
-        logger.info(f"RAG answered in {(time.time()-start_ts)*1000:.0f}ms")
+        logger.info(f"Smart Answer generated in {(time.time()-start_ts)*1000:.0f}ms")
         return result
+
 
 # Singleton
 rag_engine = RAGEngine()
