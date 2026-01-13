@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import time
+import string  # <--- Added for smart cleaning
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -33,10 +34,7 @@ DEBOUNCE_SECONDS = 0.45
 SENTENCE_REGEX = re.compile(r"(?<=[.!?])\s+")
 MAX_CONTEXT_TURNS = 8
 
-SYSTEM_PROMPT = "You are a helpful, real-time voice assistant."
-
 # ============================================================
-
 
 @router.websocket("/ws/voice")
 async def voice_ws(ws: WebSocket):
@@ -63,7 +61,7 @@ async def voice_ws(ws: WebSocket):
     current_llm_task: Optional[asyncio.Task] = None
     webrtc_session = None
     
-    # Track speaking rate for adaptive pacing
+    # Track speaking rate
     user_speech_timestamps: list[float] = []
     user_speech_lengths: list[int] = []
 
@@ -86,15 +84,13 @@ async def voice_ws(ws: WebSocket):
 
     async def hard_barge_in():
         nonlocal is_bot_speaking, current_llm_task
-
         if not is_bot_speaking:
             return
-
+        
+        logger.info("🛑 Barge-in Triggered: Stopping TTS")
         cancel_tts(session.session_id)
-
         if current_llm_task and not current_llm_task.done():
             current_llm_task.cancel()
-
         is_bot_speaking = False
 
     async def send_acknowledgment(language: str):
@@ -103,7 +99,6 @@ async def voice_ws(ws: WebSocket):
             "en-US": ["Let me check that for you...", "One moment...", "Sure, let me see..."],
             "en-IN": ["Sure, checking...", "One second...", "Let me find that..."],
         }
-        
         import random
         ack = random.choice(acknowledgments.get(language, acknowledgments["en-US"]))
         
@@ -115,24 +110,30 @@ async def voice_ws(ws: WebSocket):
             speaking_rate=1.1,
         )
 
-        # In app/routes/voice.py
+    # ============================================================
+    # ---------------- SMART LOGIC ENGINE ------------------------
+    # ============================================================
 
     async def finalize_utterance(text: str):
         nonlocal is_bot_speaking, current_llm_task
         
-        # 1. Add User Turn to Memory
         session.add_turn(role="user", text=text)
 
-        # 2. SMART FILLER LOGIC (The Fix)
-        # We check if it's a greeting BEFORE playing the filler sound.
-        cleaned_text = text.lower().strip()
-        is_greeting = cleaned_text in ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
+        # --- FIX 1: SMART GREETING DETECTION (Punctuation Safe) ---
+        # "Hello." -> "hello"
+        cleaned_text = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
         
-        # Only say "Let me check..." if it is NOT a greeting
+        greetings = [
+            "hi", "hello", "hey", "good morning", "good evening", 
+            "hi there", "hello there", "greetings"
+        ]
+        is_greeting = cleaned_text in greetings
+        
+        # Only play filler if it's NOT a greeting
         if not is_greeting:
             await send_acknowledgment(session.language)
         
-        # 3. Call the RAG Engine (Smart Router)
+        # Call RAG (Smart Router)
         rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
@@ -144,11 +145,12 @@ async def voice_ws(ws: WebSocket):
             nonlocal is_bot_speaking
             is_bot_speaking = True
             try:
-                # 4. Speak the RAG Result
+                # Use RAG result directly
                 final_answer = rag_result.spoken_text
                 
                 if not final_answer:
-                    final_answer = "I'm sorry, I don't have that information right now."
+                    # Fallback
+                    final_answer = "I apologize, but I don't have enough information to answer that question accurately."
 
                 sentences = SENTENCE_REGEX.split(final_answer)
                 for sent in sentences:
@@ -164,6 +166,8 @@ async def voice_ws(ws: WebSocket):
                 
                 session.add_turn(role="assistant", text=final_answer)
 
+            except asyncio.CancelledError:
+                logger.info("Response delivery cancelled")
             except Exception as e:
                 logger.error(f"LLM Logic Error: {e}")
             finally:
@@ -171,47 +175,12 @@ async def voice_ws(ws: WebSocket):
 
         current_llm_task = asyncio.create_task(llm_stream())
 
-
-        async def llm_stream():
-            nonlocal is_bot_speaking
-            is_bot_speaking = True
-
-            try:
-        # Use the RAG-generated response directly
-                response_text = rag_result.spoken_text
-        
-                if not response_text:
-            # Fallback if RAG returned empty response
-                    response_text = "I apologize, but I don't have enough information to answer that question accurately."
-        
-        # Split into sentences for progressive TTS
-                sentences = SENTENCE_REGEX.split(response_text)
-        
-                for sent in sentences:
-                    sent = sent.strip()
-                    if sent:
-                        await tts_enqueue(
-                            session_id=session.session_id,
-                            text=sent,
-                            language=session.language,
-                            sentiment=rag_result.sentiment,
-                            speaking_rate=session.speaking_rate,
-                        )
-        
-                session.add_turn(role="assistant", text=response_text)
-
-            except asyncio.CancelledError:
-                logger.info("Response delivery cancelled")
-            finally:
-                is_bot_speaking = False
-
     # ============================================================
     # ---------------- TRANSCRIPT CONSUMER -----------------------
     # ============================================================
 
     async def transcript_consumer():
         nonlocal last_voice_ts
-
         debounce_task: Optional[asyncio.Task] = None
 
         async def debounce():
@@ -224,18 +193,29 @@ async def voice_ws(ws: WebSocket):
 
         while True:
             resp = await transcript_queue.get()
-            if resp is None:
-                return
+            if resp is None: return
 
             for result in resp.results:
-                if not result.alternatives:
-                    continue
+                if not result.alternatives: continue
 
                 alt = result.alternatives[0]
                 text = alt.transcript.strip()
 
+                # --- FIX 2: SMART BARGE-IN (Anti-Echo) ---
                 if text and is_bot_speaking:
-                    await hard_barge_in()
+                    # Only stop if user says more than 2 words OR specific stop words
+                    # This prevents 1-word echoes ("Timings...") from killing the voice.
+                    words = text.lower().split()
+                    stop_words = ["stop", "cancel", "wait", "hold", "no"]
+                    
+                    is_stop_command = any(w in words for w in stop_words)
+                    is_long_sentence = len(words) > 2
+                    
+                    if is_stop_command or is_long_sentence:
+                        logger.info(f"🛑 Barge-in accepted for: '{text}'")
+                        await hard_barge_in()
+                    else:
+                        logger.info(f"🛡️ Ignoring short echo/noise: '{text}'")
 
                 if text:
                     await ws.send_text(json.dumps({
@@ -246,29 +226,23 @@ async def voice_ws(ws: WebSocket):
 
                 if result.is_final:
                     utterance_buffer.append(text)
-                    current_time = time.monotonic()
-                    last_voice_ts = current_time
+                    last_voice_ts = time.monotonic()
                     
-                    # Track speaking rate
-                    user_speech_timestamps.append(current_time)
+                    # Track speaking rate logic (Unchanged)
+                    user_speech_timestamps.append(last_voice_ts)
                     user_speech_lengths.append(len(text))
-                    
                     if len(user_speech_timestamps) > 5:
                         user_speech_timestamps.pop(0)
                         user_speech_lengths.pop(0)
                     
-                    # Calculate adaptive pacing
                     if len(user_speech_timestamps) >= 2:
                         time_span = user_speech_timestamps[-1] - user_speech_timestamps[0]
                         total_chars = sum(user_speech_lengths)
                         if time_span > 0:
                             chars_per_sec = total_chars / time_span
-                            if chars_per_sec > 18:
-                                session.speaking_rate = 1.15
-                            elif chars_per_sec < 10:
-                                session.speaking_rate = 0.90
-                            else:
-                                session.speaking_rate = 1.0
+                            if chars_per_sec > 18: session.speaking_rate = 1.15
+                            elif chars_per_sec < 10: session.speaking_rate = 0.90
+                            else: session.speaking_rate = 1.0
 
                     if debounce_task:
                         debounce_task.cancel()
@@ -283,12 +257,10 @@ async def voice_ws(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive()
-
             if raw["type"] == "websocket.disconnect":
-                logger.info("WebSocket signaling disconnected (keeping session alive)")
-                await asyncio.sleep(3600)  # keep session alive
+                logger.info("WebSocket signaling disconnected")
+                await asyncio.sleep(3600)
                 continue
-
             if raw["type"] != "websocket.receive":
                 continue
 
@@ -296,65 +268,39 @@ async def voice_ws(ws: WebSocket):
                 msg = json.loads(raw["text"])
 
                 if msg["type"] == "webrtc_offer":
-                    # Create WebRTC session
                     webrtc_session = await webrtc_service.create_session(
                         session_id=session.session_id,
                         stt_callback=stt_audio_callback,
                     )
-                    
-                    # Handle offer and get answer
                     answer_sdp = await webrtc_session.handle_offer(msg["sdp"])
-                    
-                    # Set language
                     session.set_language(msg.get("language", session.language))
-                    
-                    # Initialize TTS with WebRTC audio sender
-                    await register_session(
-                        session.session_id,
-                        audio_sender=send_tts_audio,
-                    )
-                    
-                    # Start STT worker
+                    await register_session(session.session_id, audio_sender=send_tts_audio)
                     start_stt_worker(
                         audio_queue=audio_queue,
                         transcript_queue=transcript_queue,
                         stop_event=stop_event,
                         language=session.language,
                     )
-                    
-                    # Send answer back
-                    await ws.send_text(json.dumps({
-                        "type": "webrtc_answer",
-                        "sdp": answer_sdp,
-                    }))
-                    
-                    await ws.send_text(json.dumps({
-                        "type": "ready",
-                        "session_id": session.session_id,
-                    }))
+                    await ws.send_text(json.dumps({"type": "webrtc_answer", "sdp": answer_sdp}))
+                    await ws.send_text(json.dumps({"type": "ready", "session_id": session.session_id}))
 
                 elif msg["type"] == "ice_candidate":
                     if webrtc_session and msg.get("candidate"):
                         await webrtc_session.add_ice_candidate(msg["candidate"])
-
                 elif msg["type"] == "stop":
                     break
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
-
     except Exception:
         logger.exception("Voice WS error")
-
     finally:
-        await asyncio.sleep(1.0)  # allow last TTS audio to play
+        await asyncio.sleep(1.0)
         stop_event.set()
         audio_queue.put(None)
         await transcript_queue.put(None)
-
         consumer_task.cancel()
         await hard_barge_in()
         await close_tts_session(session.session_id)
-        
         if webrtc_session:
             await webrtc_service.close_session(session.session_id)
