@@ -112,7 +112,7 @@ class RAGEngine:
     def __init__(self):
         """Initialize with safe defaults"""
         self.top_k = 5
-        self.min_score = 0.7
+        self.min_score = 0.4
         self.max_chunks = 3
         self.use_reranker = False  # Disable for stability
         self.cache_ttl = 3600
