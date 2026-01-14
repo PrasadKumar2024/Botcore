@@ -42,10 +42,11 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return await self._get_silence_frame()
 
         REQUIRED_BYTES = 1920
-        
+    
+    # Extended timeout to accommodate TTS sentence generation intervals
         while len(self.buffer) < REQUIRED_BYTES and self._running:
             try:
-                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.01)
+                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.15)
                 pcm_48k, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 48000, None)
                 self.buffer.extend(pcm_48k)
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
@@ -54,7 +55,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
         if len(self.buffer) >= REQUIRED_BYTES:
             chunk = bytes(self.buffer[:REQUIRED_BYTES])
             del self.buffer[:REQUIRED_BYTES]
-            
+        
             audio_np = np.frombuffer(chunk, dtype=np.int16)
             frame = AudioFrame.from_ndarray(audio_np.reshape(1, -1), format='s16', layout='mono')
             frame.sample_rate = 48000
@@ -63,7 +64,6 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return frame
         else:
             return await self._get_silence_frame()
-
     async def _get_silence_frame(self):
         silence = np.zeros(960, dtype=np.int16)
         frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
