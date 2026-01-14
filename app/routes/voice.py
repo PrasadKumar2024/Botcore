@@ -145,24 +145,41 @@ async def voice_ws(ws: WebSocket):
             nonlocal is_bot_speaking
             is_bot_speaking = True
             try:
-                # Use RAG result directly
                 final_answer = rag_result.spoken_text
                 
                 if not final_answer:
-                    # Fallback
-                    final_answer = "I apologize, but I don't have enough information to answer that question accurately."
+                    final_answer = "I apologize, but I don't have enough information."
 
                 sentences = SENTENCE_REGEX.split(final_answer)
+                
+                # --- PARALLEL PIPELINE FIX ---
+                # OLD WAY (Slow):
+                # for sent in sentences:
+                #    await tts_enqueue(...) # Waits for audio before starting next one
+                
+                # NEW WAY (Fast):
+                # 1. Fire ALL synthesis requests immediately.
+                # 2. The TTS Worker (in background) processes them FIFO.
+                # 3. WebRTC receives a continuous stream because the queue fills up faster.
+                
+                tasks = []
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
-                        await tts_enqueue(
+                        # Create the task but do NOT await it here individually
+                        # This pushes the request to the TTS queue instantly
+                        task = tts_enqueue(
                             session_id=session.session_id,
                             text=clean_sent,
                             language=session.language,
                             sentiment=rag_result.sentiment,
                             speaking_rate=session.speaking_rate,
                         )
+                        tasks.append(task)
+                
+                # Ensure all enqueues happen
+                if tasks:
+                    await asyncio.gather(*tasks)
                 
                 session.add_turn(role="assistant", text=final_answer)
 
@@ -173,7 +190,6 @@ async def voice_ws(ws: WebSocket):
             finally:
                 is_bot_speaking = False
 
-        current_llm_task = asyncio.create_task(llm_stream())
 
     # ============================================================
     # ---------------- TRANSCRIPT CONSUMER -----------------------
