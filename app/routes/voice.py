@@ -153,7 +153,6 @@ async def voice_ws(ws: WebSocket):
 
                 sentences = SENTENCE_REGEX.split(final_answer)
         
-        # Enqueue all sentences immediately for parallel synthesis
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
@@ -164,12 +163,11 @@ async def voice_ws(ws: WebSocket):
                             sentiment=rag_result.sentiment,
                             speaking_rate=session.speaking_rate,
                         )
-        
-        # Wait for TTS queue to drain before marking complete
-        # This ensures all audio reaches WebRTC before cleanup
-                tts_session = tts_service._sessions.get(session.session_id)
-                if tts_session:
-                    await tts_session.queue.join()
+          
+        # Calculate estimated audio duration and wait for delivery
+                total_chars = sum(len(s.strip()) for s in sentences if s.strip())
+                estimated_duration = (total_chars / 15) + 1.0  # ~15 chars per second + buffer
+                await asyncio.sleep(estimated_duration)
         
                 session.add_turn(role="assistant", text=final_answer)
 
