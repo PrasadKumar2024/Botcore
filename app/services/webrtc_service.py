@@ -30,53 +30,44 @@ TTS_SAMPLE_RATE = 16000
 
 class OutgoingAudioTrack(MediaStreamTrack):
     """
-    OPTIMIZED AUDIO TRACK
-    1. Resamples on the Producer side (send_audio) to save CPU in recv().
-    2. Implements a Jitter Buffer to prevent micro-stuttering.
+    STABLE AUDIO TRACK (High Capacity)
     """
     kind = "audio"
     
     def __init__(self):
         super().__init__()
-        # Queue now holds 48kHz audio directly
-        self.queue = asyncio.Queue(maxsize=50) 
+        # INCREASED SIZE: 500 chunks = ~10 seconds of audio.
+        # This allows the "Full Response" to be dumped into memory without blocking.
+        self.queue = asyncio.Queue(maxsize=500) 
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
-        self.buffering = True # Start in buffering mode
-        self.JITTER_TARGET = 3840 # 4 frames (80ms) of safety buffer
+        self.buffering = True 
+        self.JITTER_TARGET = 3840 # 80ms buffer
 
     async def recv(self):
         if not self._running:
             return await self._get_silence_frame()
 
-        REQUIRED_BYTES = 1920 # 20ms of 48kHz audio
+        REQUIRED_BYTES = 1920 
         
-        # --- JITTER BUFFER LOGIC ---
-        # If buffer is low, switch to "Buffering Mode" (Send silence, save data)
-        # This prevents the "Machine Gun" stutter effect.
+        # Jitter Buffer Logic (Prevents Stutter)
         if len(self.buffer) < REQUIRED_BYTES:
             self.buffering = True
         
-        # While we need data...
         while len(self.buffer) < self.JITTER_TARGET and self._running:
             try:
-                # Fast fetch (Data is already 48kHz!)
+                # Fast Fetch (10ms)
                 chunk_48k = await asyncio.wait_for(self.queue.get(), timeout=0.01)
                 self.buffer.extend(chunk_48k)
-                
-                # If we hit our target, stop buffering and play!
                 if len(self.buffer) >= self.JITTER_TARGET:
                     self.buffering = False
-                    
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
                 break
 
-        # If we are buffering, send silence but KEEP the data in buffer
         if self.buffering and len(self.buffer) < self.JITTER_TARGET:
             return await self._get_silence_frame()
 
-        # Normal Playback
         if len(self.buffer) >= REQUIRED_BYTES:
             chunk = bytes(self.buffer[:REQUIRED_BYTES])
             del self.buffer[:REQUIRED_BYTES]
@@ -100,19 +91,20 @@ class OutgoingAudioTrack(MediaStreamTrack):
 
     async def send_audio(self, pcm_16k_data: bytes):
         """
-        HEAVY LIFTING MOVED HERE.
-        We resample 16k -> 48k here (once per chunk) instead of in recv (5x per chunk).
+        SAFE RESAMPLING & ENQUEUE
         """
         if self._running and len(pcm_16k_data) > 0:
-            # 1. CPU HEAVY WORK: Resample 16k -> 48k
-            # We use audioop which is C-optimized
+            # 1. Resample (Producer Side)
             pcm_48k, _ = audioop.ratecv(pcm_16k_data, 2, 1, 16000, 48000, None)
             
-            # 2. Put ready-to-play audio in queue
+            # 2. Safe Enqueue (Backpressure enabled)
+            # We use await to prevent data loss. The increased queue size (500)
+            # ensures we rarely actually block.
             await self.queue.put(pcm_48k)
 
     def stop(self):
         self._running = False
+
 
 
 # Update WebRTCSession to support async send_audio
