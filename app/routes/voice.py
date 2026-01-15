@@ -120,21 +120,16 @@ async def voice_ws(ws: WebSocket):
         
         session.add_turn(role="user", text=text)
 
-        # --- FIX 1: SMART GREETING DETECTION (Punctuation Safe) ---
-        # "Hello." -> "hello"
+        # 1. SMART CLEANING
         cleaned_text = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
-        
-        greetings = [
-            "hi", "hello", "hey", "good morning", "good evening", 
-            "hi there", "hello there", "greetings"
-        ]
+        greetings = ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
         is_greeting = cleaned_text in greetings
         
-        # Only play filler if it's NOT a greeting
+        # 2. SMART FILLER
         if not is_greeting:
             await send_acknowledgment(session.language)
         
-        # Call RAG (Smart Router)
+        # 3. Call RAG
         rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
@@ -147,28 +142,34 @@ async def voice_ws(ws: WebSocket):
             is_bot_speaking = True
             try:
                 final_answer = rag_result.spoken_text
-        
+                
                 if not final_answer:
                     final_answer = "I apologize, but I don't have enough information."
 
                 sentences = SENTENCE_REGEX.split(final_answer)
-        
+                
+                # --- PARALLEL ENQUEUE FIX ---
+                # Fire all TTS requests at once to fill the buffer immediately.
+                # The TTS Worker will process them in order, but the queue will stay full.
+                tasks = []
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
-                        await tts_enqueue(
+                        task = tts_enqueue(
                             session_id=session.session_id,
                             text=clean_sent,
                             language=session.language,
                             sentiment=rag_result.sentiment,
                             speaking_rate=session.speaking_rate,
                         )
-          
-        # Calculate estimated audio duration and wait for delivery
-                total_chars = sum(len(s.strip()) for s in sentences if s.strip())
-                estimated_duration = (total_chars / 15) + 1.0  # ~15 chars per second + buffer
-                await asyncio.sleep(estimated_duration)
-        
+                        tasks.append(task)
+                
+                if tasks:
+                    await asyncio.gather(*tasks)
+                
+                # --- NO BLOCKING SLEEP HERE ---
+                # We trust the queue backpressure to handle timing.
+                
                 session.add_turn(role="assistant", text=final_answer)
 
             except asyncio.CancelledError:
@@ -177,6 +178,9 @@ async def voice_ws(ws: WebSocket):
                 logger.error(f"LLM Logic Error: {e}")
             finally:
                 is_bot_speaking = False
+
+        current_llm_task = asyncio.create_task(llm_stream())
+
 
 
     # ============================================================
