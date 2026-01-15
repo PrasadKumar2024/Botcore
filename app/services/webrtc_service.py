@@ -29,13 +29,12 @@ TTS_SAMPLE_RATE = 16000
 # In app/services/webrtc_service.py
 
 class OutgoingAudioTrack(MediaStreamTrack):
-    """Sends TTS audio back to browser at 48kHz with buffering."""
+    """Sends TTS audio back to browser at 48kHz with no data loss."""
     kind = "audio"
     
     def __init__(self):
         super().__init__()
-        # Buffer size: 200 chunks * 20ms = ~4 seconds of buffer.
-        self.queue = asyncio.Queue(maxsize=200) 
+        self.queue = asyncio.Queue(maxsize=200)
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
@@ -46,19 +45,21 @@ class OutgoingAudioTrack(MediaStreamTrack):
 
         REQUIRED_BYTES = 1920
         
-        # Pull data from queue to feed WebRTC
+        # 1. Fill buffer as much as possible without blocking too long
+        # We try to fetch data until we have enough for a frame OR queue is empty
         while len(self.buffer) < REQUIRED_BYTES and self._running:
             try:
-                # Wait 0.1s. If TTS is slow, send silence to keep connection alive.
-                # Don't wait too long or WebRTC thinks connection is dead.
-                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.1)
+                # If we have NO data, we wait longer (100ms) to allow TTS to start.
+                # If we HAVE data, we wait less (20ms) to avoid stalling the stream.
+                timeout = 0.1 if len(self.buffer) == 0 else 0.02
                 
-                # Upsample 16k -> 48k
+                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=timeout)
                 pcm_48k, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 48000, None)
                 self.buffer.extend(pcm_48k)
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
                 break
 
+        # 2. Return Audio Frame
         if len(self.buffer) >= REQUIRED_BYTES:
             chunk = bytes(self.buffer[:REQUIRED_BYTES])
             del self.buffer[:REQUIRED_BYTES]
@@ -70,6 +71,8 @@ class OutgoingAudioTrack(MediaStreamTrack):
             self._timestamp += 960
             return frame
         else:
+            # 3. Safety: If we don't have enough data, send silence but KEEP the partial buffer.
+            # Do NOT clear self.buffer here. We will use it next time.
             return await self._get_silence_frame()
 
     async def _get_silence_frame(self):
@@ -81,16 +84,14 @@ class OutgoingAudioTrack(MediaStreamTrack):
         return frame
 
     async def send_audio(self, pcm_data: bytes):
-        """
-        CRITICAL FIX: Use await put() instead of put_nowait().
-        This applies BACKPRESSURE. If queue is full, TTS pauses 
-        instead of dropping audio frames.
-        """
         if self._running:
+            # Use await put() to apply backpressure.
+            # If queue is full, TTS waits (prevents memory crash).
             await self.queue.put(pcm_data)
 
     def stop(self):
         self._running = False
+
 
 # Update WebRTCSession to support async send_audio
 class WebRTCSession:
