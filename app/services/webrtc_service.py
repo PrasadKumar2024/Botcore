@@ -30,20 +30,25 @@ TTS_SAMPLE_RATE = 16000
 
 class OutgoingAudioTrack(MediaStreamTrack):
     """
-    STABLE AUDIO TRACK (High Capacity)
+    STABLE AUDIO TRACK with STATE INSPECTION
     """
     kind = "audio"
     
     def __init__(self):
         super().__init__()
-        # INCREASED SIZE: 500 chunks = ~10 seconds of audio.
-        # This allows the "Full Response" to be dumped into memory without blocking.
         self.queue = asyncio.Queue(maxsize=500) 
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
         self.buffering = True 
-        self.JITTER_TARGET = 3840 # 80ms buffer
+        self.JITTER_TARGET = 9600 # 100ms safety buffer
+
+    def has_pending_audio(self) -> bool:
+        """
+        Returns True if there is audio in the Queue OR the Buffer.
+        Used to prevent premature barge-in.
+        """
+        return self.queue.qsize() > 0 or len(self.buffer) > 0
 
     async def recv(self):
         if not self._running:
@@ -51,13 +56,14 @@ class OutgoingAudioTrack(MediaStreamTrack):
 
         REQUIRED_BYTES = 1920 
         
-        # Jitter Buffer Logic (Prevents Stutter)
+        # 1. Jitter Buffer Logic
         if len(self.buffer) < REQUIRED_BYTES:
             self.buffering = True
         
+        # 2. Fill Buffer
         while len(self.buffer) < self.JITTER_TARGET and self._running:
             try:
-                # Fast Fetch (10ms)
+                # Fast Fetch
                 chunk_48k = await asyncio.wait_for(self.queue.get(), timeout=0.01)
                 self.buffer.extend(chunk_48k)
                 if len(self.buffer) >= self.JITTER_TARGET:
@@ -65,6 +71,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
                 break
 
+        # 3. Play or Silence
         if self.buffering and len(self.buffer) < self.JITTER_TARGET:
             return await self._get_silence_frame()
 
@@ -90,20 +97,25 @@ class OutgoingAudioTrack(MediaStreamTrack):
         return frame
 
     async def send_audio(self, pcm_16k_data: bytes):
-        """
-        SAFE RESAMPLING & ENQUEUE
-        """
         if self._running and len(pcm_16k_data) > 0:
-            # 1. Resample (Producer Side)
             pcm_48k, _ = audioop.ratecv(pcm_16k_data, 2, 1, 16000, 48000, None)
-            
-            # 2. Safe Enqueue (Backpressure enabled)
-            # We use await to prevent data loss. The increased queue size (500)
-            # ensures we rarely actually block.
             await self.queue.put(pcm_48k)
 
     def stop(self):
         self._running = False
+
+# =========================================================
+# UPDATE THE SESSION WRAPPER TO EXPOSE THE CHECK
+# =========================================================
+class WebRTCSession:
+    # ... (Keep existing __init__ and other methods) ...
+    
+    # ADD THIS NEW METHOD
+    def is_audio_playing(self) -> bool:
+        return self.outgoing_track.has_pending_audio()
+
+    # ... (Keep the rest of the class) ...
+
 
 
 
