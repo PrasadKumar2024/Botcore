@@ -26,13 +26,16 @@ STT_SAMPLE_RATE = 16000
 TTS_SAMPLE_RATE = 16000 
 # ==================================================
 
+# In app/services/webrtc_service.py
+
 class OutgoingAudioTrack(MediaStreamTrack):
-    """Sends TTS audio back to browser at 48kHz with buffering to prevent data loss."""
+    """Sends TTS audio back to browser at 48kHz with buffering."""
     kind = "audio"
     
     def __init__(self):
         super().__init__()
-        self.queue = asyncio.Queue(maxsize=200)
+        # Buffer size: 200 chunks * 20ms = ~4 seconds of buffer.
+        self.queue = asyncio.Queue(maxsize=200) 
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
@@ -42,11 +45,15 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return await self._get_silence_frame()
 
         REQUIRED_BYTES = 1920
-    
-    # Extended timeout to accommodate TTS sentence generation intervals
+        
+        # Pull data from queue to feed WebRTC
         while len(self.buffer) < REQUIRED_BYTES and self._running:
             try:
-                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.15)
+                # Wait 0.1s. If TTS is slow, send silence to keep connection alive.
+                # Don't wait too long or WebRTC thinks connection is dead.
+                pcm_16k = await asyncio.wait_for(self.queue.get(), timeout=0.1)
+                
+                # Upsample 16k -> 48k
                 pcm_48k, _ = audioop.ratecv(pcm_16k, 2, 1, 16000, 48000, None)
                 self.buffer.extend(pcm_48k)
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
@@ -55,7 +62,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
         if len(self.buffer) >= REQUIRED_BYTES:
             chunk = bytes(self.buffer[:REQUIRED_BYTES])
             del self.buffer[:REQUIRED_BYTES]
-        
+            
             audio_np = np.frombuffer(chunk, dtype=np.int16)
             frame = AudioFrame.from_ndarray(audio_np.reshape(1, -1), format='s16', layout='mono')
             frame.sample_rate = 48000
@@ -64,6 +71,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return frame
         else:
             return await self._get_silence_frame()
+
     async def _get_silence_frame(self):
         silence = np.zeros(960, dtype=np.int16)
         frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
@@ -73,14 +81,96 @@ class OutgoingAudioTrack(MediaStreamTrack):
         return frame
 
     async def send_audio(self, pcm_data: bytes):
+        """
+        CRITICAL FIX: Use await put() instead of put_nowait().
+        This applies BACKPRESSURE. If queue is full, TTS pauses 
+        instead of dropping audio frames.
+        """
         if self._running:
-            try:
-                self.queue.put_nowait(pcm_data)
-            except asyncio.QueueFull:
-                pass
+            await self.queue.put(pcm_data)
 
     def stop(self):
         self._running = False
+
+# Update WebRTCSession to support async send_audio
+class WebRTCSession:
+    # ... (init and other methods remain the same) ...
+    def __init__(self, session_id: str, stt_callback: Callable[[bytes], None]):
+        # ... (Keep existing __init__ code) ...
+        self.session_id = session_id
+        config = RTCConfiguration(iceServers=[
+            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
+        ])
+        self.pc = RTCPeerConnection(configuration=config)
+        self.outgoing_track = OutgoingAudioTrack()
+        self.stt_callback = stt_callback
+        self.relay = MediaRelay()
+        self.pc.addTrack(self.outgoing_track)
+        
+        @self.pc.on("track")
+        def on_track(track):
+            if track.kind == "audio":
+                logger.info(f"[{self.session_id}] Audio track received")
+                relayed_track = self.relay.subscribe(track)
+                asyncio.create_task(self._relay_audio(relayed_track))
+        
+        @self.pc.on("connectionstatechange")
+        async def on_connection_state_change():
+            if self.pc.connectionState in ["failed", "closed"]:
+                await self.close()
+
+    # ... (Keep _relay_audio and _downsample and handle_offer and add_ice_candidate) ...
+    async def _relay_audio(self, source_track):
+        # Keep your existing relay code
+        buffer = bytearray()
+        while True:
+            try:
+                frame = await source_track.recv()
+                pcm_bytes = await asyncio.get_event_loop().run_in_executor(None, self._downsample, frame)
+                if pcm_bytes:
+                    buffer.extend(pcm_bytes)
+                    while len(buffer) >= 960:
+                        chunk = bytes(buffer[:960])
+                        buffer = buffer[960:]
+                        self.stt_callback(chunk)
+                else:
+                    self.stt_callback(b'\x00' * 960)
+            except Exception:
+                break
+    
+    def _downsample(self, frame):
+        try:
+            import av
+            resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
+            frames = resampler.resample(frame)
+            return b''.join(f.to_ndarray().tobytes() for f in frames)
+        except Exception:
+            return None
+
+    async def handle_offer(self, sdp: str) -> str:
+        offer = RTCSessionDescription(sdp=sdp, type="offer")
+        await self.pc.setRemoteDescription(offer)
+        answer = await self.pc.createAnswer()
+        await self.pc.setLocalDescription(answer)
+        return self.pc.localDescription.sdp
+
+    async def add_ice_candidate(self, candidate_dict: dict):
+        try:
+            if not candidate_dict.get("candidate"): return
+            candidate = candidate_from_sdp(candidate_dict["candidate"])
+            candidate.sdpMid = candidate_dict.get("sdpMid")
+            candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
+            await self.pc.addIceCandidate(candidate)
+        except Exception:
+            pass
+
+    async def send_audio(self, pcm_data: bytes):
+        # Propagate the await
+        await self.outgoing_track.send_audio(pcm_data)
+
+    async def close(self):
+        self.outgoing_track.stop()
+        await self.pc.close()
 
 
 class WebRTCSession:
