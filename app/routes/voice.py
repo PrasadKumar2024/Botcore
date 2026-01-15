@@ -22,6 +22,7 @@ from app.services.tts_service import (
     close_session as close_tts_session,
 )
 from app.services import webrtc_service
+from app.services import tts_service
 from app.services.rag_engine import rag_engine
 
 logger = logging.getLogger(__name__)
@@ -146,41 +147,30 @@ async def voice_ws(ws: WebSocket):
             is_bot_speaking = True
             try:
                 final_answer = rag_result.spoken_text
-                
+        
                 if not final_answer:
                     final_answer = "I apologize, but I don't have enough information."
 
                 sentences = SENTENCE_REGEX.split(final_answer)
-                
-                # --- PARALLEL PIPELINE FIX ---
-                # OLD WAY (Slow):
-                # for sent in sentences:
-                #    await tts_enqueue(...) # Waits for audio before starting next one
-                
-                # NEW WAY (Fast):
-                # 1. Fire ALL synthesis requests immediately.
-                # 2. The TTS Worker (in background) processes them FIFO.
-                # 3. WebRTC receives a continuous stream because the queue fills up faster.
-                
-                tasks = []
+        
+        # Enqueue all sentences immediately for parallel synthesis
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
-                        # Create the task but do NOT await it here individually
-                        # This pushes the request to the TTS queue instantly
-                        task = tts_enqueue(
+                        await tts_enqueue(
                             session_id=session.session_id,
                             text=clean_sent,
                             language=session.language,
                             sentiment=rag_result.sentiment,
                             speaking_rate=session.speaking_rate,
                         )
-                        tasks.append(task)
-                
-                # Ensure all enqueues happen
-                if tasks:
-                    await asyncio.gather(*tasks)
-                
+        
+        # Wait for TTS queue to drain before marking complete
+        # This ensures all audio reaches WebRTC before cleanup
+                tts_session = tts_service._sessions.get(session.session_id)
+                if tts_session:
+                    await tts_session.queue.join()
+        
                 session.add_turn(role="assistant", text=final_answer)
 
             except asyncio.CancelledError:
