@@ -144,14 +144,11 @@ async def voice_ws(ws: WebSocket):
                 final_answer = rag_result.spoken_text or "I apologize, but I don't have enough information."
                 sentences = SENTENCE_REGEX.split(final_answer)
                 
-                # --- CRITICAL FIX: PARALLEL GENERATION ---
-                # Do NOT await inside the loop. Create tasks and fire them ALL at once.
-                # This ensures the audio queue fills up instantly, preventing "Cuts".
                 tasks = []
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
-                        # Create the task (starts execution immediately)
+                        # Create task (Parallel Enqueue)
                         t = tts_enqueue(
                             session_id=session.session_id,
                             text=clean_sent,
@@ -161,13 +158,9 @@ async def voice_ws(ws: WebSocket):
                         )
                         tasks.append(t)
                 
-                # Wait for all Enqueue requests to be accepted by the worker
+                # Fire all tasks to fill the Jitter Buffer fast
                 if tasks:
                     await asyncio.gather(*tasks)
-
-                # --- CRITICAL FIX: NO SLEEP ---
-                # We removed "await asyncio.sleep(estimated_duration)".
-                # We trust the TTS queue to handle the timing.
                 
                 session.add_turn(role="assistant", text=final_answer)
 
@@ -176,12 +169,10 @@ async def voice_ws(ws: WebSocket):
             except Exception as e:
                 logger.error(f"LLM Logic Error: {e}")
             finally:
-                # We keep is_bot_speaking = True for a bit longer to prevent self-interruption
-                # during the very end of the sentence.
-                await asyncio.sleep(1.0) 
+                # Give the Jitter Buffer a moment to drain before we say "Finished"
+                await asyncio.sleep(0.5)
                 is_bot_speaking = False
 
-        current_llm_task = asyncio.create_task(llm_stream())
 
 
 
