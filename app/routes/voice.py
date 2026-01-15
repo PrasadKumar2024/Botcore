@@ -120,12 +120,12 @@ async def voice_ws(ws: WebSocket):
         
         session.add_turn(role="user", text=text)
 
-        # 1. SMART CLEANING
+        # 1. SMART CLEANING & GREETING CHECK
         cleaned_text = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
         greetings = ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
         is_greeting = cleaned_text in greetings
         
-        # 2. SMART FILLER
+        # 2. FILLER (Crucial for "Full Response" mode to hide the delay)
         if not is_greeting:
             await send_acknowledgment(session.language)
         
@@ -142,13 +142,16 @@ async def voice_ws(ws: WebSocket):
             is_bot_speaking = True
             try:
                 final_answer = rag_result.spoken_text or "I apologize, but I don't have enough information."
-                sentences = SENTENCE_REGEX.split(final_answer)
                 
+                # --- STRATEGY CHANGE: FULL RESPONSE PRE-CALCULATION ---
+                # We do NOT enqueue one by one. We prepare everything first.
+                sentences = SENTENCE_REGEX.split(final_answer)
                 tasks = []
+                
+                # Create ALL synthesis tasks instantly
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
-                        # Create task (Parallel Enqueue)
                         t = tts_enqueue(
                             session_id=session.session_id,
                             text=clean_sent,
@@ -158,20 +161,29 @@ async def voice_ws(ws: WebSocket):
                         )
                         tasks.append(t)
                 
-                # Fire all tasks to fill the Jitter Buffer fast
+                # --- THE MAGIC FIX ---
+                # 1. Fire all tasks to the worker
                 if tasks:
                     await asyncio.gather(*tasks)
                 
+                # 2. Update Chat History
                 session.add_turn(role="assistant", text=final_answer)
+
+                # 3. Smart "Speaking" Lock
+                # We estimate how long the bot will speak to keep the mic muted (barge-in protection)
+                # 15 chars ~ 1 second of audio
+                estimated_duration = len(final_answer) / 15.0
+                await asyncio.sleep(estimated_duration)
 
             except asyncio.CancelledError:
                 logger.info("Response delivery cancelled")
             except Exception as e:
                 logger.error(f"LLM Logic Error: {e}")
             finally:
-                # Give the Jitter Buffer a moment to drain before we say "Finished"
-                await asyncio.sleep(0.5)
                 is_bot_speaking = False
+
+        current_llm_task = asyncio.create_task(llm_stream())
+
 
 
 
