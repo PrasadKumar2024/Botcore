@@ -114,22 +114,19 @@ async def voice_ws(ws: WebSocket):
     # ============================================================
     # ---------------- SMART LOGIC ENGINE ------------------------
     # ============================================================
-
     async def finalize_utterance(text: str):
         nonlocal is_bot_speaking, current_llm_task
         
         session.add_turn(role="user", text=text)
 
-        # 1. SMART CLEANING & GREETING CHECK
+        # 1. CLEANING & FILLER
+        import string
         cleaned_text = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
         greetings = ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
-        is_greeting = cleaned_text in greetings
-        
-        # 2. FILLER (Crucial for "Full Response" mode to hide the delay)
-        if not is_greeting:
+        if cleaned_text not in greetings:
             await send_acknowledgment(session.language)
         
-        # 3. RAG ANSWER
+        # 2. RAG
         rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
@@ -143,12 +140,9 @@ async def voice_ws(ws: WebSocket):
             try:
                 final_answer = rag_result.spoken_text or "I apologize, but I don't have enough information."
                 
-                # --- STRATEGY CHANGE: FULL RESPONSE PRE-CALCULATION ---
-                # We do NOT enqueue one by one. We prepare everything first.
+                # 3. BURST ENQUEUE (Full Response)
                 sentences = SENTENCE_REGEX.split(final_answer)
                 tasks = []
-                
-                # Create ALL synthesis tasks instantly
                 for sent in sentences:
                     clean_sent = sent.strip()
                     if clean_sent:
@@ -161,19 +155,23 @@ async def voice_ws(ws: WebSocket):
                         )
                         tasks.append(t)
                 
-                # --- THE MAGIC FIX ---
-                # 1. Fire all tasks to the worker
                 if tasks:
                     await asyncio.gather(*tasks)
                 
-                # 2. Update Chat History
                 session.add_turn(role="assistant", text=final_answer)
 
-                # 3. Smart "Speaking" Lock
-                # We estimate how long the bot will speak to keep the mic muted (barge-in protection)
-                # 15 chars ~ 1 second of audio
-                estimated_duration = len(final_answer) / 15.0
-                await asyncio.sleep(estimated_duration)
+                # --- THE MAGIC FIX: FEEDBACK LOOP ---
+                # Instead of guessing time, we ask the WebRTC engine: "Are you busy?"
+                # We check every 0.1s. If the buffer is empty, we know audio is TRULY done.
+                if webrtc_session:
+                    # Give it a moment to receive the first chunk of data
+                    await asyncio.sleep(0.5) 
+                    
+                    while webrtc_session.is_audio_playing():
+                        await asyncio.sleep(0.1)
+                else:
+                    # Fallback if WebRTC disconnected
+                    await asyncio.sleep(len(final_answer) / 12.0)
 
             except asyncio.CancelledError:
                 logger.info("Response delivery cancelled")
