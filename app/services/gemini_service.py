@@ -1240,34 +1240,109 @@ async def stream_response(
 # =========================
 # UNIFIED NLU ENTRYPOINT
 # =========================
-
 async def analyze_user_input(
     self,
     query: str,
     business_name: str,
-) -> Dict[str, Any]:
+) - NLUResult:
     """
-    Fast path → Gemini fallback → confidence fusion.
+    ENTERPRISE HYBRID ROUTER
+    Layer 1: Regex Reflex (0ms) -> Handles simple commands instantly.
+    Layer 2: Gemini JSON Brain (300ms) -> Deep understanding.
+    """
+    start = time.time()
+    query_lower = query.lower().strip()
+
+    # ---------------------------------------------------------
+    # LAYER 1: FAST REFLEX (0ms Latency)
+    # ---------------------------------------------------------
+    for intent, patterns in _REFLEX_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, query_lower):
+                logger.info(f"⚡ Reflex Hit: {intent.value} (0ms)")
+                return NLUResult(
+                    intent=intent,
+                    confidence=1.0,
+                    sentiment=0.0,
+                    urgency="low",
+                    entities={},
+                    topic_allowed=True
+                )
+
+        # ---------------------------------------------------------
+        # LAYER 2: DEEP LLM ANALYSIS (300ms Latency)
+        # ---------------------------------------------------------
+        
+        # Competitor Trick: Strict System Prompt to force JSON
+    system_prompt = f"""
+    You are the NLU Brain for {business_name}.
+    Analyze the user text and output STRICT JSON only.
+        
+    CLASSIFICATION RULES:
+    1. intent: Choose [booking, cancellation, billing, support, question]
+    2. urgency: [low, medium, high]
+    3. topic_allowed: false if user asks about politics/religion/competitors, else true.
+        
+    INPUT: "{query}"
+        
+    OUTPUT JSON SCHEMA:
+    {{
+        "intent": "string",
+        "confidence": float,
+        "sentiment": float (-1.0 to 1.0),
+        "urgency": "string",
+        "entities": {{}},
+        "topic_allowed": bool
+    }}
     """
 
-    # 1️⃣ Fast regex classifier
-    fast = fast_intent_classify(query)
-    if fast:
-        return {
-            **fast,
-            "entities": {},
-            "sentiment": 0.0,
-            "urgency": "low",
-        }
+    try:
+         # We use a helper to run blocking code in thread
+        loop = asyncio.get_running_loop()
+        response_text = await loop.run_in_executor(
+            None, 
+            lambda: self.generate_response(
+                prompt=system_prompt,
+                temperature=0.0,  # Zero temp = Deterministic JSON
+                max_tokens=200
+                )
+            )
 
-    # 2️⃣ Gemini structured NLU
-    gem = await gemini_nlu(self, query, business_name)
+            # Clean JSON (Remove markdown code blocks)
+            clean_text = response_text.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_text)
 
-    # 3️⃣ Confidence guardrail
-    if gem["confidence"] < 0.6:
-        gem["intent"] = "clarification"
+            # Safely map string to Enum
+            intent_str = data.get("intent", "question").lower()
+            try:
+                final_intent = IntentType(intent_str)
+            except ValueError:
+                final_intent = IntentType.QUESTION
 
-    return gem
+            result = NLUResult(
+                intent=final_intent,
+                confidence=float(data.get("confidence", 0.0)),
+                sentiment=float(data.get("sentiment", 0.0)),
+                urgency=data.get("urgency", "low"),
+                entities=data.get("entities", {}),
+                topic_allowed=data.get("topic_allowed", True)
+            )
+            logger.info(f"🧠 Brain Decision: {result.intent.value} ({time.time()-start:.2f}s)")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ NLU Brain Failed: {e}")
+            # Safe Fallback to "Question" -> RAG will handle it
+            return NLUResult(
+                intent=IntentType.QUESTION,
+                confidence=0.0,
+                sentiment=0.0,
+                urgency="low",
+                entities={},
+                topic_allowed=True
+            )
+            
+    
     
     async def generate_stream_async(
         self,
