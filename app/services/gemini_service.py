@@ -7,6 +7,8 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import re
 import threading
+from enum import Enum
+from dataclasses import dataclass
 from typing import AsyncGenerator
 FunctionDeclaration = Any  # Will be properly typed based on your Gemini SDK version
 # Add this import
@@ -17,6 +19,38 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+class IntentType(str, Enum):
+    GREETING = "greeting"
+    CLOSING = "closing"
+    BOOKING = "booking"
+    CANCELLATION = "cancellation"
+    BILLING = "billing"
+    SUPPORT = "support"
+    HUMAN_HANDOFF = "human_handoff"
+    QUESTION = "question"  # Fallback for RAG
+    UNKNOWN = "unknown"
+
+@dataclass
+class NLUResult:
+    intent: IntentType
+    confidence: float
+    sentiment: float      # -1.0 to 1.0
+    urgency: str          # low, medium, high
+    entities: Dict[str, Any]
+    topic_allowed: bool   # False if politics/religion
+
+# --- REFLEX PATTERNS (The 0ms "Nervous System") ---
+_REFLEX_PATTERNS = {
+    IntentType.CLOSING: [
+        r"\b(bye|goodbye|stop|end call|hang up|quit)\b"
+    ],
+    IntentType.HUMAN_HANDOFF: [
+        r"\b(human|agent|representative|operator|person|support team)\b"
+    ],
+    IntentType.GREETING: [
+        r"^(hi|hello|hey|good morning|good evening)$"  # Strict to prevent "Hello I have a problem"
+    ]
+}
 class GeminiService:
     """
     Comprehensive service for Google Gemini AI
