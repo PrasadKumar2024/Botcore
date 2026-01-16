@@ -119,14 +119,17 @@ async def voice_ws(ws: WebSocket):
         
         session.add_turn(role="user", text=text)
 
-        # 1. CLEANING & FILLER
+        # 1. SMART GREETING CHECK (Fastest Path)
         import string
-        cleaned_text = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
-        greetings = ["hi", "hello", "hey", "good morning", "good evening", "hi there"]
-        if cleaned_text not in greetings:
+        cleaned = text.translate(str.maketrans('', '', string.punctuation)).lower().strip()
+        greetings = ["hi", "hello", "hey", "good morning", "good evening"]
+        
+        # 2. FILLER LOGIC (Context Aware)
+        # Only play filler if it's NOT a greeting and looks like a real query
+        if cleaned not in greetings and len(cleaned.split()) > 1:
             await send_acknowledgment(session.language)
         
-        # 2. RAG
+        # 3. GET ANSWER (Intent + RAG)
         rag_result = await rag_engine.answer(
             client_id=session.client_id,
             query=text,
@@ -138,9 +141,9 @@ async def voice_ws(ws: WebSocket):
             nonlocal is_bot_speaking
             is_bot_speaking = True
             try:
-                final_answer = rag_result.spoken_text or "I apologize, but I don't have enough information."
+                final_answer = rag_result.spoken_text or "I apologize, but I don't have that information right now."
                 
-                # 3. BURST ENQUEUE (Full Response)
+                # 4. ATOMIC PREPARATION
                 sentences = SENTENCE_REGEX.split(final_answer)
                 tasks = []
                 for sent in sentences:
@@ -155,22 +158,20 @@ async def voice_ws(ws: WebSocket):
                         )
                         tasks.append(t)
                 
+                # 5. FIRE ALL AT ONCE (Fills the queue instantly)
                 if tasks:
                     await asyncio.gather(*tasks)
                 
                 session.add_turn(role="assistant", text=final_answer)
 
-                # --- THE MAGIC FIX: FEEDBACK LOOP ---
-                # Instead of guessing time, we ask the WebRTC engine: "Are you busy?"
-                # We check every 0.1s. If the buffer is empty, we know audio is TRULY done.
+                # 6. FEEDBACK LOOP (The "Perfect" Wait)
                 if webrtc_session:
-                    # Give it a moment to receive the first chunk of data
-                    await asyncio.sleep(0.5) 
-                    
+                    # Initial buffer time to let TTS start
+                    await asyncio.sleep(0.5)
+                    # Poll the engine: "Are you still playing?"
                     while webrtc_session.is_audio_playing():
                         await asyncio.sleep(0.1)
                 else:
-                    # Fallback if WebRTC disconnected
                     await asyncio.sleep(len(final_answer) / 12.0)
 
             except asyncio.CancelledError:
@@ -181,7 +182,6 @@ async def voice_ws(ws: WebSocket):
                 is_bot_speaking = False
 
         current_llm_task = asyncio.create_task(llm_stream())
-
 
 
 
