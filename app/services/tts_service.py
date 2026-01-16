@@ -164,7 +164,8 @@ class TTSSession:
 
     async def _worker(self):
         """
-        Sentence → TTS → chunked PCM send.
+        OPTIMIZED WORKER: Atomic Sentence Delivery
+        Sends the WHOLE sentence as one block to prevent resampling artifacts and gaps.
         """
         try:
             while not self.closed:
@@ -182,6 +183,7 @@ class TTSSession:
                     try:
                         loop = asyncio.get_running_loop()
 
+                        # 1. Synthesize (Blocking Google Call)
                         pcm: bytes = await loop.run_in_executor(
                             None,
                             partial(
@@ -193,12 +195,11 @@ class TTSSession:
                              ),
                         )
 
-                        # Progressive send (chunked)
-                        for i in range(0, len(pcm), AUDIO_CHUNK_SIZE):
-                            if self.cancel_token.is_cancelled():
-                                break
-                            chunk = pcm[i:i + AUDIO_CHUNK_SIZE]
-                            await self.audio_sender(chunk)
+                        # 2. ATOMIC SEND (The Fix)
+                        # Do NOT loop. Do NOT chunk. Send it all at once.
+                        # This ensures perfect resampling and zero scheduler gaps.
+                        if not self.cancel_token.is_cancelled() and len(pcm) > 0:
+                            await self.audio_sender(pcm)
 
                     except asyncio.CancelledError:
                         raise
@@ -209,6 +210,7 @@ class TTSSession:
 
         except asyncio.CancelledError:
             logger.info("TTS worker stopped")
+
 
     async def enqueue(self, task: TTSTask):
         if not self.closed and not self.cancel_token.is_cancelled():
