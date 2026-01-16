@@ -1240,11 +1240,13 @@ async def stream_response(
 # =========================
 # UNIFIED NLU ENTRYPOINT
 # =========================
+    # UNIFIED NLU ENTRYPOINT (Fixed & Aligned)
+    # =========================
 async def analyze_user_input(
     self,
     query: str,
     business_name: str,
-) - NLUResult:
+) -> NLUResult:  # <--- Fixed syntax error here (->)
     """
     ENTERPRISE HYBRID ROUTER
     Layer 1: Regex Reflex (0ms) -> Handles simple commands instantly.
@@ -1253,9 +1255,9 @@ async def analyze_user_input(
     start = time.time()
     query_lower = query.lower().strip()
 
-    # ---------------------------------------------------------
-    # LAYER 1: FAST REFLEX (0ms Latency)
-    # ---------------------------------------------------------
+        # ---------------------------------------------------------
+        # LAYER 1: FAST REFLEX (0ms Latency)
+        # ---------------------------------------------------------
     for intent, patterns in _REFLEX_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, query_lower):
@@ -1273,7 +1275,6 @@ async def analyze_user_input(
         # LAYER 2: DEEP LLM ANALYSIS (300ms Latency)
         # ---------------------------------------------------------
         
-        # Competitor Trick: Strict System Prompt to force JSON
     system_prompt = f"""
     You are the NLU Brain for {business_name}.
     Analyze the user text and output STRICT JSON only.
@@ -1289,7 +1290,7 @@ async def analyze_user_input(
     {{
         "intent": "string",
         "confidence": float,
-        "sentiment": float (-1.0 to 1.0),
+        "sentiment": float,
         "urgency": "string",
         "entities": {{}},
         "topic_allowed": bool
@@ -1297,7 +1298,7 @@ async def analyze_user_input(
     """
 
     try:
-         # We use a helper to run blocking code in thread
+            # We use a helper to run blocking code in thread
         loop = asyncio.get_running_loop()
         response_text = await loop.run_in_executor(
             None, 
@@ -1305,44 +1306,42 @@ async def analyze_user_input(
                 prompt=system_prompt,
                 temperature=0.0,  # Zero temp = Deterministic JSON
                 max_tokens=200
-                )
             )
+        )
 
             # Clean JSON (Remove markdown code blocks)
-            clean_text = response_text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_text)
+        clean_text = response_text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_text)
 
             # Safely map string to Enum
-            intent_str = data.get("intent", "question").lower()
-            try:
-                final_intent = IntentType(intent_str)
-            except ValueError:
-                final_intent = IntentType.QUESTION
+        intent_str = data.get("intent", "question").lower()
+        try:
+            final_intent = IntentType(intent_str)
+        except ValueError:
+            final_intent = IntentType.QUESTION
 
-            result = NLUResult(
-                intent=final_intent,
-                confidence=float(data.get("confidence", 0.0)),
-                sentiment=float(data.get("sentiment", 0.0)),
-                urgency=data.get("urgency", "low"),
-                entities=data.get("entities", {}),
-                topic_allowed=data.get("topic_allowed", True)
-            )
-            logger.info(f"🧠 Brain Decision: {result.intent.value} ({time.time()-start:.2f}s)")
-            return result
+        result = NLUResult(
+            intent=final_intent,
+            confidence=float(data.get("confidence", 0.0)),
+            sentiment=float(data.get("sentiment", 0.0)),
+            urgency=data.get("urgency", "low"),
+            entities=data.get("entities", {}),
+            topic_allowed=data.get("topic_allowed", True)
+        )
+        logger.info(f"🧠 Brain Decision: {result.intent.value} ({time.time()-start:.2f}s)")
+        return result
 
-        except Exception as e:
-            logger.error(f"❌ NLU Brain Failed: {e}")
-            # Safe Fallback to "Question" -> RAG will handle it
-            return NLUResult(
-                intent=IntentType.QUESTION,
-                confidence=0.0,
-                sentiment=0.0,
-                urgency="low",
-                entities={},
-                topic_allowed=True
-            )
-            
-    
+    except Exception as e:
+        logger.error(f"❌ NLU Brain Failed: {e}")
+        # Safe Fallback to "Question" -> RAG will handle it
+        return NLUResult(
+            intent=IntentType.QUESTION,
+            confidence=0.0,
+            sentiment=0.0,
+            urgency="low",
+            entities={},
+            topic_allowed=True
+        )
     
     async def generate_stream_async(
         self,
