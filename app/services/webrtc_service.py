@@ -26,54 +26,57 @@ STT_SAMPLE_RATE = 16000
 TTS_SAMPLE_RATE = 16000 
 # ==================================================
 
-# In app/services/webrtc_service.py
-
 class OutgoingAudioTrack(MediaStreamTrack):
     """
-    STABLE AUDIO TRACK (High Capacity)
+    STABLE AUDIO TRACK (Atomic Ready)
+    - High Capacity Queue (500)
+    - Jitter Buffer (100ms)
+    - Atomic Resampling support
     """
     kind = "audio"
     
     def __init__(self):
         super().__init__()
-        # 500 items is plenty. 
-        # Since we now send whole sentences, 1 item = 1 full sentence.
-        self.queue = asyncio.Queue(maxsize=500) 
+        # Huge queue to accept full sentences at once
+        self.queue = asyncio.Queue(maxsize=500)
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
         self.buffering = True 
         
-        # 9600 bytes = 100ms safety buffer
+        # 9600 bytes = 100ms safety buffer @ 48kHz
         self.JITTER_TARGET = 9600 
 
     def has_pending_audio(self) -> bool:
+        """CRITICAL: Tells voice.py if audio is actually inside the pipe"""
         return self.queue.qsize() > 0 or len(self.buffer) > 0
 
     async def recv(self):
         if not self._running:
             return await self._get_silence_frame()
 
-        REQUIRED_BYTES = 1920 
+        REQUIRED_BYTES = 1920 # 20ms frame
         
-        # Jitter Buffer Logic
+        # 1. Fill Buffer Logic
         if len(self.buffer) < REQUIRED_BYTES:
             self.buffering = True
         
         while len(self.buffer) < self.JITTER_TARGET and self._running:
             try:
-                # Fast Fetch
-                chunk_48k = await asyncio.wait_for(self.queue.get(), timeout=0.01)
-                self.buffer.extend(chunk_48k)
+                # Fast fetch. We expect 48kHz data from the queue.
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=0.01)
+                self.buffer.extend(chunk)
                 if len(self.buffer) >= self.JITTER_TARGET:
                     self.buffering = False
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
+                # If queue is empty but we have enough to play, PLAY IT.
+                # This ensures short words like "Yes" play instantly.
+                if len(self.buffer) >= REQUIRED_BYTES:
+                    self.buffering = False
                 break
 
-        if self.buffering and len(self.buffer) < self.JITTER_TARGET:
-            return await self._get_silence_frame()
-
-        if len(self.buffer) >= REQUIRED_BYTES:
+        # 2. Play Audio
+        if (not self.buffering or len(self.buffer) >= REQUIRED_BYTES) and len(self.buffer) >= REQUIRED_BYTES:
             chunk = bytes(self.buffer[:REQUIRED_BYTES])
             del self.buffer[:REQUIRED_BYTES]
             
@@ -85,8 +88,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return frame
         else:
             return await self._get_silence_frame()
-    
-    # ... (Keep _get_silence_frame and send_audio as provided before) ...
+
     async def _get_silence_frame(self):
         silence = np.zeros(960, dtype=np.int16)
         frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
@@ -96,108 +98,16 @@ class OutgoingAudioTrack(MediaStreamTrack):
         return frame
 
     async def send_audio(self, pcm_16k_data: bytes):
+        """
+        Resamples 16k -> 48k on the PRODUCER side (Atomic).
+        """
         if self._running and len(pcm_16k_data) > 0:
-            # Resample the WHOLE sentence at once. Perfect quality.
+            # Resample ATOMICALLY (Whole sentence at once) -> Perfect Quality
             pcm_48k, _ = audioop.ratecv(pcm_16k_data, 2, 1, 16000, 48000, None)
             await self.queue.put(pcm_48k)
 
     def stop(self):
         self._running = False
-
-# =========================================================
-# UPDATE THE SESSION WRAPPER TO EXPOSE THE CHECK
-# =========================================================
-class WebRTCSession:
-    # ... (Keep existing __init__ and other methods) ...
-    
-    # ADD THIS NEW METHOD
-    def is_audio_playing(self) -> bool:
-        return self.outgoing_track.has_pending_audio()
-
-    # ... (Keep the rest of the class) ...
-
-
-
-
-# Update WebRTCSession to support async send_audio
-class WebRTCSession:
-    # ... (init and other methods remain the same) ...
-    def __init__(self, session_id: str, stt_callback: Callable[[bytes], None]):
-        # ... (Keep existing __init__ code) ...
-        self.session_id = session_id
-        config = RTCConfiguration(iceServers=[
-            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
-        ])
-        self.pc = RTCPeerConnection(configuration=config)
-        self.outgoing_track = OutgoingAudioTrack()
-        self.stt_callback = stt_callback
-        self.relay = MediaRelay()
-        self.pc.addTrack(self.outgoing_track)
-        
-        @self.pc.on("track")
-        def on_track(track):
-            if track.kind == "audio":
-                logger.info(f"[{self.session_id}] Audio track received")
-                relayed_track = self.relay.subscribe(track)
-                asyncio.create_task(self._relay_audio(relayed_track))
-        
-        @self.pc.on("connectionstatechange")
-        async def on_connection_state_change():
-            if self.pc.connectionState in ["failed", "closed"]:
-                await self.close()
-
-    # ... (Keep _relay_audio and _downsample and handle_offer and add_ice_candidate) ...
-    async def _relay_audio(self, source_track):
-        # Keep your existing relay code
-        buffer = bytearray()
-        while True:
-            try:
-                frame = await source_track.recv()
-                pcm_bytes = await asyncio.get_event_loop().run_in_executor(None, self._downsample, frame)
-                if pcm_bytes:
-                    buffer.extend(pcm_bytes)
-                    while len(buffer) >= 960:
-                        chunk = bytes(buffer[:960])
-                        buffer = buffer[960:]
-                        self.stt_callback(chunk)
-                else:
-                    self.stt_callback(b'\x00' * 960)
-            except Exception:
-                break
-    
-    def _downsample(self, frame):
-        try:
-            import av
-            resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
-            frames = resampler.resample(frame)
-            return b''.join(f.to_ndarray().tobytes() for f in frames)
-        except Exception:
-            return None
-
-    async def handle_offer(self, sdp: str) -> str:
-        offer = RTCSessionDescription(sdp=sdp, type="offer")
-        await self.pc.setRemoteDescription(offer)
-        answer = await self.pc.createAnswer()
-        await self.pc.setLocalDescription(answer)
-        return self.pc.localDescription.sdp
-
-    async def add_ice_candidate(self, candidate_dict: dict):
-        try:
-            if not candidate_dict.get("candidate"): return
-            candidate = candidate_from_sdp(candidate_dict["candidate"])
-            candidate.sdpMid = candidate_dict.get("sdpMid")
-            candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
-            await self.pc.addIceCandidate(candidate)
-        except Exception:
-            pass
-
-    async def send_audio(self, pcm_data: bytes):
-        # Propagate the await
-        await self.outgoing_track.send_audio(pcm_data)
-
-    async def close(self):
-        self.outgoing_track.stop()
-        await self.pc.close()
 
 
 class WebRTCSession:
@@ -229,68 +139,58 @@ class WebRTCSession:
             logger.info(f"[{self.session_id}] WebRTC State: {self.pc.connectionState}")
             if self.pc.connectionState in ["failed", "closed"]:
                 await self.close()
-    #
+
+    def is_audio_playing(self) -> bool:
+        """Exposes buffer state to voice.py logic"""
+        return self.outgoing_track.has_pending_audio()
+
     async def _relay_audio(self, source_track):
         """Reads audio from browser and sends EXACTLY 960-byte chunks to STT."""
         logger.info("Starting audio relay with 960-byte chunking...")
-        buffer = bytearray()  # ← CRITICAL: Accumulate audio here
+        buffer = bytearray()
     
         while True:
             try:
                 frame = await source_track.recv()
-            
-            # Convert to 16kHz PCM
+                
+                # Convert to 16kHz PCM
                 pcm_bytes = await asyncio.get_event_loop().run_in_executor(
                     None, self._downsample, frame
                 )
             
                 if pcm_bytes:
                     buffer.extend(pcm_bytes)
-                
-                # Send EXACTLY 960-byte chunks (30ms @ 16kHz)
+                    
+                    # Send EXACTLY 960-byte chunks (30ms @ 16kHz)
                     while len(buffer) >= 960:
                         chunk = bytes(buffer[:960])
-                        buffer = buffer[960:]  # Remove sent data
-                        logger.info(f"✅ Sending 960-byte chunk to STT")
+                        buffer = buffer[960:]
                         self.stt_callback(chunk)
                 else:
-                # Send silence to keep pipeline alive
-                    logger.warning("Empty frame, sending silence")
+                    # Send silence to keep pipeline alive if needed
                     self.stt_callback(b'\x00' * 960)
                 
             except MediaStreamError:
                 logger.info("Track ended. Stopping relay.")
                 break
             except Exception as e:
-                logger.error(f"Relay error: {e}", exc_info=True)
-            # Send silence on error to prevent pipeline stall
+                logger.error(f"Relay error: {e}")
+                # Send silence on error to prevent pipeline stall
                 self.stt_callback(b'\x00' * 960)
                 await asyncio.sleep(0.01)
-    #
+
     def _downsample(self, frame):
         """
         Universal PyAV Conversion.
-        Fixes 'AttributeError: to_bytes' by using the numpy interface.
         """
         try:
             import av
-            # 1. Initialize Resampler (Matches Google's Requirements)
             resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
-            
-            # 2. Resample
             frames = resampler.resample(frame)
-            
-            # 3. Pack Bytes (THE FIX)
-            # using to_ndarray().tobytes() works on ALL PyAV versions
-            pcm_bytes = b''.join(f.to_ndarray().tobytes() for f in frames)
-            
-            return pcm_bytes
+            return b''.join(f.to_ndarray().tobytes() for f in frames)
         except Exception as e:
             logger.error(f"Resampling Error: {e}")
             return None
-
-
-
 
     async def handle_offer(self, sdp: str) -> str:
         offer = RTCSessionDescription(sdp=sdp, type="offer")
