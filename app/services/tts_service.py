@@ -2,230 +2,284 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import numpy as np
-import audioop
-from typing import Optional, Callable, Dict
+import threading
+from typing import Dict, Callable, Optional
+from functools import partial
+from dataclasses import dataclass
 
-from aiortc import (
-    RTCPeerConnection, 
-    RTCSessionDescription, 
-    MediaStreamTrack, 
-    RTCConfiguration, 
-    RTCIceServer
-)
-from av import AudioFrame
-from aiortc.sdp import candidate_from_sdp
-from aiortc.contrib.media import MediaRelay
-from aiortc.mediastreams import MediaStreamError
+from google.cloud import texttospeech_v1 as tts
 
 logger = logging.getLogger(__name__)
 
-# ===================== CONFIG =====================
-OPUS_SAMPLE_RATE = 48000
-STT_SAMPLE_RATE = 16000
-TTS_SAMPLE_RATE = 16000 
-# ==================================================
+# ============================================================
+# CONFIG
+# ============================================================
 
-class OutgoingAudioTrack(MediaStreamTrack):
-    """
-    STABLE AUDIO TRACK (Atomic Ready)
-    - High Capacity Queue (500)
-    - Jitter Buffer (100ms)
-    - Atomic Resampling support
-    """
-    kind = "audio"
-    
+MAX_CONCURRENT_TTS = 4           # Global cost / rate protection
+TTS_QUEUE_MAX = 32               # Per-session backpressure
+PCM_SAMPLE_RATE = 16000
+PCM_SAMPLE_WIDTH = 2             # 16-bit
+PCM_CHANNELS = 1
+AUDIO_CHUNK_SIZE = 3200          # ~100ms of 16kHz PCM
+
+# ============================================================
+# GLOBALS
+# ============================================================
+
+_tts_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TTS)
+_sessions: Dict[str, "TTSSession"] = {}
+
+_tts_client = None
+
+def get_tts_client():
+    global _tts_client
+    if _tts_client is None:
+        _tts_client = tts.TextToSpeechClient()
+    return _tts_client
+
+# ============================================================
+# DATA STRUCTURES
+# ============================================================
+
+@dataclass
+class TTSTask:
+    text: str
+    language: str
+    sentiment: float
+    speaking_rate: float = 1.0
+
+
+class CancellationToken:
     def __init__(self):
-        super().__init__()
-        # Huge queue to accept full sentences at once
-        self.queue = asyncio.Queue(maxsize=500)
-        self._timestamp = 0
-        self._running = True
-        self.buffer = bytearray()
-        self.buffering = True 
-        
-        # 9600 bytes = 100ms safety buffer @ 48kHz
-        self.JITTER_TARGET = 9600 
+        self._event = threading.Event()
 
-    def has_pending_audio(self) -> bool:
-        """CRITICAL: Tells voice.py if audio is actually inside the pipe"""
-        return self.queue.qsize() > 0 or len(self.buffer) > 0
+    def cancel(self):
+        self._event.set()
 
-    async def recv(self):
-        if not self._running:
-            return await self._get_silence_frame()
+    def is_cancelled(self) -> bool:
+        return self._event.is_set()
 
-        REQUIRED_BYTES = 1920 # 20ms frame
-        
-        # 1. Fill Buffer Logic
-        if len(self.buffer) < REQUIRED_BYTES:
-            self.buffering = True
-        
-        while len(self.buffer) < self.JITTER_TARGET and self._running:
-            try:
-                # Fast fetch. We expect 48kHz data from the queue.
-                chunk = await asyncio.wait_for(self.queue.get(), timeout=0.01)
-                self.buffer.extend(chunk)
-                if len(self.buffer) >= self.JITTER_TARGET:
-                    self.buffering = False
-            except (asyncio.TimeoutError, asyncio.QueueEmpty):
-                # If queue is empty but we have enough to play, PLAY IT.
-                # This ensures short words like "Yes" play instantly.
-                if len(self.buffer) >= REQUIRED_BYTES:
-                    self.buffering = False
-                break
-
-        # 2. Play Audio
-        if (not self.buffering or len(self.buffer) >= REQUIRED_BYTES) and len(self.buffer) >= REQUIRED_BYTES:
-            chunk = bytes(self.buffer[:REQUIRED_BYTES])
-            del self.buffer[:REQUIRED_BYTES]
-            
-            audio_np = np.frombuffer(chunk, dtype=np.int16)
-            frame = AudioFrame.from_ndarray(audio_np.reshape(1, -1), format='s16', layout='mono')
-            frame.sample_rate = 48000
-            frame.pts = self._timestamp
-            self._timestamp += 960
-            return frame
-        else:
-            return await self._get_silence_frame()
-
-    async def _get_silence_frame(self):
-        silence = np.zeros(960, dtype=np.int16)
-        frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
-        frame.sample_rate = 48000
-        frame.pts = self._timestamp
-        self._timestamp += 960
-        return frame
-
-    async def send_audio(self, pcm_16k_data: bytes):
-        """
-        Resamples 16k -> 48k on the PRODUCER side (Atomic).
-        """
-        if self._running and len(pcm_16k_data) > 0:
-            # Resample ATOMICALLY (Whole sentence at once) -> Perfect Quality
-            pcm_48k, _ = audioop.ratecv(pcm_16k_data, 2, 1, 16000, 48000, None)
-            await self.queue.put(pcm_48k)
-
-    def stop(self):
-        self._running = False
+    def reset(self):
+        self._event.clear()
 
 
-class WebRTCSession:
-    def __init__(self, session_id: str, stt_callback: Callable[[bytes], None]):
-        self.session_id = session_id
-        
-        # Google STUN for firewall traversal
-        config = RTCConfiguration(iceServers=[
-            RTCIceServer(urls=["stun:stun.l.google.com:19302"])
-        ])
-        
-        self.pc = RTCPeerConnection(configuration=config)
-        self.outgoing_track = OutgoingAudioTrack()
-        self.stt_callback = stt_callback
-        self.relay = MediaRelay()
-        
-        self.pc.addTrack(self.outgoing_track)
-        
-        @self.pc.on("track")
-        def on_track(track):
-            if track.kind == "audio":
-                logger.info(f"[{self.session_id}] Audio track received")
-                # Use MediaRelay to safely duplicate the stream
-                relayed_track = self.relay.subscribe(track)
-                asyncio.create_task(self._relay_audio(relayed_track))
-        
-        @self.pc.on("connectionstatechange")
-        async def on_connection_state_change():
-            logger.info(f"[{self.session_id}] WebRTC State: {self.pc.connectionState}")
-            if self.pc.connectionState in ["failed", "closed"]:
-                await self.close()
+# ============================================================
+# SSML BUILDER (EMOTION-AWARE)
+# ============================================================
 
-    def is_audio_playing(self) -> bool:
-        """Exposes buffer state to voice.py logic"""
-        return self.outgoing_track.has_pending_audio()
-
-    async def _relay_audio(self, source_track):
-        """Reads audio from browser and sends EXACTLY 960-byte chunks to STT."""
-        logger.info("Starting audio relay with 960-byte chunking...")
-        buffer = bytearray()
+def build_ssml(text: str, sentiment: float, speaking_rate: float = 1.0) -> str:
+    """
+    Maps sentiment and speaking_rate to prosody for emotional mirroring.
+    """
+    if sentiment > 0.4:
+        base_rate = 105
+        pitch = "+2st"
+    elif sentiment < -0.4:
+        base_rate = 90
+        pitch = "-2st"
+    else:
+        base_rate = 100
+        pitch = "0st"
     
-        while True:
-            try:
-                frame = await source_track.recv()
-                
-                # Convert to 16kHz PCM
-                pcm_bytes = await asyncio.get_event_loop().run_in_executor(
-                    None, self._downsample, frame
-                )
-            
-                if pcm_bytes:
-                    buffer.extend(pcm_bytes)
-                    
-                    # Send EXACTLY 960-byte chunks (30ms @ 16kHz)
-                    while len(buffer) >= 960:
-                        chunk = bytes(buffer[:960])
-                        buffer = buffer[960:]
-                        self.stt_callback(chunk)
-                else:
-                    # Send silence to keep pipeline alive if needed
-                    self.stt_callback(b'\x00' * 960)
-                
-            except MediaStreamError:
-                logger.info("Track ended. Stopping relay.")
-                break
-            except Exception as e:
-                logger.error(f"Relay error: {e}")
-                # Send silence on error to prevent pipeline stall
-                self.stt_callback(b'\x00' * 960)
-                await asyncio.sleep(0.01)
+    final_rate = int(base_rate * speaking_rate)
+    final_rate = max(80, min(120, final_rate))
+    
+    return f"""
+<speak>
+  <prosody rate="{final_rate}%" pitch="{pitch}">
+    {text}
+  </prosody>
+</speak>
+""".strip()
 
-    def _downsample(self, frame):
+
+# ============================================================
+# BLOCKING PROVIDER CALL (EXECUTOR ONLY)
+# ============================================================
+
+def synthesize_blocking(
+    *,
+    text: str,
+    language: str,
+    sentiment: float,
+    speaking_rate: float = 1.0,
+) -> bytes:
+    """
+    Blocking Google TTS call using STABLE PREMIUM (Neural2) voices.
+    """
+    # 1. Build SSML (Neural2 supports this; Journey does not)
+    ssml = build_ssml(text, sentiment, speaking_rate)
+    synthesis_input = tts.SynthesisInput(ssml=ssml)
+
+    # 2. SELECT NEURAL2 VOICES (High Quality, Human-like)
+    # Neural2-J is a deep, professional male voice.
+    # Neural2-D is a natural Indian English voice.
+    if language == "en-US":
+        voice_name = "en-US-Neural2-J" 
+    elif language == "en-IN":
+        voice_name = "en-IN-Neural2-D"
+    else:
+        voice_name = "en-US-Neural2-C"
+
+    voice = tts.VoiceSelectionParams(
+        language_code=language,
+        name=voice_name
+    )
+
+    # 3. AUDIO CONFIG (Optimized for WebRTC)
+    audio_config = tts.AudioConfig(
+        audio_encoding=tts.AudioEncoding.LINEAR16,
+        sample_rate_hertz=PCM_SAMPLE_RATE,
+        effects_profile_id=["telephony-class-application"], # Enhances clarity
+    )
+
+    client = get_tts_client()
+    response = client.synthesize_speech(
+        input=synthesis_input,
+        voice=voice,
+        audio_config=audio_config,
+    )
+
+    return response.audio_content
+
+
+
+# ============================================================
+# PER-SESSION WORKER
+# ============================================================
+
+class TTSSession:
+    def __init__(self, session_id: str, audio_sender: Callable[[bytes], asyncio.Future]):
+        self.session_id = session_id
+        self.audio_sender = audio_sender
+
+        self.queue: asyncio.Queue[TTSTask] = asyncio.Queue(TTS_QUEUE_MAX)
+        self.cancel_token = CancellationToken()
+        self.worker_task: Optional[asyncio.Task] = None
+        self.closed = False
+
+    async def start(self):
+        if not self.worker_task:
+            self.worker_task = asyncio.create_task(self._worker())
+
+    async def _worker(self):
         """
-        Universal PyAV Conversion.
+        Sentence â†’ TTS â†’ chunked PCM send.
         """
         try:
-            import av
-            resampler = av.AudioResampler(format='s16', layout='mono', rate=16000)
-            frames = resampler.resample(frame)
-            return b''.join(f.to_ndarray().tobytes() for f in frames)
-        except Exception as e:
-            logger.error(f"Resampling Error: {e}")
-            return None
+            while not self.closed:
+                task: TTSTask = await self.queue.get()
 
-    async def handle_offer(self, sdp: str) -> str:
-        offer = RTCSessionDescription(sdp=sdp, type="offer")
-        await self.pc.setRemoteDescription(offer)
-        answer = await self.pc.createAnswer()
-        await self.pc.setLocalDescription(answer)
-        return self.pc.localDescription.sdp
+                if self.cancel_token.is_cancelled():
+                    self.queue.task_done()
+                    continue
 
-    async def add_ice_candidate(self, candidate_dict: dict):
+                async with _tts_semaphore:
+                    if self.cancel_token.is_cancelled():
+                        self.queue.task_done()
+                        continue
+
+                    try:
+                        loop = asyncio.get_running_loop()
+
+                        pcm: bytes = await loop.run_in_executor(
+                            None,
+                            partial(
+                                synthesize_blocking,
+                                text=task.text,
+                                language=task.language,
+                                sentiment=task.sentiment,
+                                speaking_rate=task.speaking_rate,
+                             ),
+                        )
+
+                        # Progressive send (chunked)
+                        for i in range(0, len(pcm), AUDIO_CHUNK_SIZE):
+                            if self.cancel_token.is_cancelled():
+                                break
+                            chunk = pcm[i:i + AUDIO_CHUNK_SIZE]
+                            await self.audio_sender(chunk)
+
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("TTS synthesis failed")
+
+                self.queue.task_done()
+
+        except asyncio.CancelledError:
+            logger.info("TTS worker stopped")
+
+    async def enqueue(self, task: TTSTask):
+        if not self.closed and not self.cancel_token.is_cancelled():
+            await self.queue.put(task)
+
+    def cancel(self):
+        """
+        Barge-in safe cancellation.
+        """
+        self.cancel_token.cancel()
+        self._drain_queue()
+
+    def _drain_queue(self):
         try:
-            if not candidate_dict.get("candidate"): return
-            candidate = candidate_from_sdp(candidate_dict["candidate"])
-            candidate.sdpMid = candidate_dict.get("sdpMid")
-            candidate.sdpMLineIndex = candidate_dict.get("sdpMLineIndex")
-            await self.pc.addIceCandidate(candidate)
-        except Exception as e:
-            logger.error(f"ICE Error: {e}")
-
-    async def send_audio(self, pcm_data: bytes):
-        await self.outgoing_track.send_audio(pcm_data)
+            while not self.queue.empty():
+                self.queue.get_nowait()
+                self.queue.task_done()
+        except Exception:
+            pass
 
     async def close(self):
-        self.outgoing_track.stop()
-        await self.pc.close()
+        self.closed = True
+        self.cancel()
+        if self.worker_task:
+            self.worker_task.cancel()
 
-# ===================== GLOBAL MANAGER =====================
 
-_sessions: Dict[str, WebRTCSession] = {}
+# ============================================================
+# PUBLIC API (USED BY voice.py ONLY)
+# ============================================================
 
-async def create_session(session_id: str, stt_callback: Callable[[bytes], None]) -> WebRTCSession:
+async def register_session(
+    session_id: str,
+    audio_sender: Callable[[bytes], asyncio.Future],
+):
     if session_id in _sessions:
-        await _sessions[session_id].close()
-    session = WebRTCSession(session_id, stt_callback)
+        return
+
+    session = TTSSession(session_id, audio_sender)
     _sessions[session_id] = session
-    return session
+    await session.start()
+
+
+async def tts_enqueue(
+    *,
+    session_id: str,
+    text: str,
+    language: str,
+    sentiment: float = 0.0,
+    speaking_rate: float = 1.0,
+    
+):
+    session = _sessions.get(session_id)
+    if not session:
+        return
+
+    await session.enqueue(
+        TTSTask(
+            text=text,
+            language=language,
+            sentiment=sentiment,
+            speaking_rate=speaking_rate,
+        )
+    )
+
+
+def cancel_tts(session_id: str):
+    session = _sessions.get(session_id)
+    if session:
+        session.cancel()
+
 
 async def close_session(session_id: str):
     session = _sessions.pop(session_id, None)
