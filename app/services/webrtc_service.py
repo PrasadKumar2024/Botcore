@@ -30,24 +30,24 @@ TTS_SAMPLE_RATE = 16000
 
 class OutgoingAudioTrack(MediaStreamTrack):
     """
-    STABLE AUDIO TRACK with STATE INSPECTION
+    STABLE AUDIO TRACK (High Capacity)
     """
     kind = "audio"
     
     def __init__(self):
         super().__init__()
+        # 500 items is plenty. 
+        # Since we now send whole sentences, 1 item = 1 full sentence.
         self.queue = asyncio.Queue(maxsize=500) 
         self._timestamp = 0
         self._running = True
         self.buffer = bytearray()
         self.buffering = True 
-        self.JITTER_TARGET = 9600 # 100ms safety buffer
+        
+        # 9600 bytes = 100ms safety buffer
+        self.JITTER_TARGET = 9600 
 
     def has_pending_audio(self) -> bool:
-        """
-        Returns True if there is audio in the Queue OR the Buffer.
-        Used to prevent premature barge-in.
-        """
         return self.queue.qsize() > 0 or len(self.buffer) > 0
 
     async def recv(self):
@@ -56,11 +56,10 @@ class OutgoingAudioTrack(MediaStreamTrack):
 
         REQUIRED_BYTES = 1920 
         
-        # 1. Jitter Buffer Logic
+        # Jitter Buffer Logic
         if len(self.buffer) < REQUIRED_BYTES:
             self.buffering = True
         
-        # 2. Fill Buffer
         while len(self.buffer) < self.JITTER_TARGET and self._running:
             try:
                 # Fast Fetch
@@ -71,7 +70,6 @@ class OutgoingAudioTrack(MediaStreamTrack):
             except (asyncio.TimeoutError, asyncio.QueueEmpty):
                 break
 
-        # 3. Play or Silence
         if self.buffering and len(self.buffer) < self.JITTER_TARGET:
             return await self._get_silence_frame()
 
@@ -87,7 +85,8 @@ class OutgoingAudioTrack(MediaStreamTrack):
             return frame
         else:
             return await self._get_silence_frame()
-
+    
+    # ... (Keep _get_silence_frame and send_audio as provided before) ...
     async def _get_silence_frame(self):
         silence = np.zeros(960, dtype=np.int16)
         frame = AudioFrame.from_ndarray(silence.reshape(1, -1), format='s16', layout='mono')
@@ -98,6 +97,7 @@ class OutgoingAudioTrack(MediaStreamTrack):
 
     async def send_audio(self, pcm_16k_data: bytes):
         if self._running and len(pcm_16k_data) > 0:
+            # Resample the WHOLE sentence at once. Perfect quality.
             pcm_48k, _ = audioop.ratecv(pcm_16k_data, 2, 1, 16000, 48000, None)
             await self.queue.put(pcm_48k)
 
