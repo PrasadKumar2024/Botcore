@@ -1,3 +1,5 @@
+# app/services/tts_service.py
+
 from __future__ import annotations
 
 import asyncio
@@ -12,18 +14,21 @@ from google.cloud import texttospeech_v1 as tts
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# CONFIG
+# CONFIGURATION & TUNING
 # ============================================================
 
-MAX_CONCURRENT_TTS = 4           # Global cost / rate protection
-TTS_QUEUE_MAX = 32               # Per-session backpressure
-PCM_SAMPLE_RATE = 16000
-PCM_SAMPLE_WIDTH = 2             # 16-bit
+MAX_CONCURRENT_TTS = 4           # Global limit to prevent API throttling
+TTS_QUEUE_MAX = 32               # Per-session backpressure limit
+PCM_SAMPLE_RATE = 16000          # Standard Google TTS output
+PCM_SAMPLE_WIDTH = 2             # 16-bit audio
 PCM_CHANNELS = 1
-AUDIO_CHUNK_SIZE = 3200          # ~100ms of 16kHz PCM
+
+# Note: We no longer chunk by 3200 bytes for transmission, 
+# but we keep this constant if needed for other calculations.
+AUDIO_CHUNK_SIZE = 3200          
 
 # ============================================================
-# GLOBALS
+# GLOBAL STATE
 # ============================================================
 
 _tts_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TTS)
@@ -32,6 +37,7 @@ _sessions: Dict[str, "TTSSession"] = {}
 _tts_client = None
 
 def get_tts_client():
+    """Singleton pattern to reuse the Google TTS client."""
     global _tts_client
     if _tts_client is None:
         _tts_client = tts.TextToSpeechClient()
@@ -50,6 +56,7 @@ class TTSTask:
 
 
 class CancellationToken:
+    """Thread-safe cancellation token for barge-in."""
     def __init__(self):
         self._event = threading.Event()
 
@@ -64,12 +71,14 @@ class CancellationToken:
 
 
 # ============================================================
-# SSML BUILDER (EMOTION-AWARE)
+# SMART SSML BUILDER (EMOTION-AWARE)
 # ============================================================
 
 def build_ssml(text: str, sentiment: float, speaking_rate: float = 1.0) -> str:
     """
-    Maps sentiment and speaking_rate to prosody for emotional mirroring.
+    Constructs SSML with prosody tags to mirror user emotion.
+    - Negative sentiment -> Slower, slightly lower pitch (Empathetic)
+    - Positive sentiment -> Faster, slightly higher pitch (Energetic)
     """
     if sentiment > 0.4:
         base_rate = 105
@@ -81,6 +90,7 @@ def build_ssml(text: str, sentiment: float, speaking_rate: float = 1.0) -> str:
         base_rate = 100
         pitch = "0st"
     
+    # Clamp the rate to keep it natural (80% to 120%)
     final_rate = int(base_rate * speaking_rate)
     final_rate = max(80, min(120, final_rate))
     
@@ -94,7 +104,7 @@ def build_ssml(text: str, sentiment: float, speaking_rate: float = 1.0) -> str:
 
 
 # ============================================================
-# BLOCKING PROVIDER CALL (EXECUTOR ONLY)
+# BLOCKING SYNTHESIS (EXECUTED IN THREAD POOL)
 # ============================================================
 
 def synthesize_blocking(
@@ -105,20 +115,22 @@ def synthesize_blocking(
     speaking_rate: float = 1.0,
 ) -> bytes:
     """
-    Blocking Google TTS call using STABLE PREMIUM (Neural2) voices.
+    Performs the actual blocking call to Google Cloud TTS.
+    Uses 'Neural2' voices for B2B-grade quality.
     """
-    # 1. Build SSML (Neural2 supports this; Journey does not)
+    # 1. Build SSML
     ssml = build_ssml(text, sentiment, speaking_rate)
     synthesis_input = tts.SynthesisInput(ssml=ssml)
 
-    # 2. SELECT NEURAL2 VOICES (High Quality, Human-like)
-    # Neural2-J is a deep, professional male voice.
-    # Neural2-D is a natural Indian English voice.
+    # 2. Select Professional Voices (Neural2)
+    # Neural2-J: Professional Male (US)
+    # Neural2-D: Professional Male (IN) - Great for your locale
     if language == "en-US":
         voice_name = "en-US-Neural2-J" 
     elif language == "en-IN":
         voice_name = "en-IN-Neural2-D"
     else:
+        # Default fallback
         voice_name = "en-US-Neural2-C"
 
     voice = tts.VoiceSelectionParams(
@@ -126,11 +138,11 @@ def synthesize_blocking(
         name=voice_name
     )
 
-    # 3. AUDIO CONFIG (Optimized for WebRTC)
+    # 3. Audio Configuration (Linear16 for WebRTC)
     audio_config = tts.AudioConfig(
         audio_encoding=tts.AudioEncoding.LINEAR16,
         sample_rate_hertz=PCM_SAMPLE_RATE,
-        effects_profile_id=["telephony-class-application"], # Enhances clarity
+        effects_profile_id=["telephony-class-application"], # Enhances voice clarity
     )
 
     client = get_tts_client()
@@ -143,9 +155,8 @@ def synthesize_blocking(
     return response.audio_content
 
 
-
 # ============================================================
-# PER-SESSION WORKER
+# TTS SESSION WORKER (THE CORE LOGIC)
 # ============================================================
 
 class TTSSession:
@@ -164,17 +175,29 @@ class TTSSession:
 
     async def _worker(self):
         """
-        Sentence â†’ TTS â†’ chunked PCM send.
+        ATOMIC DELIVERY WORKER
+        
+        CRITICAL ARCHITECTURAL CHANGE:
+        Instead of chunking the audio into small 3200-byte pieces (which causes 
+        resampling artifacts and clicking on slow CPUs), we now send the 
+        ENTIRE sentence audio as a single, atomic blob.
+        
+        This ensures the WebRTC resampler sees a continuous waveform, 
+        guaranteeing professional audio quality.
         """
         try:
             while not self.closed:
+                # 1. Wait for a sentence task
                 task: TTSTask = await self.queue.get()
 
+                # Check cancellation before starting expensive work
                 if self.cancel_token.is_cancelled():
                     self.queue.task_done()
                     continue
 
+                # 2. Acquire Concurrency Lock
                 async with _tts_semaphore:
+                    # Double-check cancellation after waiting for lock
                     if self.cancel_token.is_cancelled():
                         self.queue.task_done()
                         continue
@@ -182,6 +205,7 @@ class TTSSession:
                     try:
                         loop = asyncio.get_running_loop()
 
+                        # 3. Blocking Call to Google (in a thread)
                         pcm: bytes = await loop.run_in_executor(
                             None,
                             partial(
@@ -193,12 +217,11 @@ class TTSSession:
                              ),
                         )
 
-                        # Progressive send (chunked)
-                        for i in range(0, len(pcm), AUDIO_CHUNK_SIZE):
-                            if self.cancel_token.is_cancelled():
-                                break
-                            chunk = pcm[i:i + AUDIO_CHUNK_SIZE]
-                            await self.audio_sender(chunk)
+                        # 4. ATOMIC SEND (The "Secret Sauce")
+                        # If we have audio, send it ALL at once.
+                        # Do NOT loop. Do NOT chunk.
+                        if not self.cancel_token.is_cancelled() and len(pcm) > 0:
+                            await self.audio_sender(pcm)
 
                     except asyncio.CancelledError:
                         raise
@@ -217,6 +240,7 @@ class TTSSession:
     def cancel(self):
         """
         Barge-in safe cancellation.
+        Stops the worker from processing the *next* sentence.
         """
         self.cancel_token.cancel()
         self._drain_queue()
@@ -237,7 +261,7 @@ class TTSSession:
 
 
 # ============================================================
-# PUBLIC API (USED BY voice.py ONLY)
+# PUBLIC API (USED BY voice.py)
 # ============================================================
 
 async def register_session(
@@ -259,7 +283,6 @@ async def tts_enqueue(
     language: str,
     sentiment: float = 0.0,
     speaking_rate: float = 1.0,
-    
 ):
     session = _sessions.get(session_id)
     if not session:
