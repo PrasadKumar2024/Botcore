@@ -174,57 +174,73 @@ class RAGEngine:
     #ef
     async def answer(self, client_id: str, query: str, session_context=None, language="en-IN") -> RAGResult:
         
-        # 1. CALL THE BRAIN
-        nlu = await nlu_service.analyze(query)
-        logger.info(f"🧠 Intent: {nlu.intent.value} | Urgency: {nlu.urgency}")
+        # 1. BRAIN: Analyze Intent
+        nlu = await nlu_service.analyze(query, conversation_history=session_context)
+        logger.info(f"🧠 Intent: {nlu.intent.value}")
 
-        # 2. HANDLE CLARIFICATION (Confidence Gate Failure)
-        if nlu.intent == IntentType.CLARIFICATION:
-            return RAGResult(
-                spoken_text="I'm not sure I understood that. Could you say it again?",
-                fact_text="Low Confidence", intent="clarification", entities={}, 
-                sentiment=0.0, confidence=0.0, used_rag=False
-            )
-
-        # 3. GUARDRAILS
-        if not nlu.topic_allowed:
-            return RAGResult(
-                spoken_text="I can only discuss our business services.",
-                fact_text="Blocked", intent="off_topic", entities={}, 
-                sentiment=0.0, confidence=1.0, used_rag=False
-            )
-
-        # 4. ROUTING
-        if nlu.intent == IntentType.GREETING:
-            return RAGResult("Hello! How can I help you?", "Greeting", "greeting", {}, 0.5, 1.0, False)
-            
-        if nlu.intent == IntentType.HUMAN_HANDOFF:
-             return RAGResult("Please hold for an agent.", "Handoff", "handoff", {}, 0.0, 1.0, False)
-
-        # 5. RAG EXECUTION (Only if Brain says "Question" or "Billing" etc.)
-        pinecone = get_pinecone_service()
-        expanded_query = normalize_query(query)
+        # 2. DIRECTOR: Choose the "Instruction" based on Intent
+        # We do NOT return text here. We set the 'stage' for the LLM.
         
-        results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
-        if not results:
-             results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
+        system_instruction = ""
+        context_data = ""
+        used_rag = False
 
-        if results:
-            context = "\n".join([r['chunk_text'] for r in results])
+        if not nlu.topic_allowed:
+            system_instruction = "The user asked about a forbidden topic. Politely decline to answer and steer back to business services."
+            context_data = "Blocked Topic"
+
+        elif nlu.intent == IntentType.GREETING:
+            # NATURAL FIX: We tell LLM to *be* friendly, not what to say exactly.
+            system_instruction = "You are a warm, professional assistant. The user just greeted you. Reply naturally and briefly. Vary your phrasing (e.g., 'Hi there', 'Good morning'). Ask how you can help."
+            context_data = "User Greeting"
+
+        elif nlu.intent == IntentType.CLOSING:
+            system_instruction = "The user is saying goodbye. Reply politely and briefly. Wish them a good day."
+            context_data = "User Closing"
+
+        elif nlu.intent == IntentType.HUMAN_HANDOFF:
+            system_instruction = "The user wants a real person. Politely confirm you are connecting them to a specialist immediately. Ask them to hold."
+            context_data = "Handoff Request"
+
         else:
-            context = "NO INFO FOUND."
+            # === RAG PATH (Questions, Billing, Booking) ===
+            pinecone = get_pinecone_service()
+            expanded = normalize_query(query)
+            results = await pinecone.search_similar_chunks(client_id, expanded, self.top_k, self.min_score)
+            
+            if results:
+                context_data = "\n".join([r['chunk_text'] for r in results])
+                system_instruction = f"You are a helpful assistant. Answer the user's question strictly using this CONTEXT:\n{context_data}\nKeep it conversational but accurate."
+                used_rag = True
+            else:
+                context_data = "No Info Found"
+                system_instruction = "The user asked a question but we have no information in the database. Politely apologize and offer to connect them to a human."
 
-        # Persona Injection based on Brain's Urgency Analysis
-        if nlu.urgency == "high":
-            sys_prompt = f"URGENT MODE. Answer concisely using this CONTEXT:\n{context}"
-        else:
-            sys_prompt = f"You are a helpful assistant. Answer using this CONTEXT:\n{context}"
+        # 3. ACTOR: The LLM Generates the Speech
+        # This single call handles EVERYTHING (Greetings, Goodbyes, and Data)
+        try:
+            raw_response = gemini_service.generate_response(
+                prompt=f"USER SAYS: {query}", 
+                system_message=system_instruction, 
+                temperature=0.7 # Slight creativity for natural feel
+            )
+            
+            # Clean up response (sometimes LLMs add "Assistant:" prefix)
+            spoken_text = raw_response.replace("Assistant:", "").strip()
+            
+        except Exception:
+            spoken_text = "I'm having a bit of trouble connecting. Could you say that again?"
 
-        # Generate Final Answer
-        raw = gemini_service.generate_response(f"Query: {query}", system_message=sys_prompt, temperature=0.1)
-        spoken = raw if "{" not in raw else _extract_json(raw).get("spoken", raw)
+        return RAGResult(
+            spoken_text=spoken_text,
+            fact_text=context_data[:50],
+            intent=nlu.intent.value,
+            entities=nlu.entities,
+            sentiment=nlu.sentiment,
+            confidence=nlu.confidence,
+            used_rag=used_rag
+        )
 
-        return RAGResult(spoken, context[:50], nlu.intent.value, nlu.entities, nlu.sentiment, 0.9, True)
 
 # SINGLETON EXPORT
 rag_engine = RAGEngine()
