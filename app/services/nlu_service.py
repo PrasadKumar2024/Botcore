@@ -1,18 +1,18 @@
 import logging
 import json
 import re
-import asyncio
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
 
+# Use your existing service
 from app.services.gemini_service import gemini_service
 
 logger = logging.getLogger(__name__)
 
-# ===================== DATA STRUCTURES =====================
+# ===================== 1. DEFINITIONS =====================
 
-class IntentType(Enum):
+class IntentType(str, Enum):
     GREETING = "greeting"
     CLOSING = "closing"
     BOOKING = "booking"
@@ -20,31 +20,26 @@ class IntentType(Enum):
     BILLING = "billing"
     SUPPORT = "support"
     HUMAN_HANDOFF = "human_handoff"
-    QUESTION = "question" # General RAG fallback
+    QUESTION = "question"         # Valid query for RAG
+    CLARIFICATION = "clarification" # Low confidence fallback
     UNKNOWN = "unknown"
 
 @dataclass
 class NLUResult:
     intent: IntentType
     confidence: float
-    sentiment: float # -1.0 to 1.0
-    urgency: str # low, medium, high
+    sentiment: float      # -1.0 (Negative) to 1.0 (Positive)
+    urgency: str          # low, medium, high
     entities: Dict[str, Any]
-    topic_allowed: bool
+    topic_allowed: bool   # False if political/toxic
 
-# ===================== REGEX REFLEX LAYER (0ms) =====================
-# Handles high-frequency, low-complexity inputs instantly.
+# ===================== 2. REFLEX LAYER (0ms) =====================
+# Hard-coded rules that override AI for safety/speed.
 
 _REFLEX_PATTERNS = {
-    IntentType.CLOSING: [
-        r"\b(bye|goodbye|stop|end call|hang up)\b",
-    ],
-    IntentType.HUMAN_HANDOFF: [
-        r"\b(human|agent|representative|operator|person)\b",
-    ],
-    IntentType.GREETING: [
-        r"^(hi|hello|hey|good morning|good evening)$", # Strict start/end
-    ]
+    IntentType.CLOSING: [r"\b(bye|goodbye|stop|end call|hang up|quit)\b"],
+    IntentType.HUMAN_HANDOFF: [r"\b(human|agent|representative|operator|person)\b"],
+    IntentType.GREETING: [r"^(hi|hello|hey|good morning|good evening)$"]
 }
 
 def _fast_reflex_check(text: str) -> Optional[NLUResult]:
@@ -52,97 +47,103 @@ def _fast_reflex_check(text: str) -> Optional[NLUResult]:
     for intent, patterns in _REFLEX_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, text_lower):
-                return NLUResult(
-                    intent=intent,
-                    confidence=1.0,
-                    sentiment=0.0,
-                    urgency="low",
-                    entities={},
-                    topic_allowed=True
-                )
+                return NLUResult(intent, 1.0, 0.0, "low", {}, True)
     return None
 
-# ===================== LLM ROUTER LAYER (Smart) =====================
+# ===================== 3. THE ENTERPRISE BRAIN =====================
 
 class NLUService:
     def __init__(self):
-        # We use a dedicated System Prompt for the NLU task
+        # CONFIDENCE GATE: Below this, we force clarification.
+        self.CONFIDENCE_THRESHOLD = 0.65
+        
         self.system_prompt = """
-        You are the NLU (Natural Language Understanding) Brain for a Customer Service Voice Bot.
+        You are an Enterprise NLU Router. Analyze user input for a Business Voice Bot.
         
-        YOUR JOB:
-        Analyze the user's spoken text and output STRICT JSON.
-        
-        CLASSIFICATION RULES:
-        1. intent: Choose one [greeting, closing, booking, cancellation, billing, support, human_handoff, question, unknown]
-        2. confidence: 0.0 to 1.0 (How sure are you?)
-        3. sentiment: -1.0 (Angry) to 1.0 (Happy)
-        4. urgency: [low, medium, high]
-        5. entities: Extract named entities (dates, names, account_ids)
-        6. topic_allowed: boolean. FALSE if user asks about politics, religion, or competitors. TRUE otherwise.
+        RULES:
+        1. CLASSIFY INTENT: [booking, cancellation, billing, support, question, greeting, closing]
+        2. DETECT ENTITIES: Extract dates, times, money, names.
+        3. CHECK SAFETY: set "topic_allowed": false if input is sexual, political, or hate speech.
         
         INPUT: "{text}"
-        OUTPUT JSON:
+        
+        OUTPUT STRICT JSON:
+        {"intent": "string", "confidence": 0.0-1.0, "sentiment": -1.0-1.0, "urgency": "low|medium|high", "entities": {}, "topic_allowed": true}
         """
 
-    async def analyze(self, text: str, business_context: str = "") -> NLUResult:
+    async def analyze(self, text: str) -> NLUResult:
         """
-        Main Entry Point.
-        1. Checks Reflex Layer.
-        2. If no reflex, calls LLM for deep analysis.
+        Multi-Stage Pipeline: Reflex -> LLM -> Governance
         """
-        # 1. Reflex Check (0ms)
+        # --- STAGE 1: REFLEX (Speed) ---
         reflex = _fast_reflex_check(text)
         if reflex:
-            logger.info(f"⚡ NLU Reflex Hit: {reflex.intent}")
+            logger.info(f"⚡ Reflex: {reflex.intent.value}")
             return reflex
 
-        # 2. LLM Analysis (300ms)
+        # --- STAGE 2: COGNITION (LLM) ---
         try:
-            # We assume gemini_service is initialized and working
+            # We use the async wrapper you added to gemini_service
             prompt = self.system_prompt.replace("{text}", text)
-            if business_context:
-                prompt += f"\nBusiness Context: {business_context}"
-
-            # Use low temp for deterministic JSON
             response_text = await gemini_service.generate_response_async(
-                prompt=prompt,
-                temperature=0.0, 
-                max_tokens=200
+                prompt=prompt, temperature=0.0, max_tokens=200
             )
-            
-            # Parse JSON safely
-            data = self._parse_json(response_text)
-            
+            raw_data = self._parse_json(response_text)
+        except Exception as e:
+            logger.error(f"❌ NLU Brain Dead: {e}")
+            return self._fallback_result()
+
+        # --- STAGE 3: GOVERNANCE (Logic Gates) ---
+        return self._apply_governance_logic(raw_data)
+
+    def _apply_governance_logic(self, data: Dict[str, Any]) -> NLUResult:
+        """Applies Confidence Gating and Fallback Logic."""
+        
+        # 1. Safety Gate
+        if not data.get("topic_allowed", True):
+            logger.warning("🛡️ NLU Safety Block Triggered")
+            return NLUResult(IntentType.UNKNOWN, 1.0, 0.0, "low", {}, False)
+
+        # 2. Extract & Validate Confidence
+        try:
+            confidence = float(data.get("confidence", 0.0))
+        except:
+            confidence = 0.0
+
+        # 3. Confidence Gate
+        if confidence < self.CONFIDENCE_THRESHOLD:
+            logger.info(f"📉 Low Confidence ({confidence:.2f}) -> Clarification")
             return NLUResult(
-                intent=IntentType(data.get("intent", "question")),
-                confidence=float(data.get("confidence", 0.0)),
-                sentiment=float(data.get("sentiment", 0.0)),
-                urgency=data.get("urgency", "low"),
-                entities=data.get("entities", {}),
-                topic_allowed=data.get("topic_allowed", True)
+                intent=IntentType.CLARIFICATION, 
+                confidence=confidence,
+                sentiment=0.0, urgency="low", entities={}, topic_allowed=True
             )
 
-        except Exception as e:
-            logger.error(f"❌ NLU LLM Failed: {e}")
-            # Fallback to generic question if brain fails
-            return NLUResult(
-                intent=IntentType.QUESTION,
-                confidence=0.0,
-                sentiment=0.0,
-                urgency="low",
-                entities={},
-                topic_allowed=True
-            )
+        # 4. Intent Mapping
+        intent_str = data.get("intent", "question").lower()
+        try:
+            final_intent = IntentType(intent_str)
+        except ValueError:
+            final_intent = IntentType.QUESTION # Default fallback
+
+        return NLUResult(
+            intent=final_intent,
+            confidence=confidence,
+            sentiment=float(data.get("sentiment", 0.0)),
+            urgency=data.get("urgency", "low"),
+            entities=data.get("entities", {}),
+            topic_allowed=True
+        )
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         try:
-            # Strip markdown code blocks if Gemini adds them
-            clean_text = text.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_text)
-        except json.JSONDecodeError:
-            logger.warning(f"⚠️ NLU Malformed JSON: {text}")
+            clean = text.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean)
+        except:
             return {}
+
+    def _fallback_result(self) -> NLUResult:
+        return NLUResult(IntentType.CLARIFICATION, 0.0, 0.0, "low", {}, True)
 
 # Singleton
 nlu_service = NLUService()
