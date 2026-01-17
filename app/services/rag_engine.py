@@ -171,51 +171,40 @@ class RAGEngine:
         if len(self.response_cache) > 200:
             oldest = min(self.response_cache.keys(), key=lambda k: self.response_cache[k][1])
             del self.response_cache[oldest]
-
-    def _detect_intent_and_emotion(self, query: str) -> Tuple[ConversationIntent, float]:
-        """
-        Fast Heuristic Router (0ms Latency).
-        Decides if we need RAG or just a quick reply.
-        """
-        q = query.lower()
-        
-        # 1. Frustration Check
-        bad_words = ['angry', 'upset', 'hate', 'stupid', 'broken', 'fail', 'terrible']
-        if any(w in q for w in bad_words):
-            return ConversationIntent.FRUSTRATED, -0.8
-
-        # 2. Greeting Check
-        # Strict check: "Hello" is a greeting. "Hello can I..." is a Question.
-        greetings = ['hello', 'hi', 'hey', 'good morning', 'good evening', 'hi there']
-        words = q.split()
-        if len(words) <= 3 and any(w in q for w in greetings):
-            return ConversationIntent.GREETING, 0.5
-            
-        return ConversationIntent.QUESTION, 0.0
-        
-        
+    #ef
     async def answer(self, client_id: str, query: str, session_context=None, language="en-IN") -> RAGResult:
         
-        # 1. CALL THE BRAIN (nlu_service, NOT gemini_service)
+        # 1. CALL THE BRAIN
         nlu = await nlu_service.analyze(query)
-        logger.info(f"🧠 Intent: {nlu.intent.value}")
+        logger.info(f"🧠 Intent: {nlu.intent.value} | Urgency: {nlu.urgency}")
 
-        # 2. GUARDRAILS
+        # 2. HANDLE CLARIFICATION (Confidence Gate Failure)
+        if nlu.intent == IntentType.CLARIFICATION:
+            return RAGResult(
+                spoken_text="I'm not sure I understood that. Could you say it again?",
+                fact_text="Low Confidence", intent="clarification", entities={}, 
+                sentiment=0.0, confidence=0.0, used_rag=False
+            )
+
+        # 3. GUARDRAILS
         if not nlu.topic_allowed:
-            return RAGResult("I can only discuss our services.", "", "off_topic", {}, 0.0, 1.0, False)
+            return RAGResult(
+                spoken_text="I can only discuss our business services.",
+                fact_text="Blocked", intent="off_topic", entities={}, 
+                sentiment=0.0, confidence=1.0, used_rag=False
+            )
 
-        # 3. ROUTING
+        # 4. ROUTING
         if nlu.intent == IntentType.GREETING:
             return RAGResult("Hello! How can I help you?", "Greeting", "greeting", {}, 0.5, 1.0, False)
             
         if nlu.intent == IntentType.HUMAN_HANDOFF:
              return RAGResult("Please hold for an agent.", "Handoff", "handoff", {}, 0.0, 1.0, False)
 
-        # 4. RAG EXECUTION
+        # 5. RAG EXECUTION (Only if Brain says "Question" or "Billing" etc.)
         pinecone = get_pinecone_service()
         expanded_query = normalize_query(query)
         
-        # Search (Try Expanded -> Then Raw)
         results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
         if not results:
              results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
@@ -225,15 +214,17 @@ class RAGEngine:
         else:
             context = "NO INFO FOUND."
 
-        # Generation (Using Gemini Service directly)
-        sys_prompt = f"You are a helpful assistant. Answer using this CONTEXT:\n{context}"
+        # Persona Injection based on Brain's Urgency Analysis
+        if nlu.urgency == "high":
+            sys_prompt = f"URGENT MODE. Answer concisely using this CONTEXT:\n{context}"
+        else:
+            sys_prompt = f"You are a helpful assistant. Answer using this CONTEXT:\n{context}"
+
+        # Generate Final Answer
         raw = gemini_service.generate_response(f"Query: {query}", system_message=sys_prompt, temperature=0.1)
-        
-        # Simple extraction (assuming gemini returns clean text if JSON fails)
-        spoken = raw if "{" not in raw else _extract_json(raw).get("spoken", "I don't have that info.")
+        spoken = raw if "{" not in raw else _extract_json(raw).get("spoken", raw)
 
         return RAGResult(spoken, context[:50], nlu.intent.value, nlu.entities, nlu.sentiment, 0.9, True)
-
 
 # SINGLETON EXPORT
 rag_engine = RAGEngine()
