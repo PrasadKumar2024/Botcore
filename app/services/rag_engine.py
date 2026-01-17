@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from enum import Enum
 
 # CRITICAL SERVICES
+from app.services.nlu_service import nlu_service, IntentType # <--- NEW
 from app.services.pinecone_service import get_pinecone_service
-from app.services.gemini_service import gemini_service, IntentType
+from app.services.gemini_service import gemini_service
 logger = logging.getLogger(__name__)
 
 # ===================== DATA STRUCTURES =====================
@@ -193,86 +194,45 @@ class RAGEngine:
         return ConversationIntent.QUESTION, 0.0
         
         
-    async def answer(
-        self,
-        *,
-        client_id: str,
-        query: str,
-        session_context: Optional[List[Dict[str, Any]]] = None,
-        language: str = "en-IN",
-    ) -> RAGResult:
+    async def answer(self, client_id: str, query: str, session_context=None, language="en-IN") -> RAGResult:
         
-        # A. CALL THE BRAIN
-        # -------------------------------------------
-        nlu = await gemini_service.analyze_user_input(query, "the company")
+        # 1. CALL THE BRAIN (nlu_service, NOT gemini_service)
+        nlu = await nlu_service.analyze(query)
+        logger.info(f"🧠 Intent: {nlu.intent.value}")
 
-        # B. HANDLE GUARDRAILS
-        # -------------------------------------------
+        # 2. GUARDRAILS
         if not nlu.topic_allowed:
-            return RAGResult(
-                spoken_text="I can only discuss topics related to our services. How can I help with that?",
-                fact_text="Off-topic blocked", intent="off_topic", entities={}, 
-                sentiment=0.0, confidence=1.0, used_rag=False
-            )
+            return RAGResult("I can only discuss our services.", "", "off_topic", {}, 0.0, 1.0, False)
 
-        # C. HANDLE SPECIFIC ROUTING
-        # -------------------------------------------
+        # 3. ROUTING
         if nlu.intent == IntentType.GREETING:
-            import random
-            greetings = ["Hello! How can I assist you?", "Hi there! I'm ready to help."]
-            return RAGResult(
-                spoken_text=random.choice(greetings),
-                fact_text="Greeting", intent="greeting", entities={}, 
-                sentiment=0.5, confidence=1.0, used_rag=False
-            )
-
+            return RAGResult("Hello! How can I help you?", "Greeting", "greeting", {}, 0.5, 1.0, False)
+            
         if nlu.intent == IntentType.HUMAN_HANDOFF:
-             return RAGResult(
-                spoken_text="I'll connect you with a specialist immediately. Please hold.",
-                fact_text="Handoff", intent="handoff", entities={}, 
-                sentiment=0.0, confidence=1.0, used_rag=False
-            )
+             return RAGResult("Please hold for an agent.", "Handoff", "handoff", {}, 0.0, 1.0, False)
 
-        # D. HANDLE RAG (Questions/Billing/Support)
-        # -------------------------------------------
-        
-        # Use NLU metadata to adjust the RAG persona
-        is_urgent = nlu.urgency == "high" or nlu.intent == IntentType.CANCELLATION
-        
-        # 1. Search Logic (Same as before)
+        # 4. RAG EXECUTION
         pinecone = get_pinecone_service()
         expanded_query = normalize_query(query)
-        results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
         
+        # Search (Try Expanded -> Then Raw)
+        results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
         if not results:
              results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
 
         if results:
-            context_block = "\n".join([r['chunk_text'] for r in results])
+            context = "\n".join([r['chunk_text'] for r in results])
         else:
-            context_block = "NO INFORMATION FOUND."
+            context = "NO INFO FOUND."
 
-        # 2. Generation Logic (Persona Injection)
-        if is_urgent:
-            persona = "You are an Urgent Support Agent. Answer immediately and concisely. Apologize if needed."
-        else:
-            persona = "You are a helpful Assistant. Answer conversationally."
+        # Generation (Using Gemini Service directly)
+        sys_prompt = f"You are a helpful assistant. Answer using this CONTEXT:\n{context}"
+        raw = gemini_service.generate_response(f"Query: {query}", system_message=sys_prompt, temperature=0.1)
+        
+        # Simple extraction (assuming gemini returns clean text if JSON fails)
+        spoken = raw if "{" not in raw else _extract_json(raw).get("spoken", "I don't have that info.")
 
-        system_prompt = f"{persona}\n\nCONTEXT:\n{context_block}\n\nStrictly answer based on CONTEXT."
-        
-        # ... (Call Gemini Generate) ...
-        # (This part of your code remains standard)
-        
-        # Return result using the INTENT found by the brain
-        return RAGResult(
-            spoken_text="...result from gemini...", # placeholder for your generation code
-            fact_text=context_block[:50],
-            intent=nlu.intent.value, # Use the string value of the Enum
-            entities=nlu.entities,
-            sentiment=nlu.sentiment,
-            confidence=0.9,
-            used_rag=True
-        )
+        return RAGResult(spoken, context[:50], nlu.intent.value, nlu.entities, nlu.sentiment, 0.9, True)
 
 
 # SINGLETON EXPORT
