@@ -351,6 +351,19 @@ class GeminiService:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((Exception,))
     )
+        # ... inside GeminiService class ...
+
+    async def generate_response_async(self, prompt: str, temperature: float = 0.0, max_tokens: int = 200) -> str:
+        """
+        CRITICAL HELPER: Allows NLU Service to call Gemini without blocking audio.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, 
+            lambda: self.generate_response(prompt=prompt, temperature=temperature, max_tokens=max_tokens)
+        )
+
+    
     def generate_response(
         self, 
         prompt: str, 
