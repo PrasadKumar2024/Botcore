@@ -34,7 +34,7 @@ class NLUResult:
     urgency: str          # low, medium, high
     entities: Dict[str, Any]
     topic_allowed: bool   # False if political/toxic
-
+    reasoning: str = ""
 # ===================== 2. REFLEX LAYER (0ms) =====================
 # Hard-coded rules that override AI for safety/speed.
 _REFLEX_PATTERNS = {
