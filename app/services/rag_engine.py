@@ -173,7 +173,7 @@ class RAGEngine:
             oldest = min(self.response_cache.keys(), key=lambda k: self.response_cache[k][1])
             del self.response_cache[oldest]
     #ef
-    async def answer(self, client_id: str, query: str, session_context=None):
+    async def answer(self, client_id: str, query: str, session_context=None, language="en-IN"):
         logger.info(f"📥 Processing Query: {query}")
         
         # 1. BRAIN: Analyze Intent & Source
