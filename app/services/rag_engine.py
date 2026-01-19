@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 # CRITICAL SERVICES
+from app.services.api_service import fetch_live_data
 from app.services.nlu_service import nlu_service, IntentType # <--- NEW
 from app.services.pinecone_service import get_pinecone_service
 from app.services.gemini_service import gemini_service
@@ -172,74 +173,97 @@ class RAGEngine:
             oldest = min(self.response_cache.keys(), key=lambda k: self.response_cache[k][1])
             del self.response_cache[oldest]
     #ef
-    async def answer(self, client_id: str, query: str, session_context=None, language="en-IN") -> RAGResult:
+    async def answer(self, client_id: str, query: str, session_context=None):
+        logger.info(f"📥 Processing Query: {query}")
         
-        # 1. BRAIN: Analyze Intent
+        # 1. BRAIN: Analyze Intent & Source
         nlu = await nlu_service.analyze(query, conversation_history=session_context)
-        logger.info(f"🧠 Intent: {nlu.intent.value}")
-
-        # 2. DIRECTOR: Choose the "Instruction" based on Intent
-        # We do NOT return text here. We set the 'stage' for the LLM.
         
         system_instruction = ""
         context_data = ""
         used_rag = False
 
-        if not nlu.topic_allowed:
-            system_instruction = "The user asked about a forbidden topic. Politely decline to answer and steer back to business services."
-            context_data = "Blocked Topic"
+        # === ROUTE A: GREETINGS (Speed) ===
+        if nlu.intent == IntentType.GREETING:
+            logger.info("👉 Routing: GREETING path")
+            system_instruction = "Reply naturally and warmly. Keep it brief (under 10 words)."
+            context_data = "Greeting"
 
-        elif nlu.intent == IntentType.GREETING:
-            # NATURAL FIX: We tell LLM to *be* friendly, not what to say exactly.
-            system_instruction = "You are a warm, professional assistant. The user just greeted you. Reply naturally and briefly. Vary your phrasing (e.g., 'Hi there', 'Good morning'). Ask how you can help."
-            context_data = "User Greeting"
+        # === ROUTE B: LIVE DATA (Smart Source Routing) ===
+        # Triggered if Source is 'live' OR we have a name entity
+        elif nlu.data_source == "live" or (nlu.intent == IntentType.QUESTION and nlu.entities.get("name")):
+            logger.info("👉 Routing: LIVE DATA path (Airtable)")
+            
+            target_name = nlu.entities.get("name") # Can be None
+            
+            # FETCH REAL DATA
+            db_result = fetch_live_data(query_type="roster", specific_name=target_name)
+            
+            system_instruction = f"""
+            The user is asking about staff/availability.
+            
+            REAL-TIME DATABASE CONTEXT:
+            {db_result}
+            
+            INSTRUCTIONS:
+            - If the database says 'No records', politely say no one matches that description.
+            - If showing a list, summarize it briefly (e.g., "I found Suresh and Rajesh are available").
+            - Do not invent names not in the list.
+            """
+            context_data = "Live Airtable Data"
 
-        elif nlu.intent == IntentType.CLOSING:
-            system_instruction = "The user is saying goodbye. Reply politely and briefly. Wish them a good day."
-            context_data = "User Closing"
-
-        elif nlu.intent == IntentType.HUMAN_HANDOFF:
-            system_instruction = "The user wants a real person. Politely confirm you are connecting them to a specialist immediately. Ask them to hold."
-            context_data = "Handoff Request"
-
-        else:
-            # === RAG PATH (Questions, Billing, Booking) ===
+        # === ROUTE C: STATIC KNOWLEDGE (Pinecone) ===
+        # Triggered if Source is 'static' (Policy, Refunds, etc.)
+        elif nlu.data_source == "static" or nlu.intent == IntentType.QUESTION:
+            logger.info("👉 Routing: STATIC KNOWLEDGE path (Pinecone)")
+            
             pinecone = get_pinecone_service()
-            expanded = normalize_query(query)
-            results = await pinecone.search_similar_chunks(client_id, expanded, self.top_k, self.min_score)
+            results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
             
             if results:
                 context_data = "\n".join([r['chunk_text'] for r in results])
-                system_instruction = f"You are a helpful assistant. Answer the user's question strictly using this CONTEXT:\n{context_data}\nKeep it conversational but accurate."
+                system_instruction = f"Answer using this POLICY INFO:\n{context_data}"
                 used_rag = True
             else:
-                context_data = "No Info Found"
-                system_instruction = "The user asked a question but we have no information in the database. Politely apologize and offer to connect them to a human."
+                system_instruction = "Politely say you don't have that information."
+                context_data = "No Knowledge Found"
 
-        # 3. ACTOR: The LLM Generates the Speech
-        # This single call handles EVERYTHING (Greetings, Goodbyes, and Data)
+        # === ROUTE D: BOOKING ===
+        elif nlu.intent == IntentType.BOOKING:
+            logger.info("👉 Routing: BOOKING path")
+            system_instruction = "User wants to book. Enthusiastically ask for the DATE and TIME."
+            context_data = "Booking Flow"
+
+        # === EXECUTION: GENERATE SPEECH ===
         try:
-            raw_response = gemini_service.generate_response(
-                prompt=f"USER SAYS: {query}", 
-                system_message=system_instruction, 
-                temperature=0.7 # Slight creativity for natural feel
+            # Speed Optimization: Faster for greetings
+            token_limit = 60 if nlu.intent == IntentType.GREETING else 350
+            
+            response_text = await gemini_service.generate_response_async(
+                prompt=f"USER SAID: {query}",
+                system_message=system_instruction,
+                temperature=0.7, 
+                max_tokens=token_limit
             )
             
-            # Clean up response (sometimes LLMs add "Assistant:" prefix)
-            spoken_text = raw_response.replace("Assistant:", "").strip()
-            
-        except Exception:
-            spoken_text = "I'm having a bit of trouble connecting. Could you say that again?"
+            # Final Sanity Check: If LLM returns empty
+            if not response_text:
+                logger.warning("⚠️ LLM returned empty response. Using fallback.")
+                response_text = "I heard you, but I'm having trouble thinking of a response. Could you ask that again?"
 
-        return RAGResult(
-            spoken_text=spoken_text,
-            fact_text=context_data[:50],
-            intent=nlu.intent.value,
-            entities=nlu.entities,
-            sentiment=nlu.sentiment,
-            confidence=nlu.confidence,
-            used_rag=used_rag
-        )
+        except Exception as e:
+            logger.error(f"❌ Generation Critical Error: {e}")
+            response_text = "I'm having a little trouble connecting. Please try again."
+
+        return {
+            "spoken_text": response_text,
+            "fact_text": context_data[:100],
+            "intent": nlu.intent.value,
+            "confidence": nlu.confidence,
+            "source": nlu.data_source,
+            "used_rag": used_rag
+        }
+
 
 
 # SINGLETON EXPORT
