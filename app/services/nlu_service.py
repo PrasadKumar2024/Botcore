@@ -18,115 +18,108 @@ class IntentType(str, Enum):
     GREETING = "greeting"
     CLOSING = "closing"
     BOOKING = "booking"
-    CANCELLATION = "cancellation"
-    BILLING = "billing"
-    SUPPORT = "support"
-    HUMAN_HANDOFF = "human_handoff"
-    QUESTION = "question"         # Valid query for RAG
-    CLARIFICATION = "clarification" # Low confidence fallback
+    QUESTION = "question"         
+    OFF_TOPIC = "off_topic"
     UNKNOWN = "unknown"
 
 @dataclass
 class NLUResult:
     intent: IntentType
     confidence: float
-    sentiment: float      # -1.0 (Negative) to 1.0 (Positive)
-    urgency: str          # low, medium, high
     entities: Dict[str, Any]
-    topic_allowed: bool   # False if political/toxic
-    reasoning: str = ""
-# ===================== 2. REFLEX LAYER (0ms) =====================
-# Hard-coded rules that override AI for safety/speed.
-_REFLEX_PATTERNS = {
-    IntentType.CLOSING: [r"\b(bye|goodbye|stop|end call|hang up|quit)\b"],
-    # CHANGED: Removed '^' and '$'. Added \b to match "Hi" inside "Hi there"
-    IntentType.GREETING: [r"\b(hi|hello|hey|good morning|good evening|yo)\b"]
-}
-
-def _fast_reflex_check(text: str) -> Optional[NLUResult]:
-    # SMART FIX: Remove punctuation! "Hi." becomes "hi"
-    text_clean = text.lower().strip().translate(str.maketrans('', '', string.punctuation))
-    
-    for intent, patterns in _REFLEX_PATTERNS.items():
-        for pattern in patterns:
-            # Matches "hi there" because of \b check on cleaned text
-            if re.search(pattern, text_clean):
-                return NLUResult(intent, 1.0, 0.0, "low", {}, True, "Reflex Match")
-    return None
-
-# ===================== 3. THE ENTERPRISE BRAIN =====================
+    topic_allowed: bool
+    data_source: str    # <--- NEW: 'live', 'static', or 'none'
+    reasoning: str 
 
 class NLUService:
     def __init__(self):
-        self.CONFIDENCE_THRESHOLD = 0.60 
+        self.CONFIDENCE_THRESHOLD = 0.60
         
-        # SMART FIX: A prompt that lists explicit examples to handle "Hii there"
         self.system_prompt = """
-        You are the NLU Brain. CLASSIFY the user's intent.
+        You are the Routing Intelligence.
         
-        INTENT DEFINITIONS:
-        - greeting: "hi", "hello", "good morning", "hii there", "hey"
-        - booking: "schedule", "book appointment", "time for meeting"
-        - cancellation: "cancel", "remove booking"
-        - billing: "price", "cost", "how much"
-        - human_handoff: "talk to agent", "real person"
-        - question: General info queries ("what is X", "hours", "location")
+        TASK: Analyze the user's input and output a JSON object.
         
-        RULES:
-        1. OUTPUT RAW JSON ONLY. Do NOT use Markdown (```).
-        2. If the user says "Hii" or "Hii there", classify as "greeting".
+        1. "intent": 
+           - 'greeting' (Hello, Hi)
+           - 'booking' (I want to book)
+           - 'question' (Information requests)
+           - 'off_topic' (Jokes, Politics, Math)
+           
+        2. "data_source" (CRITICAL DECISION):
+           - 'live': Queries about STAFF, AVAILABILITY, ROSTER, STATUS. 
+             (Examples: "Who is in?", "Is Suresh free?", "Can I see anyone?")
+           - 'static': Queries about POLICIES, LOCATION, REFUNDS.
+             (Examples: "Where are you?", "What is the fee?")
+           - 'none': Greetings, closings, or off-topic.
+           
+        3. "entities":
+           - Extract "name" if a specific person is mentioned.
+           - Extract "date" or "time" for bookings.
         
-        OUTPUT FORMAT:
-        {"intent": "string", "confidence": 0.0-1.0, "urgency": "low|high", "topic_allowed": true}
+        OUTPUT FORMAT: {"intent": "...", "data_source": "...", "entities": {}, "confidence": 1.0}
         """
-    #
-    async def analyze(self, text: str, conversation_history: List[Dict[str, str]] = None) -> NLUResult:
-        # 1. Reflex (Speed)
-        reflex = _fast_reflex_check(text)
-        if reflex:
-            return reflex
 
-        # 2. LLM Call
+    def _safe_json_parse(self, text: str) -> Dict[str, Any]:
+        """Robust parser that handles markdown ticks and messy JSON."""
         try:
-            full_prompt = f"{self.system_prompt}\nINPUT: \"{text}\""
+            # 1. Strip Markdown
+            clean_text = text.replace("```json", "").replace("```", "").strip()
             
+            # 2. Try Standard Load
+            return json.loads(clean_text)
+        except json.JSONDecodeError:
+            logger.warning(f"⚠️ JSON Parse Failed. Raw Text: {text}")
+            # 3. Fallback: Try to find the first '{' and last '}'
+            try:
+                start = clean_text.find("{")
+                end = clean_text.rfind("}")
+                if start != -1 and end != -1:
+                    return json.loads(clean_text[start:end+1])
+            except:
+                pass
+            return {} # Final fallback
+
+    async def analyze(self, text: str, conversation_history: List = None) -> NLUResult:
+        # [Insert Tier 1 Regex Logic Here if you use it]
+        
+        try:
+            # CALL GEMINI
             response_text = await gemini_service.generate_response_async(
-                prompt=full_prompt, temperature=0.0, max_tokens=200
+                prompt=f"{self.system_prompt}\nINPUT: \"{text}\"", 
+                temperature=0.0, 
+                max_tokens=300
             )
             
-            # SMART FIX: Log the RAW output so we can see why it failed before
-            logger.info(f"🤖 RAW LLM OUTPUT: {response_text}")
-
-            data = self._parse_json(response_text)
+            data = self._safe_json_parse(response_text)
             
-        except Exception as e:
-            logger.error(f"❌ NLU Brain Failure: {e}")
-            # If Brain dies, treat as a QUESTION so RAG can try to save it
-            return NLUResult(IntentType.QUESTION, 0.5, 0.0, "low", {}, True, "Error Fallback")
-
-        # 3. Governance (The Soft Fallback)
-        confidence = float(data.get("confidence", 0.0))
-        
-        if confidence < self.CONFIDENCE_THRESHOLD:
-            # SMART FIX: Don't block. Assume it's a question.
-            logger.warning(f"⚠️ Low Confidence ({confidence}). Soft Fallback to QUESTION.")
-            final_intent = IntentType.QUESTION
-        else:
-            intent_str = data.get("intent", "question").lower()
+            # DEFAULT VALUES (If JSON is empty)
+            intent_str = data.get("intent", "question")
+            data_source = data.get("data_source", "static")
+            
+            # Validate Intent Enum
             try:
                 final_intent = IntentType(intent_str)
             except ValueError:
                 final_intent = IntentType.QUESTION
 
-        return NLUResult(
-            intent=final_intent,
-            confidence=confidence,
-            sentiment=0.0,
-            urgency=data.get("urgency", "low"),
-            entities=data.get("entities", {}),
-            topic_allowed=data.get("topic_allowed", True),
-            reasoning="Analyzed"
-        )
+            result = NLUResult(
+                intent=final_intent,
+                confidence=data.get("confidence", 0.0),
+                entities=data.get("entities", {}),
+                topic_allowed=True, # You can add logic to set this to False if intent is off_topic
+                data_source=data_source,
+                reasoning="Tier 3: Smart Analysis"
+            )
+            
+            logger.info(f"🧠 NLU Analysis: Intent={result.intent.value} | Source={result.data_source} | Entities={result.entities}")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ NLU Critical Crash: {e}")
+            # SAFE FALLBACK: Treat as a general question so the bot doesn't die
+            return NLUResult(IntentType.QUESTION, 0.5, {}, True, "static", "Error Recovery")
+    
 
     def _apply_governance_logic(self, data: Dict[str, Any]) -> NLUResult:
         """Applies Confidence Gating and Fallback Logic."""
