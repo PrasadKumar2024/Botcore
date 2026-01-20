@@ -167,6 +167,34 @@ class RAGEngine:
             else:
                 del self.response_cache[cache_key]
         return None
+    async def _search_with_fallback(self, pinecone, client_id: str, query: str, expanded_query: str):
+        """
+        Enterprise two-stage search with progressive threshold relaxation.
+        """
+    # Stage 1: Strict search with expanded query
+        results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
+    
+        if results:
+            logger.info(f"✅ Found {len(results)} chunks with expanded query at threshold {self.min_score}")
+            return results
+    
+    # Stage 2: Relaxed search with expanded query
+        relaxed_threshold = 0.30
+        logger.info(f"⚠️ Relaxing threshold to {relaxed_threshold} for expanded query")
+        results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, relaxed_threshold)
+    
+        if results:
+            logger.info(f"✅ Found {len(results)} chunks with relaxed threshold")
+            return results
+    
+    # Stage 3: Final fallback with original query at relaxed threshold
+        logger.info("⚠️ Trying original query with relaxed threshold")
+        results = await pinecone.search_similar_chunks(client_id, query, self.top_k, relaxed_threshold)
+    
+        if results:
+            logger.info(f"✅ Found {len(results)} chunks with original query fallback")
+    
+        return results
 
     def _set_cache(self, cache_key: str, result: RAGResult):
         self.response_cache[cache_key] = (result, time.time())
