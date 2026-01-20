@@ -29,7 +29,7 @@ class RAGResult:
     fact_text: str
     intent: str
     entities: Dict[str, Any]
-    sentiment: float
+    sentiment: float = 0.0
     confidence: float
     used_rag: bool
     entities: Dict[str, Any] = field(default_factory=dict)
