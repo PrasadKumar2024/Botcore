@@ -48,12 +48,15 @@ _CONTRACTIONS = {
 }
 
 _QUERY_EXPANSIONS = {
-    # Time/Schedule
-    "timings": "business hours operating hours schedule opening time",
-    "timing": "business hours operating hours schedule",
-    "open": "business hours operating hours availability",
-    "closed": "business hours operating hours closed",
-    "schedule": "business hours appointment slots",
+    # Time/Schedule - ENHANCED
+    "timings": "business hours operating hours schedule opening time closing time availability when open",
+    "timing": "business hours operating hours schedule opening time",
+    "open": "business hours operating hours availability opening time when open",
+    "closed": "business hours operating hours closed closing time",
+    "schedule": "business hours appointment slots timings availability",
+    "hours": "business hours operating hours timings schedule",
+    "available": "availability business hours timings schedule open",
+    "availability": "available business hours timings schedule open",
     
     # Cost/Money
     "price": "cost pricing rates fee charges",
@@ -68,7 +71,6 @@ _QUERY_EXPANSIONS = {
     "phone": "contact number telephone mobile",
     "where": "location address directions",
 }
-
 def normalize_query(text: str) -> str:
     """
     Translates 'User English' to 'Database English'.
@@ -144,7 +146,7 @@ class RAGEngine:
         - min_score=0.60: PERMISSIVE threshold. We let the LLM filter, not the DB.
         """
         self.top_k = 5
-        self.min_score = 0.60 
+        self.min_score = 0.40 
         self.max_chunks = 3
         self.cache_ttl = 3600
         self.response_cache = {}
@@ -216,10 +218,21 @@ class RAGEngine:
         # Triggered if Source is 'static' (Policy, Refunds, etc.)
         elif nlu.data_source == "static" or nlu.intent == IntentType.QUESTION:
             logger.info("👉 Routing: STATIC KNOWLEDGE path (Pinecone)")
-            
+    
             pinecone = get_pinecone_service()
-            results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
-            
+    
+    # ENTERPRISE FIX: Apply query expansion BEFORE search
+            expanded_query = normalize_query(query)
+            logger.info(f"🔄 Query Expansion: '{query}' → '{expanded_query}'")
+    
+    # Search with expanded query first
+            results = await pinecone.search_similar_chunks(client_id, expanded_query, self.top_k, self.min_score)
+    
+    # Fallback: If expansion fails, try original query
+            if not results:
+                logger.info("⚠️ Expanded query returned nothing. Trying original query...")
+                results = await pinecone.search_similar_chunks(client_id, query, self.top_k, self.min_score)
+    
             if results:
                 context_data = "\n".join([r['chunk_text'] for r in results])
                 system_instruction = f"Answer using this POLICY INFO:\n{context_data}"
