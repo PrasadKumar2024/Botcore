@@ -4,7 +4,7 @@ import re
 import json
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 # CRITICAL SERVICES
