@@ -235,16 +235,17 @@ class RAGEngine:
             context_data = "Booking Flow"
 
         # === EXECUTION: GENERATE SPEECH ===
+                # === EXECUTION: GENERATE SPEECH ===
         try:
-            # Speed Optimization: Faster for greetings
-            token_limit = 60 if nlu.intent == IntentType.GREETING else 350
+            # ✅ FIX: Combine system_instruction into the main prompt.
+            # We removed 'system_message' and 'max_tokens' arguments because they caused the crash.
+            full_prompt = f"{system_instruction}\n\nUSER SAID: {query}"
             
             response_text = await gemini_service.generate_response_async(
-                prompt=f"USER SAID: {query}",
-                system_message=system_instruction,
-                temperature=0.7, 
-                max_tokens=token_limit
+                prompt=full_prompt,
+                temperature=0.7
             )
+
             
             # Final Sanity Check: If LLM returns empty
             if not response_text:
