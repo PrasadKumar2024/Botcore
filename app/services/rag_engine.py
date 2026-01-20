@@ -32,7 +32,7 @@ class RAGResult:
     sentiment: float
     confidence: float
     used_rag: bool
-
+    entities: Dict[str, Any] = field(default_factory=dict)
 # ===================== ZERO-LATENCY "HyDE" LAYER =====================
 # Competitors use this to "translate" bad voice transcripts into 
 # formal database queries instantly (0ms latency).
@@ -255,14 +255,16 @@ class RAGEngine:
             logger.error(f"❌ Generation Critical Error: {e}")
             response_text = "I'm having a little trouble connecting. Please try again."
 
-        return {
-            "spoken_text": response_text,
-            "fact_text": context_data[:100],
-            "intent": nlu.intent.value,
-            "confidence": nlu.confidence,
-            "source": nlu.data_source,
-            "used_rag": used_rag
-        }
+        return RAGResult(
+            spoken_text=response_text,
+            fact_text=context_data[:100],
+            intent=nlu.intent.value,
+            confidence=nlu.confidence,
+            source=nlu.data_source,
+            used_rag=used_rag,
+            entities=nlu.entities
+       )
+
 
 
 
