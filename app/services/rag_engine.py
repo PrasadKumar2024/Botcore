@@ -25,14 +25,14 @@ class ConversationIntent(Enum):
 
 @dataclass
 class RAGResult:
-    spoken_text: str
-    fact_text: str
-    intent: str
-    entities: Dict[str, Any]
-    sentiment: float = 0.0
-    confidence: float
-    used_rag: bool
-    entities: Dict[str, Any] = field(default_factory=dict)
+    spoken_text: str                        # Required (Must be first)
+    fact_text: str = ""                     # Optional
+    intent: str = "unknown"                 # Optional
+    confidence: float = 0.0                 # Optional (Added = 0.0)
+    source: str = "unknown"                 # Optional
+    used_rag: bool = False                  # Optional
+    sentiment: float = 0.0                  # Optional (Added = 0.0)
+    entities: Dict[str, Any] = field(default_factory=dict) # Optional
 # ===================== ZERO-LATENCY "HyDE" LAYER =====================
 # Competitors use this to "translate" bad voice transcripts into 
 # formal database queries instantly (0ms latency).
