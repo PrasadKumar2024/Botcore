@@ -4,7 +4,7 @@ torchvision==0.17.1+cpu
 torchaudio==2.2.1+cpu
 sentence-transformers==2.5.1
 # ... the rest of your packages follow below
-
+requests>=2.31.0
 
 fastapi==0.104.1
 uvicorn==0.24.0
