@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 # Import database and models FIRST to avoid circular imports
 from app.database import get_db, engine, Base, SessionLocal
-from services.airtable_service import check_slot, book_slot
+from app.services.airtable_service import check_slot, book_slot
 from pydantic import BaseModel
 from app import models
 from sqlalchemy import text
