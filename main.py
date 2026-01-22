@@ -21,6 +21,8 @@ logging.basicConfig(
 )
 # Import database and models FIRST to avoid circular imports
 from app.database import get_db, engine, Base, SessionLocal
+from services.airtable_service import check_slot, book_slot
+from pydantic import BaseModel
 from app import models
 from sqlalchemy import text
 
@@ -34,6 +36,16 @@ from app.routes.chat import router as chat_router
 #from app.routes.hd_audio_ws import router as hd_audio_router
 from app.routes.voice import router as voice_router
 from fastapi.middleware.cors import CORSMiddleware
+
+class CheckSlotRequest(BaseModel):
+    date: str
+    time: str
+
+
+class BookSlotRequest(BaseModel):
+    date: str
+    time: str
+    phone: str | None = None
 
 
 # Initialize FastAPI app
@@ -109,7 +121,17 @@ app.add_middleware(
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+@app.post("/retell/check-slot")
+def retell_check_slot(payload: CheckSlotRequest):
+    available = check_slot(payload.date, payload.time)
+    return {"available": available}
 
+
+@app.post("/retell/book")
+def retell_book_slot(payload: BookSlotRequest):
+    book_slot(payload.date, payload.time, payload.phone)
+    return {"success": True}
+    
 @app.get("/debug-static-files")
 async def debug_static_files():
     import os
