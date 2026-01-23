@@ -122,10 +122,16 @@ app.add_middleware(
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.post("/retell/check-slot")
-def retell_check_slot(payload: CheckSlotRequest):
-    available = check_slot(payload.date, payload.time)
-    return {"available": available}
+async def retell_check_slot(request: Request):
+    data = await request.json()
+    date = data.get("date")
+    time = data.get("time")
 
+    if not date or not time:
+        return {"available": False}
+
+    available = check_slot(date, time)
+    return {"available": available}
 
 @app.post("/retell/book")
 def retell_book_slot(payload: BookSlotRequest):
