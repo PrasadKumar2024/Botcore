@@ -2,7 +2,6 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# Load env variables safely
 load_dotenv()
 
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
@@ -16,11 +15,10 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def check_slot_service(date: str, time: str) -> bool:
+def check_slot(date: str, time: str) -> bool:
     """
-    Checks Airtable. Returns True (Python Boolean) if available.
+    Checks if a slot is available. Returns True/False.
     """
-    # Formula: date=date AND time=time AND status='booked'
     formula = f"AND({{date}}='{date}', {{time}}='{time}', {{status}}='booked')"
     params = {"filterByFormula": formula}
 
@@ -28,15 +26,14 @@ def check_slot_service(date: str, time: str) -> bool:
         response = requests.get(AIRTABLE_URL, headers=HEADERS, params=params)
         response.raise_for_status()
         records = response.json().get("records", [])
-        # If 0 records found, it means no one has booked it yet -> Available
         return len(records) == 0
     except Exception as e:
-        print(f"Service Error (Check): {e}")
-        return False # Fail safe
+        print(f"Error checking slot: {e}")
+        return False 
 
-def book_slot_service(date: str, time: str, phone: str = "Anonymous"):
+def book_slot(date: str, time: str, phone: str = "Anonymous"):
     """
-    Writes to Airtable. Handles 'Anonymous' if no phone provided.
+    Books the slot in Airtable.
     """
     payload = {
         "fields": {
@@ -44,7 +41,7 @@ def book_slot_service(date: str, time: str, phone: str = "Anonymous"):
             "time": time,
             "status": "booked",
             "source": "ai",
-            "phone": phone  # Logic handles the default "Anonymous"
+            "phone": phone
         }
     }
     response = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
