@@ -19,7 +19,7 @@ def check_slot(date: str, time: str) -> bool:
     """
     Checks if a slot is available. Returns True/False.
     """
-    formula = f"AND({{date}}='{date}', {{time}}='{time}', {{status}}='booked')"
+    formula = f"AND({{date}}='{date}', {{time}}='{time}')"
     params = {"filterByFormula": formula}
 
     try:
@@ -39,9 +39,7 @@ def book_slot(date: str, time: str, phone: str = "Anonymous"):
         "fields": {
             "date": date,
             "time": time,
-            "status": "booked",
-            "source": "ai",
-            "phone": phone
+            
         }
     }
     response = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
