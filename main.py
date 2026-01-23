@@ -123,39 +123,65 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.post("/retell/check-slot")
 async def retell_check_slot(request: Request):
-    data = await request.json()
-    date = data.get("date")
-    time = data.get("time")
+    try:
+        data = await request.json()
+        print(f"📥 Received: {data}")  # Debug log
+        
+        date = data.get("date")
+        time = data.get("time")
 
-    if not date or not time:
-        return {"available": "false"} 
+        if not date or not time:
+            return JSONResponse(
+                content={"available": "false"},
+                status_code=200
+            )
 
-    # Call the clean function name
-    is_available = check_slot(date, time)
-
-    # CRITICAL: Convert Python Boolean (True) to String ("true")
-    if is_available:
-        return {"available": "true"} 
-    else:
-        return {"available": "false"}
-
+        is_available = check_slot(date, time)
+        
+        response = {"available": "true" if is_available else "false"}
+        print(f"📤 Sending: {response}")  # Debug log
+        
+        return JSONResponse(
+            content=response,
+            status_code=200
+        )
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return JSONResponse(
+            content={"available": "false"},
+            status_code=200
+        )
 @app.post("/retell/book")
 async def retell_book_slot(request: Request):
-    data = await request.json()
-    date = data.get("date")
-    time = data.get("time")
-    phone = data.get("from_number", "Anonymous")
-
-    if not date or not time:
-        return {"success": False}
-
     try:
-        # Call the clean function name
+        data = await request.json()
+        print(f"📥 Book request: {data}")  # Debug log
+        
+        date = data.get("date")
+        time = data.get("time")
+        phone = data.get("from_number", "Anonymous")
+
+        if not date or not time:
+            return JSONResponse(
+                content={"success": "false"},
+                status_code=200
+            )
+
         book_slot(date, time, phone)
-        return {"success": True}
+        
+        response = {"success": "true"}
+        print(f"📤 Book response: {response}")  # Debug log
+        
+        return JSONResponse(
+            content=response,
+            status_code=200
+        )
     except Exception as e:
-        print(f"Booking Error: {e}")
-        return {"success": False}
+        print(f"❌ Booking Error: {e}")
+        return JSONResponse(
+            content={"success": "false"},
+            status_code=200
+        )
     
 @app.get("/debug-static-files")
 async def debug_static_files():
