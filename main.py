@@ -128,47 +128,34 @@ async def retell_check_slot(request: Request):
     time = data.get("time")
 
     if not date or not time:
-        return {"available": False}
+        return {"available": "false"} 
 
-    available = check_slot(date, time)
-    return {"available": available}
+    # Call the clean function name
+    is_available = check_slot(date, time)
 
-# 1. Update your booking function to handle NO phone number
-def book_slot(date: str, time: str, phone: str = "Anonymous"):
-    payload = {
-        "fields": {
-            "date": date,
-            "time": time,
-            "status": "booked",
-            "source": "ai",
-            "phone": phone # Will save as "Anonymous" since we aren't asking
-        }
-    }
-    response = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
-    response.raise_for_status()
+    # CRITICAL: Convert Python Boolean (True) to String ("true")
+    if is_available:
+        return {"available": "true"} 
+    else:
+        return {"available": "false"}
 
-# 2. Update your API Endpoint to be robust
 @app.post("/retell/book")
 async def retell_book_slot(request: Request):
     data = await request.json()
-    
-    # Extract ONLY date and time (Ignore phone)
     date = data.get("date")
     time = data.get("time")
-
-    print(f"DEBUG: Booking requested for {date} at {time}")
+    phone = data.get("from_number", "Anonymous")
 
     if not date or not time:
-        return {"success": False, "error": "Missing date or time"}
-
-    try:
-        # We pass "Anonymous" automatically
-        book_slot(date, time) 
-        return {"success": True}
-    except Exception as e:
-        print(f"Error: {e}")
         return {"success": False}
 
+    try:
+        # Call the clean function name
+        book_slot(date, time, phone)
+        return {"success": True}
+    except Exception as e:
+        print(f"Booking Error: {e}")
+        return {"success": False}
     
 @app.get("/debug-static-files")
 async def debug_static_files():
