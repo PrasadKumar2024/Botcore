@@ -125,63 +125,68 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 async def retell_check_slot(request: Request):
     try:
         data = await request.json()
-        print(f"📥 Received: {data}")  # Debug log
+        print(f"📥 Full payload: {data}")
         
-        date = data.get("date")
-        time = data.get("time")
+        # ✅ CRITICAL FIX: Extract from "args" object
+        args = data.get("args", {})
+        date = args.get("date")
+        time = args.get("time")
+        
+        print(f"🔍 Extracted: date={date}, time={time}")
 
         if not date or not time:
-            return JSONResponse(
-                content={"available": "false"},
-                status_code=200
-            )
+            response = {"available": "false"}
+            print(f"📤 Sending: {response}")
+            return JSONResponse(content=response, status_code=200)
 
+        # Check Airtable
         is_available = check_slot(date, time)
         
         response = {"available": "true" if is_available else "false"}
-        print(f"📤 Sending: {response}")  # Debug log
+        print(f"📤 Sending: {response}")
         
-        return JSONResponse(
-            content=response,
-            status_code=200
-        )
+        return JSONResponse(content=response, status_code=200)
+        
     except Exception as e:
         print(f"❌ Error: {e}")
-        return JSONResponse(
-            content={"available": "false"},
-            status_code=200
-        )
+        response = {"available": "false"}
+        return JSONResponse(content=response, status_code=200)
+
+
 @app.post("/retell/book")
 async def retell_book_slot(request: Request):
     try:
         data = await request.json()
-        print(f"📥 Book request: {data}")  # Debug log
+        print(f"📥 Full payload: {data}")
         
-        date = data.get("date")
-        time = data.get("time")
-        phone = data.get("from_number", "Anonymous")
+        # ✅ CRITICAL FIX: Extract from "args" object
+        args = data.get("args", {})
+        date = args.get("date")
+        time = args.get("time")
+        
+        # Get phone from call metadata
+        call_data = data.get("call", {})
+        phone = call_data.get("from_number", "Anonymous")
+        
+        print(f"🔍 Extracted: date={date}, time={time}, phone={phone}")
 
         if not date or not time:
-            return JSONResponse(
-                content={"success": "false"},
-                status_code=200
-            )
+            response = {"success": "false"}
+            print(f"📤 Sending: {response}")
+            return JSONResponse(content=response, status_code=200)
 
+        # Book slot
         book_slot(date, time, phone)
         
         response = {"success": "true"}
-        print(f"📤 Book response: {response}")  # Debug log
+        print(f"📤 Sending: {response}")
         
-        return JSONResponse(
-            content=response,
-            status_code=200
-        )
+        return JSONResponse(content=response, status_code=200)
+        
     except Exception as e:
         print(f"❌ Booking Error: {e}")
-        return JSONResponse(
-            content={"success": "false"},
-            status_code=200
-        )
+        response = {"success": "false"}
+        return JSONResponse(content=response, status_code=200)
     
 @app.get("/debug-static-files")
 async def debug_static_files():
