@@ -123,70 +123,48 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.post("/retell/check-slot")
 async def retell_check_slot(request: Request):
-    try:
-        data = await request.json()
-        print(f"📥 Full payload: {data}")
-        
-        # ✅ CRITICAL FIX: Extract from "args" object
-        args = data.get("args", {})
-        date = args.get("date")
-        time = args.get("time")
-        
-        print(f"🔍 Extracted: date={date}, time={time}")
+    data = await request.json()
+    date = data.get("date")
+    time = data.get("time")
 
-        if not date or not time:
-            response = {"available": "false"}
-            print(f"📤 Sending: {response}")
-            return JSONResponse(content=response, status_code=200)
+    print(f"🔍 API CHECK: {date} at {time}")
 
-        # Check Airtable
-        is_available = check_slot(date, time)
-        
-        response = {"available": "true" if is_available else "false"}
-        print(f"📤 Sending: {response}")
-        
-        return JSONResponse(content=response, status_code=200)
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        response = {"available": "false"}
-        return JSONResponse(content=response, status_code=200)
+    if not date or not time:
+        return {"available": "false"}
 
+    # 1. Call Service (Returns Boolean)
+    is_available_bool = check_slot(date, time)
 
+    # 2. Translate for Retell (Boolean -> String)
+    if is_available_bool:
+        return {"available": "true"}
+    else:
+        return {"available": "false"}
+
+# --- TOOL 2: BOOK SLOT (Name, Date, Time, Phone) ---
 @app.post("/retell/book")
 async def retell_book_slot(request: Request):
+    data = await request.json()
+    
+    # Extract all 4 fields
+    name = data.get("name")
+    date = data.get("date")
+    time = data.get("time")
+    phone = data.get("phone")
+
+    print(f"📝 API BOOK: {name} | {date} | {time} | {phone}")
+
+    # Validation: Ensure all data exists
+    if not name or not date or not time or not phone:
+        print("❌ Missing required fields")
+        return {"success": False}
+
     try:
-        data = await request.json()
-        print(f"📥 Full payload: {data}")
-        
-        # ✅ CRITICAL FIX: Extract from "args" object
-        args = data.get("args", {})
-        date = args.get("date")
-        time = args.get("time")
-        
-        # Get phone from call metadata
-        call_data = data.get("call", {})
-        phone = call_data.get("from_number", "Anonymous")
-        
-        print(f"🔍 Extracted: date={date}, time={time}, phone={phone}")
-
-        if not date or not time:
-            response = {"success": "false"}
-            print(f"📤 Sending: {response}")
-            return JSONResponse(content=response, status_code=200)
-
-        # Book slot
-        book_slot(date, time, phone)
-        
-        response = {"success": "true"}
-        print(f"📤 Sending: {response}")
-        
-        return JSONResponse(content=response, status_code=200)
-        
-    except Exception as e:
-        print(f"❌ Booking Error: {e}")
-        response = {"success": "false"}
-        return JSONResponse(content=response, status_code=200)
+        # Call Service
+        book_slot(name, date, time, phone)
+        return {"success": True}
+    except Exception:
+        return {"success": False}
     
 @app.get("/debug-static-files")
 async def debug_static_files():
