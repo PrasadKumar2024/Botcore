@@ -1,6 +1,8 @@
 import os
 import requests
 from dotenv import load_dotenv
+from datetime import datetime
+
 
 load_dotenv()
 
@@ -16,31 +18,36 @@ HEADERS = {
 }
 
 def check_slot(date: str, time: str) -> bool:
-    """
-    Checks if a slot is available. Returns True/False.
-    """
-    formula = f"AND({{date}}='{date}', {{time}}='{time}')"
-    params = {"filterByFormula": formula}
-
     try:
+        # Convert from '2024-06-12' to '12/06/2024' format
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
+        airtable_date = date_obj.strftime("%d/%m/%Y")
+        
+        formula = f"AND({{date}}='{airtable_date}', {{time}}='{time}')"
+        params = {"filterByFormula": formula}
+        
         response = requests.get(AIRTABLE_URL, headers=HEADERS, params=params)
         response.raise_for_status()
         records = response.json().get("records", [])
         return len(records) == 0
     except Exception as e:
         print(f"Error checking slot: {e}")
-        return False 
+        return False
 
-def book_slot(date: str, time: str, phone: str = "Anonymous"):
-    """
-    Books the slot in Airtable.
-    """
-    payload = {
-        "fields": {
-            "date": date,
-            "time": time,
-            
+def book_slot(date: str, time: str, phone: str | None):
+    try:
+        # Convert date format
+        date_obj = datetime.strptime(date, "%Y-%m-%d")
+        airtable_date = date_obj.strftime("%d/%m/%Y")
+        
+        payload = {
+            "fields": {
+                "date": airtable_date,
+                "time": time,
+            }
         }
-    }
-    response = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
-    response.raise_for_status()
+        response = requests.post(AIRTABLE_URL, headers=HEADERS, json=payload)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Booking error: {e}")
+        raise
