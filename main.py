@@ -121,25 +121,42 @@ app.add_middleware(
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+# In main.py
+
 @app.post("/retell/check-slot")
 async def retell_check_slot(request: Request):
-    data = await request.json()
-    date = data.get("date")
-    time = data.get("time")
+    try:
+        data = await request.json()
+        
+        # 1. SAFETY LOCK: Handle Wrapper
+        if "args" in data:
+            data = data["args"]
+            
+        date = data.get("date")
+        time = data.get("time")
 
-    print(f"🔍 API CHECK: {date} at {time}")
+        print(f"🔍 API CHECK: {date} at {time}")
 
-    if not date or not time:
+        # 2. FAIL-SAFE: If data missing, print WHY
+        if not date or not time:
+            print("❌ FAILURE: Missing date or time in JSON")
+            return {"available": "false"}
+
+        # 3. Call Service
+        is_available_bool = check_slot(date, time)
+
+        # 4. PRINT THE VERDICT (This is the Truth-Teller)
+        if is_available_bool:
+            print("✅ VERDICT: SLOT IS OPEN -> Sending 'true'")
+            return {"available": "true"}
+        else:
+            print("⛔ VERDICT: SLOT IS BOOKED (or Error) -> Sending 'false'")
+            return {"available": "false"}
+            
+    except Exception as e:
+        print(f"❌ CRITICAL CRASH: {e}")
         return {"available": "false"}
 
-    # 1. Call Service (Returns Boolean)
-    is_available_bool = check_slot(date, time)
-
-    # 2. Translate for Retell (Boolean -> String)
-    if is_available_bool:
-        return {"available": "true"}
-    else:
-        return {"available": "false"}
 
 # --- TOOL 2: BOOK SLOT (Name, Date, Time, Phone) ---
 @app.post("/retell/book")
